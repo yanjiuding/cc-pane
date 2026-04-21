@@ -245,7 +245,18 @@ cc-panes/
 
 发现 Bug 或有建议？欢迎加入微信群交流：
 
-<img src="docs/assets/images/wechat-group.png" alt="微信群: cc-pane" width="200" />
+<table>
+  <tr>
+    <td align="center">
+      <strong>群聊: 夜猫疯的编程开发群</strong><br />
+      <img src="docs/assets/images/wechat-group-nightcat-dev.png" alt="微信群: 夜猫疯的编程开发群" width="200" />
+    </td>
+    <td align="center">
+      <strong>群聊: cc-pane</strong><br />
+      <img src="docs/assets/images/wechat-group-cc-pane.png" alt="微信群: cc-pane" width="200" />
+    </td>
+  </tr>
+</table>
 
 ## 贡献
 

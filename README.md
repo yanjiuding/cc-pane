@@ -211,9 +211,20 @@ Frontend imports use the `@/` alias, which resolves to `web/`.
 
 ## Feedback
 
-Found a bug or have a suggestion? Join the WeChat group:
+Found a bug or have a suggestion? Join one of the WeChat groups:
 
-<img src="docs/assets/images/wechat-group.png" alt="WeChat Group: cc-pane" width="200" />
+<table>
+  <tr>
+    <td align="center">
+      <strong>夜猫疯的编程开发群</strong><br />
+      <img src="docs/assets/images/wechat-group-nightcat-dev.png" alt="WeChat Group: 夜猫疯的编程开发群" width="200" />
+    </td>
+    <td align="center">
+      <strong>cc-pane</strong><br />
+      <img src="docs/assets/images/wechat-group-cc-pane.png" alt="WeChat Group: cc-pane" width="200" />
+    </td>
+  </tr>
+</table>
 
 ## Contributing
 
@@ -230,5 +241,4 @@ This project is licensed under the [GNU General Public License v3.0](LICENSE).
 - [xterm.js](https://xtermjs.org/) — Terminal emulator for the web
 - [shadcn/ui](https://ui.shadcn.com/) — UI component library
 - [LINUX DO](https://linux.do/) — A sincere, friendly, united, and professional ideal community
-
 
