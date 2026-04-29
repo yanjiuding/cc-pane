@@ -1,4 +1,5 @@
 mod claude_commands;
+mod clipboard_commands;
 mod filesystem_commands;
 mod git_commands;
 mod history_commands;
@@ -29,6 +30,7 @@ mod worktree_commands;
 mod wsl_commands;
 
 pub use claude_commands::*;
+pub use clipboard_commands::*;
 pub use filesystem_commands::*;
 pub use git_commands::*;
 pub use history_commands::*;

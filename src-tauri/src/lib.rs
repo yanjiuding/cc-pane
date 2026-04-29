@@ -184,6 +184,7 @@ use commands::{
     put_label,
     query_task_bindings,
     query_todos,
+    read_clipboard_file_paths,
     read_config_dir_info,
     read_session_state,
     remove_mcp_server,
@@ -1515,6 +1516,8 @@ pub fn run() {
             // Screenshot 命令
             screenshot_save_clipboard_image,
             screenshot_update_shortcut,
+            // Clipboard 命令
+            read_clipboard_file_paths,
             // Orchestrator 命令
             get_orchestrator_port,
             get_orchestrator_token,

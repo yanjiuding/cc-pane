@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { saveClipboardImageMock, tauriReadTextMock } = vi.hoisted(() => ({
+const { invokeMock, saveClipboardImageMock, tauriReadTextMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
   saveClipboardImageMock: vi.fn(),
   tauriReadTextMock: vi.fn(),
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: invokeMock,
 }));
 
 vi.mock("@/services", () => ({
@@ -17,6 +22,8 @@ vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
 
 import {
   clipboardHasImage,
+  formatTerminalFilePaths,
+  readClipboardFilePaths,
   resolveTerminalPastePayload,
 } from "./terminalClipboard";
 
@@ -46,6 +53,7 @@ describe("terminalClipboard", () => {
   });
 
   afterEach(() => {
+    invokeMock.mockReset();
     saveClipboardImageMock.mockReset();
     tauriReadTextMock.mockReset();
     webReadTextMock.mockReset();
@@ -70,6 +78,7 @@ describe("terminalClipboard", () => {
   });
 
   it("prefers clipboard images and returns the saved file path", async () => {
+    invokeMock.mockResolvedValue([]);
     saveClipboardImageMock.mockResolvedValue({
       filePath: "C:/shots/screenshot_1.png",
       width: 10,
@@ -92,6 +101,7 @@ describe("terminalClipboard", () => {
   });
 
   it("falls back to plain text when the clipboard does not contain an image", async () => {
+    invokeMock.mockResolvedValue([]);
     const result = await resolveTerminalPastePayload(
       createClipboardData({
         text: "hello world",
@@ -107,6 +117,7 @@ describe("terminalClipboard", () => {
   });
 
   it("reports an unavailable clipboard image when image paste was requested", async () => {
+    invokeMock.mockResolvedValue([]);
     saveClipboardImageMock.mockResolvedValue(null);
 
     const result = await resolveTerminalPastePayload(
@@ -123,6 +134,7 @@ describe("terminalClipboard", () => {
   });
 
   it("reads text from the clipboard APIs when paste data is unavailable", async () => {
+    invokeMock.mockResolvedValue([]);
     saveClipboardImageMock.mockResolvedValue(null);
     webReadTextMock.mockResolvedValue("from web clipboard");
 
@@ -137,6 +149,7 @@ describe("terminalClipboard", () => {
   });
 
   it("returns a save failure when persisting a clipboard image errors", async () => {
+    invokeMock.mockResolvedValue([]);
     saveClipboardImageMock.mockRejectedValue(new Error("disk full"));
 
     const result = await resolveTerminalPastePayload(
@@ -150,5 +163,75 @@ describe("terminalClipboard", () => {
       reason: "clipboard-image-save-failed",
       error: "disk full",
     });
+  });
+
+  it("formats dropped or pasted file paths with spaces between entries", () => {
+    expect(formatTerminalFilePaths([
+      "/Users/me/Desktop/企业基本信息.sql",
+      "/Users/me/Desktop/second.sql",
+    ])).toBe("/Users/me/Desktop/企业基本信息.sql /Users/me/Desktop/second.sql");
+  });
+
+  it("prefers clipboard file paths over plain text", async () => {
+    invokeMock.mockResolvedValue([
+      "/Users/me/Desktop/企业基本信息.sql",
+      "/Users/me/Desktop/second.sql",
+    ]);
+
+    const result = await resolveTerminalPastePayload(
+      createClipboardData({
+        text: "企业基本信息.sql",
+        items: [{ kind: "string", type: "text/plain" }],
+      })
+    );
+
+    expect(result).toEqual({
+      kind: "file",
+      text: "/Users/me/Desktop/企业基本信息.sql /Users/me/Desktop/second.sql",
+      filePaths: [
+        "/Users/me/Desktop/企业基本信息.sql",
+        "/Users/me/Desktop/second.sql",
+      ],
+    });
+    expect(saveClipboardImageMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a structured file path read error", async () => {
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    invokeMock.mockRejectedValue(new Error("clipboard unavailable"));
+
+    const result = await readClipboardFilePaths();
+
+    expect(result).toEqual({
+      paths: [],
+      error: "clipboard unavailable",
+    });
+    expect(debugSpy).toHaveBeenCalledWith(
+      "[terminalClipboard] clipboard.file-paths.failed",
+      { error: "clipboard unavailable" }
+    );
+    debugSpy.mockRestore();
+  });
+
+  it("falls back when reading clipboard file paths fails", async () => {
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    invokeMock.mockRejectedValue(new Error("clipboard unavailable"));
+
+    const result = await resolveTerminalPastePayload(
+      createClipboardData({
+        text: "hello world",
+        items: [{ kind: "string", type: "text/plain" }],
+      })
+    );
+
+    expect(result).toEqual({
+      kind: "text",
+      text: "hello world",
+    });
+    expect(debugSpy).toHaveBeenCalledWith(
+      "[terminalClipboard] clipboard.file-paths.failed",
+      { error: "clipboard unavailable" }
+    );
+    debugSpy.mockRestore();
   });
 });

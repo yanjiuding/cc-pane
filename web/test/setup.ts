@@ -24,6 +24,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/api/webview", () => {
   const webview = {
     listen: vi.fn(() => Promise.resolve(() => {})),
+    onDragDropEvent: vi.fn(() => Promise.resolve(() => {})),
   };
   return {
     getCurrentWebview: vi.fn(() => webview),

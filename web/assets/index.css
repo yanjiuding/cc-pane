@@ -145,14 +145,16 @@
   --app-close-btn-hover-bg: #CF222E;
   --app-close-btn-hover-fg: #FFFFFF;
   --app-tab-active-border: #0969DA;
+  --app-terminal-bg: #FFFFFF;
+  --app-terminal-fg: #000000;
 
-  /* Notch Tab 变量 — 始终浮在深色终端上，统一毛玻璃风格 */
-  --notch-tab-active-bg: rgba(255, 255, 255, 0.12);
-  --notch-tab-active-fg: #f5f5f7;
-  --notch-tab-inactive-fg: rgba(255, 255, 255, 0.5);
-  --notch-tab-hover-bg: rgba(255, 255, 255, 0.08);
-  --notch-tab-hover-fg: #C9D1D9;
-  --notch-tab-border: rgba(255, 255, 255, 0.15);
+  /* Notch Tab 变量 — Light 模式匹配浅色终端与面板 */
+  --notch-tab-active-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(243, 244, 246, 0.96));
+  --notch-tab-active-fg: #24292F;
+  --notch-tab-inactive-fg: #57606A;
+  --notch-tab-hover-bg: rgba(234, 236, 239, 0.92);
+  --notch-tab-hover-fg: #24292F;
+  --notch-tab-border: rgba(36, 41, 47, 0.08);
 }
 
 /* ===== Dark 主题 — GitHub Dark 补色 ===== */
@@ -257,6 +259,8 @@
   --app-close-btn-hover-bg: #F85149;
   --app-close-btn-hover-fg: #FFFFFF;
   --app-tab-active-border: #2F81F7;
+  --app-terminal-bg: #1a1a1a;
+  --app-terminal-fg: #f5f5f7;
 
   /* Notch Tab 变量 — 始终浮在深色终端上，统一毛玻璃风格 */
   --notch-tab-active-bg: rgba(255, 255, 255, 0.12);
@@ -278,11 +282,26 @@
     height: 100%;
     width: 100%;
     overflow: hidden;
+    background: var(--background);
+    color: var(--foreground);
   }
   body {
     @apply bg-background text-foreground;
     -webkit-app-region: no-drag;
   }
+}
+
+.cc-terminal-host,
+.cc-terminal-host .xterm,
+.cc-terminal-host .xterm .xterm-viewport,
+.cc-terminal-host .xterm .xterm-screen {
+  background-color: var(--cc-terminal-bg);
+  color: var(--cc-terminal-fg);
+}
+
+.cc-terminal-host .xterm .composition-view {
+  background: var(--cc-terminal-bg);
+  color: var(--cc-terminal-fg);
 }
 
 /* 全局滚动条 — Light */

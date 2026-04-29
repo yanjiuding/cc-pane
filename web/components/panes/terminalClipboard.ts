@@ -1,9 +1,11 @@
+import { invoke } from "@tauri-apps/api/core";
 import { readText as tauriReadText } from "@tauri-apps/plugin-clipboard-manager";
 import { screenshotService } from "@/services";
 import { getErrorMessage } from "@/utils";
 
 export type TerminalPastePayload =
   | { kind: "image"; text: string; filePath: string }
+  | { kind: "file"; text: string; filePaths: string[] }
   | { kind: "text"; text: string }
   | { kind: "none" }
   | {
@@ -11,6 +13,11 @@ export type TerminalPastePayload =
       reason: "clipboard-image-unavailable" | "clipboard-image-save-failed";
       error: string;
     };
+
+export interface ClipboardFilePathsResult {
+  paths: string[];
+  error?: string;
+}
 
 export function clipboardHasImage(clipboardData?: DataTransfer | null): boolean {
   if (!clipboardData?.items) return false;
@@ -39,9 +46,43 @@ export async function readClipboardText(textHint?: string | null): Promise<strin
   }
 }
 
+export function formatTerminalFilePaths(paths: string[]): string {
+  return paths.filter((path) => path.length > 0).join(" ");
+}
+
+export async function readClipboardFilePaths(): Promise<ClipboardFilePathsResult> {
+  try {
+    const paths = await invoke<string[]>("read_clipboard_file_paths");
+    return {
+      paths: Array.isArray(paths)
+        ? paths.filter((path): path is string => typeof path === "string" && path.length > 0)
+        : [],
+    };
+  } catch (error) {
+    const message = getErrorMessage(error);
+    if (import.meta.env.DEV) {
+      console.debug("[terminalClipboard] clipboard.file-paths.failed", { error: message });
+    }
+    return {
+      paths: [],
+      error: message,
+    };
+  }
+}
+
 export async function resolveTerminalPastePayload(
   clipboardData?: DataTransfer | null
 ): Promise<TerminalPastePayload> {
+  const filePathsResult = await readClipboardFilePaths();
+  const fileText = formatTerminalFilePaths(filePathsResult.paths);
+  if (fileText) {
+    return {
+      kind: "file",
+      text: fileText,
+      filePaths: filePathsResult.paths,
+    };
+  }
+
   const imageHint = clipboardHasImage(clipboardData);
 
   if (imageHint || !clipboardData) {

@@ -1,21 +1,32 @@
-import { useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
+import { useRef, useEffect, useCallback, forwardRef, useImperativeHandle, type CSSProperties } from "react";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { writeText as tauriWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { toast } from "sonner";
 import { terminalService, historyService, sessionRestoreService } from "@/services";
 import { ensureListeners } from "@/services/terminalService";
 import { getErrorMessage } from "@/utils";
 import { devDebugLog } from "@/utils/devLogger";
-import { shouldTerminalHandleKey, useShortcutsStore, useSettingsStore, usePanesStore } from "@/stores";
+import { shouldTerminalHandleKey, useShortcutsStore, useSettingsStore, usePanesStore, useThemeStore } from "@/stores";
 import { isDragging } from "@/stores/splitDragState";
 import { replayAttachedSession } from "./terminalReplay";
 import { formatTerminalInitError } from "./terminalInitError";
 import { buildCursorPositionReport } from "./terminalCpr";
-import { resolveTerminalPastePayload } from "./terminalClipboard";
+import {
+  buildKittyKeyboardProtocolReport,
+  buildPrimaryDeviceAttributesReport,
+} from "./terminalCapabilityReports";
+import { buildOscColorReply } from "./terminalOscColor";
+import { formatTerminalFilePaths, resolveTerminalPastePayload } from "./terminalClipboard";
+import { isDropInsideTerminalHost } from "./terminalDrop";
+import { attachTerminalInputTrace } from "./terminalInputTrace";
+import { isTerminalPasteShortcut } from "./terminalKeyboard";
 import { createTerminalWriteFlowControl } from "./terminalWriteFlowControl";
+import { shouldUseTerminalWebglRenderer } from "./terminalRenderer";
+import { getTerminalTheme, type TerminalThemePalette } from "./terminalTheme";
 import "@xterm/xterm/css/xterm.css";
 
 /** Cache the Windows build number once per renderer process. */
@@ -36,6 +47,7 @@ import type { CliTool, SshConnectionInfo, WslLaunchInfo } from "@/types";
 
 const TERMINAL_DEBUG = import.meta.env.DEV;
 const IS_WINDOWS = typeof navigator !== "undefined" && navigator.platform.startsWith("Win");
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
 const ALTERNATE_BUFFER_SEQUENCE = /\x1b\[\?(1049|1047|47)(h|l)/g;
 
 interface AlternateBufferTransition {
@@ -65,6 +77,24 @@ function resolveRuntimeKind(
   if (ssh) return "ssh";
   if (wsl) return "wsl";
   return "local";
+}
+
+function writeTerminalReply(
+  sessionId: string | null,
+  response: string,
+  onError: (error: unknown) => void,
+) {
+  if (!sessionId) return;
+  void terminalService.write(sessionId, response).catch(onError);
+}
+
+function applyTerminalElementTheme(
+  term: Terminal | null,
+  theme: TerminalThemePalette,
+) {
+  if (!term?.element) return;
+  term.element.style.backgroundColor = theme.background;
+  term.element.style.color = theme.foreground;
 }
 
 interface TerminalViewProps {
@@ -103,6 +133,8 @@ export interface TerminalViewHandle {
 
 const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
   function TerminalView(props, ref) {
+    const isDark = useThemeStore((s) => s.isDark);
+    const terminalTheme = getTerminalTheme(isDark);
     const terminalRef = useRef<HTMLDivElement>(null);
     const terminalInstanceRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
@@ -115,6 +147,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     const lastContainerSizeRef = useRef<{ width: number; height: number } | null>(null);
     const wheelHandlerRef = useRef<((e: WheelEvent) => void) | null>(null);
     const pasteHandlerRef = useRef<((e: ClipboardEvent) => void) | null>(null);
+    const dragDropUnlistenRef = useRef<(() => void) | null>(null);
+    const inputTraceRef = useRef<ReturnType<typeof attachTerminalInputTrace> | null>(null);
     const parserDisposableRefs = useRef<IDisposable[]>([]);
     const writeFlowControlRef = useRef<ReturnType<typeof createTerminalWriteFlowControl> | null>(null);
     const atlasResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -178,6 +212,34 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       });
     }, [debugLog]);
 
+    const forceTerminalRepaint = useCallback((reason: string) => {
+      const term = terminalInstanceRef.current;
+      if (!term) return;
+
+      if (webglAddonRef.current) {
+        try {
+          term.clearTextureAtlas();
+        } catch (error) {
+          debugLog("renderer.repaint.clear-atlas.fail", {
+            reason,
+            error: getErrorMessage(error),
+          });
+        }
+      }
+
+      requestAnimationFrame(() => {
+        if (terminalInstanceRef.current !== term) return;
+        try {
+          term.refresh(0, Math.max(0, term.rows - 1));
+        } catch (error) {
+          debugLog("renderer.repaint.refresh.fail", {
+            reason,
+            error: getErrorMessage(error),
+          });
+        }
+      });
+    }, [debugLog]);
+
     const writeTerminalData = useCallback(async (
       data: string,
       onWritten?: () => void,
@@ -204,23 +266,18 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           reason,
           dpr: lastDevicePixelRatioRef.current,
         });
-        try {
-          term.clearTextureAtlas();
-          term.refresh(0, Math.max(0, term.rows - 1));
-        } catch (error) {
-          debugLog("webgl.texture-atlas.clear.fail", {
-            reason,
-            error: getErrorMessage(error),
-          });
-        }
+        forceTerminalRepaint(`webgl.texture-atlas.${reason}`);
       }, 225);
-    }, [debugLog, props.isActive]);
+    }, [debugLog, forceTerminalRepaint, props.isActive]);
 
     // Expose imperative helpers to parent panes.
     useImperativeHandle(ref, () => ({
       focus: () => terminalInstanceRef.current?.focus(),
-      fit: () => fitAddonRef.current?.fit(),
-    }));
+      fit: () => {
+        fitAddonRef.current?.fit();
+        forceTerminalRepaint("imperative.fit");
+      },
+    }), [forceTerminalRepaint]);
 
     // Keep callback refs in sync with the latest props.
     useEffect(() => {
@@ -268,6 +325,17 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         }
         parserDisposableRefs.current = [];
       }
+
+      if (dragDropUnlistenRef.current) {
+        try {
+          dragDropUnlistenRef.current();
+        } catch {
+          // Safe to ignore if Tauri already removed the drag-drop listener.
+        }
+        dragDropUnlistenRef.current = null;
+      }
+      inputTraceRef.current?.dispose();
+      inputTraceRef.current = null;
 
       // Remove the wheel handler before disposing xterm.
       if (wheelHandlerRef.current && terminalInstanceRef.current?.element) {
@@ -463,7 +531,6 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         const termSettings = useSettingsStore.getState().settings?.terminal;
         const scrollback = termSettings?.scrollback ?? 1000;
         const fontFamily = termSettings?.fontFamily || 'Consolas, "Courier New", "Microsoft YaHei Mono", "Noto Sans Mono CJK SC", "PingFang SC", monospace';
-
         const term = new Terminal({
           allowProposedApi: true,
           cursorBlink: true,
@@ -476,36 +543,14 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
               buildNumber,
             },
           }),
-          theme: {
-            background: "#1a1a1a",
-            foreground: "#f5f5f7",
-            cursor: "#0a84ff",
-            cursorAccent: "#1a1a1a",
-            selectionBackground: "rgba(10, 132, 255, 0.3)",
-            selectionForeground: "#f5f5f7",
-            black: "#1a1a1a",
-            red: "#ff453a",
-            green: "#30d158",
-            yellow: "#ffd60a",
-            blue: "#0a84ff",
-            magenta: "#bf5af2",
-            cyan: "#64d2ff",
-            white: "#f5f5f7",
-            brightBlack: "#6e6e73",
-            brightRed: "#ff6961",
-            brightGreen: "#4ae08a",
-            brightYellow: "#ffe620",
-            brightBlue: "#409cff",
-            brightMagenta: "#da8aff",
-            brightCyan: "#70d7ff",
-            brightWhite: "#ffffff",
-          },
+          theme: terminalTheme,
         });
 
         const fit = new FitAddon();
         term.loadAddon(fit);
 
         term.open(terminalRef.current);
+        applyTerminalElementTheme(term, terminalTheme);
         writeFlowControlRef.current = createTerminalWriteFlowControl(term, {
           enabled: IS_WINDOWS,
         });
@@ -513,6 +558,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         debugLog("xterm.ready", {
           scrollback,
           fontFamily,
+          isDark,
           initialBuffer: term.buffer.active.type,
           writeFlowControl: IS_WINDOWS ? "enabled" : "disabled",
         });
@@ -539,9 +585,72 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           });
           return true;
         };
+        const handleOscColorQuery = (ident: number) => (data: string) => {
+          const sessionId = currentSessionIdRef.current;
+          const response = buildOscColorReply(
+            ident,
+            data,
+            getTerminalTheme(useThemeStore.getState().isDark),
+          );
+          debugLog("terminal.osc.query", {
+            sessionId,
+            ident,
+            data,
+            handled: Boolean(response),
+          });
+          if (!response) return false;
+
+          writeTerminalReply(sessionId, response, (error) => {
+            console.warn("[TerminalView] Failed to send OSC color response:", error);
+          });
+          debugLog("terminal.osc.reply", {
+            sessionId,
+            ident,
+            data,
+            response,
+          });
+          return true;
+        };
+        const handlePrimaryDeviceAttributesReport = (prefix?: string) => (params: (number | number[])[]) => {
+          const sessionId = currentSessionIdRef.current;
+          const response = buildPrimaryDeviceAttributesReport(params, prefix);
+          debugLog("terminal.da.query", {
+            sessionId,
+            prefix: prefix ?? "",
+            params,
+            handled: Boolean(response),
+          });
+          if (!response) return false;
+
+          writeTerminalReply(sessionId, response, (error) => {
+            console.warn("[TerminalView] Failed to send DA response:", error);
+          });
+          return true;
+        };
+        const handleKittyKeyboardProtocolQuery = (prefix?: string) => (params: (number | number[])[]) => {
+          const sessionId = currentSessionIdRef.current;
+          const response = buildKittyKeyboardProtocolReport(params, prefix);
+          debugLog("terminal.kitty-keyboard.query", {
+            sessionId,
+            prefix: prefix ?? "",
+            params,
+            handled: Boolean(response),
+          });
+          if (!response) return false;
+
+          writeTerminalReply(sessionId, response, (error) => {
+            console.warn("[TerminalView] Failed to send Kitty keyboard protocol response:", error);
+          });
+          return true;
+        };
         parserDisposableRefs.current = [
           term.parser.registerCsiHandler({ final: "n" }, handleCursorPositionReport()),
           term.parser.registerCsiHandler({ prefix: "?", final: "n" }, handleCursorPositionReport("?")),
+          term.parser.registerCsiHandler({ final: "c" }, handlePrimaryDeviceAttributesReport()),
+          term.parser.registerCsiHandler({ prefix: "?", final: "u" }, handleKittyKeyboardProtocolQuery("?")),
+          term.parser.registerOscHandler(4, handleOscColorQuery(4)),
+          term.parser.registerOscHandler(10, handleOscColorQuery(10)),
+          term.parser.registerOscHandler(11, handleOscColorQuery(11)),
         ];
 
         // Use Unicode 11 widths so CJK and emoji render correctly.
@@ -549,19 +658,64 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         term.loadAddon(unicode11);
         term.unicode.activeVersion = "11";
 
-        // Prefer WebGL when available and fall back to Canvas2D on failure.
-        try {
-          const webgl = new WebglAddon();
-          webgl.onContextLoss(() => {
-            console.warn("[TerminalView] WebGL context lost, falling back to Canvas2D");
-            try { webgl.dispose(); } catch { /* ignore */ }
-            webglAddonRef.current = null;
+        // Prefer WebGL only where the host renderer is reliable; WKWebView has
+        // shown stale terminal cell backgrounds after partial repaints.
+        if (shouldUseTerminalWebglRenderer()) {
+          try {
+            const webgl = new WebglAddon();
+            webgl.onContextLoss(() => {
+              console.warn("[TerminalView] WebGL context lost, falling back to the default renderer");
+              try { webgl.dispose(); } catch { /* ignore */ }
+              webglAddonRef.current = null;
+              forceTerminalRepaint("webgl.context-loss");
+            });
+            term.loadAddon(webgl);
+            webglAddonRef.current = webgl;
+            debugLog("renderer.webgl.enabled", {});
+          } catch {
+            console.info("[TerminalView] WebGL not available, using the default renderer");
+          }
+        } else {
+          debugLog("renderer.webgl.disabled", {
+            reason: "webkit-host",
           });
-          term.loadAddon(webgl);
-          webglAddonRef.current = webgl;
-        } catch {
-          console.info("[TerminalView] WebGL not available, using Canvas2D renderer");
         }
+
+        const pasteTextIntoTerminal = (text: string, kind: string) => {
+          if (!text) return;
+          debugLog("clipboard.paste", {
+            kind,
+            textLength: text.length,
+          });
+          term.focus();
+          term.paste(text);
+        };
+
+        const pasteTerminalPayload = (clipboardData?: DataTransfer | null) => {
+          void resolveTerminalPastePayload(clipboardData)
+            .then((payload) => {
+              if (payload.kind === "image" || payload.kind === "text" || payload.kind === "file") {
+                pasteTextIntoTerminal(payload.text, payload.kind);
+                return;
+              }
+
+              if (payload.kind === "error") {
+                debugLog("clipboard.paste.failed", {
+                  reason: payload.reason,
+                  error: payload.error,
+                });
+                toast.error(`Paste failed: ${payload.error}`);
+              }
+            })
+            .catch((error) => {
+              const message = getErrorMessage(error);
+              debugLog("clipboard.paste.failed", {
+                reason: "unexpected-error",
+                error: message,
+              });
+              toast.error(`Paste failed: ${message}`);
+            });
+        };
 
         // Track terminal focus so global shortcuts can defer to xterm.
         const textarea = term.textarea;
@@ -580,42 +734,64 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
             e.preventDefault();
             e.stopPropagation();
             e.stopImmediatePropagation();
-
-            void resolveTerminalPastePayload(e.clipboardData)
-              .then((payload) => {
-                if (payload.kind === "image" || payload.kind === "text") {
-                  debugLog("clipboard.paste", {
-                    kind: payload.kind,
-                    textLength: payload.text.length,
-                  });
-                  term.paste(payload.text);
-                  return;
-                }
-
-                if (payload.kind === "error") {
-                  debugLog("clipboard.paste.failed", {
-                    reason: payload.reason,
-                    error: payload.error,
-                  });
-                  toast.error(`Paste failed: ${payload.error}`);
-                }
-              })
-              .catch((error) => {
-                const message = getErrorMessage(error);
-                debugLog("clipboard.paste.failed", {
-                  reason: "unexpected-error",
-                  error: message,
-                });
-                toast.error(`Paste failed: ${message}`);
-              });
+            pasteTerminalPayload(e.clipboardData);
           };
 
           textarea.addEventListener('paste', pasteHandler, true);
           pasteHandlerRef.current = pasteHandler;
+          inputTraceRef.current = attachTerminalInputTrace({
+            textarea,
+            isDev: TERMINAL_DEBUG,
+            isMac: IS_MAC,
+            logger: debugLog,
+          });
         }
 
-        // Intercept copy shortcuts while allowing native paste events through.
+        try {
+          void getCurrentWebview()
+            .onDragDropEvent((event) => {
+              const payload = event.payload;
+              if (payload.type !== "drop") return;
+
+              const host = terminalRef.current;
+              if (!host || !isDropInsideTerminalHost(host, payload.position)) return;
+
+              const text = formatTerminalFilePaths(payload.paths);
+              if (!text) return;
+
+              debugLog("drag-drop.paste", {
+                pathCount: payload.paths.length,
+                textLength: text.length,
+              });
+              pasteTextIntoTerminal(text, "file-drop");
+            })
+            .then((unlisten) => {
+              if (!isMounted) {
+                unlisten();
+                return;
+              }
+              dragDropUnlistenRef.current = unlisten;
+            })
+            .catch((error) => {
+              debugLog("drag-drop.listener.failed", {
+                error: getErrorMessage(error),
+              });
+            });
+        } catch (error) {
+          debugLog("drag-drop.listener.failed", {
+            error: getErrorMessage(error),
+          });
+        }
+
+        // Intercept paste so file clipboard data can be resolved through the Tauri backend.
         term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+          if (isTerminalPasteShortcut(e, IS_MAC)) {
+            e.preventDefault();
+            e.stopPropagation();
+            pasteTerminalPayload(null);
+            return false;
+          }
+
           if (e.type === 'keydown' && (e.ctrlKey || e.metaKey) && !e.altKey) {
             // Copy the selection on Ctrl+C; otherwise let the terminal handle SIGINT.
             if (!e.shiftKey && (e.key === 'c' || e.key === 'C')) {
@@ -635,10 +811,14 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         });
 
         // Fit once after the initial layout pass.
-        requestAnimationFrame(() => fit.fit());
+        requestAnimationFrame(() => {
+          fit.fit();
+          forceTerminalRepaint("initial.fit");
+        });
 
         // Forward terminal input, with Enter-to-reconnect handling for SSH disconnects.
         const onDataDisposable = term.onData((data) => {
+          inputTraceRef.current?.onData(data);
           // Only Enter should trigger reconnect while disconnected.
           if (isDisconnectedRef.current) {
             if (!isReconnectingRef.current && (data === "\r" || data === "\n")) {
@@ -678,6 +858,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
             requestAnimationFrame(() => {
               if (!isMounted || !fitAddonRef.current || !terminalInstanceRef.current) return;
               fitAddonRef.current.fit();
+              forceTerminalRepaint("resize-observer.fit");
               const { cols, rows } = terminalInstanceRef.current;
               if (lastSizeRef.current?.cols === cols && lastSizeRef.current?.rows === rows) return;
               lastSizeRef.current = { cols, rows };
@@ -935,6 +1116,15 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     }, []);
 
     useEffect(() => {
+      const term = terminalInstanceRef.current;
+      if (!term) return;
+
+      term.options.theme = terminalTheme;
+      applyTerminalElementTheme(term, terminalTheme);
+      forceTerminalRepaint("theme.change");
+    }, [forceTerminalRepaint, terminalTheme]);
+
+    useEffect(() => {
       if (!IS_WINDOWS) return;
 
       const handleWindowResize = () => {
@@ -981,6 +1171,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         const fitAddon = fitAddonRef.current;
         if (!term || !fitAddon) return null;
         fitAddon.fit();
+        forceTerminalRepaint("active.refit");
         // Don't steal focus from input/textarea (e.g. tab rename input).
         const active = document.activeElement;
         if (!active || (active.tagName !== "INPUT" && active.tagName !== "TEXTAREA")) {
@@ -1136,10 +1327,16 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
     return (
       <div
-        className="h-full w-full bg-[#1a1a1a] overflow-hidden flex flex-col"
-        style={{ paddingTop: 'var(--notch-bar-height, 0px)' }}
+        className="h-full w-full overflow-hidden flex flex-col"
+        style={{
+          "--cc-terminal-bg": terminalTheme.background,
+          "--cc-terminal-fg": terminalTheme.foreground,
+          background: terminalTheme.background,
+          color: terminalTheme.foreground,
+          paddingTop: 'var(--notch-bar-height, 0px)',
+        } as CSSProperties}
       >
-        <div ref={terminalRef} className="flex-1 overflow-hidden [&_.xterm]:h-full [&_.xterm]:p-1" />
+        <div ref={terminalRef} className="cc-terminal-host flex-1 overflow-hidden p-1 [&_.xterm]:h-full" />
       </div>
     );
   }
