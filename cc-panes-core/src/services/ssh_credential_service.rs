@@ -97,6 +97,12 @@ pub struct SshCredentialService {
     backend: Arc<dyn CredentialBackend>,
 }
 
+impl Default for SshCredentialService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SshCredentialService {
     pub fn new() -> Self {
         Self {

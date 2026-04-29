@@ -874,9 +874,10 @@ dependencies = [
 
 [[package]]
 name = "cc-panes"
-version = "0.9.37"
+version = "0.9.38"
 dependencies = [
  "anyhow",
+ "arboard",
  "axum",
  "base64 0.22.1",
  "cc-cli-adapters",

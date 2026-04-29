@@ -399,7 +399,7 @@ fn detect_in_sessions(
             continue;
         }
         let session_path = normalize_compare_path(&session.project_path);
-        if targets.iter().any(|target| *target == session_path) {
+        if targets.contains(&session_path) {
             return Ok(Some(session.id));
         }
     }

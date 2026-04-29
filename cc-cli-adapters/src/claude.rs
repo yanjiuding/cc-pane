@@ -370,6 +370,7 @@ impl ClaudeAdapter {
         Self::find_executable_in_dirs("claude", &dirs, &extensions)
     }
 
+    #[cfg(any(windows, test))]
     fn find_executable_in_dirs(
         executable: &str,
         dirs: &[PathBuf],

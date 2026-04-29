@@ -21,7 +21,7 @@ pub fn screenshot_update_shortcut(
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (&app, &settings_service, &old_shortcut, &new_shortcut);
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(target_os = "windows")]

@@ -970,6 +970,7 @@ impl TerminalService {
     }
 
     #[cfg(not(windows))]
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn build_wsl_supported_cli_command(
         &self,
         _wsl: &ResolvedWslLaunch,

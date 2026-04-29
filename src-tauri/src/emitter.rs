@@ -63,13 +63,10 @@ impl SessionNotifier for TauriSessionNotifier {
             exit_code,
         );
 
-        let record = match self
+        let record = self
             .launch_history_service
             .find_by_pty_session_id(session_id)
-        {
-            Ok(record) => record,
-            Err(_) => None,
-        };
+            .unwrap_or_default();
 
         if let Some(record) = record {
             if let Some(resume_session_id) = record.resume_session_id.as_deref() {

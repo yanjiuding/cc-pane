@@ -411,9 +411,14 @@ export default memo(function TabBar({
   // Radix ContextMenu 关闭时焦点恢复在 rAF 之后，用 setTimeout 延迟聚焦避免抢占
   useEffect(() => {
     if (editingTabId) {
+      const initialTitle = editingTitle;
       const timer = setTimeout(() => {
-        editInputRef.current?.focus();
-        editInputRef.current?.select();
+        const input = editInputRef.current;
+        if (!input) return;
+        input.focus();
+        if (input.value === initialTitle) {
+          input.select();
+        }
       }, 50);
       return () => clearTimeout(timer);
     }

@@ -12,6 +12,12 @@ const READONLY_PREFIXES: &[&str] = &["node_modules", ".git"];
 
 pub struct FileSystemService;
 
+impl Default for FileSystemService {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileSystemService {
     pub fn new() -> Self {
         Self

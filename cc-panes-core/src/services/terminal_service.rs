@@ -865,7 +865,11 @@ impl TerminalService {
             runtime_kind.to_string(),
         );
         if let Some(wsl) = wsl {
-            if let Some(distro) = wsl.distro.as_deref().filter(|value| !value.trim().is_empty()) {
+            if let Some(distro) = wsl
+                .distro
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+            {
                 env_vars.insert("CC_PANES_WSL_DISTRO".to_string(), distro.to_string());
             }
         }
