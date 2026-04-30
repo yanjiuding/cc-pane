@@ -15,7 +15,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
@@ -465,7 +465,7 @@ impl ReplayBuffer {
 /// 终端会话
 struct TerminalSession {
     process: Arc<dyn PtyProcess>,
-    writer: Box<dyn Write + Send>,
+    writer_tx: mpsc::Sender<WriterCommand>,
     status: Arc<Mutex<SessionStatus>>,
     last_output_at: Arc<Mutex<Instant>>,
     /// reader 线程取消标志：kill() 设置为 true，reader 线程检查后退出
@@ -516,6 +516,70 @@ struct SshAuthRuntime {
     prompt_buffer: String,
     saved_password: String,
     auto_response_sent: bool,
+}
+
+enum WriterCommand {
+    Write {
+        data: Vec<u8>,
+        ack: mpsc::Sender<Result<(), String>>,
+    },
+}
+
+const TERMINAL_WRITE_CHUNK_SIZE: usize = 512;
+const TERMINAL_WRITE_INTER_CHUNK_DELAY: Duration = Duration::from_millis(30);
+const TERMINAL_WRITE_ACK_TIMEOUT: Duration = Duration::from_secs(5);
+const LIVE_OUTPUT_MAX_LINES: usize = 20_000;
+const LIVE_OUTPUT_MAX_BYTES: usize = 20 * 1024 * 1024;
+const LIVE_REPLAY_MAX_BYTES: usize = 8 * 1024 * 1024;
+const DEAD_OUTPUT_MAX_LINES: usize = 20_000;
+const DEAD_OUTPUT_MAX_BYTES: usize = 10 * 1024 * 1024;
+const DEAD_REPLAY_MAX_BYTES: usize = 4 * 1024 * 1024;
+
+fn spawn_terminal_writer(
+    session_id: String,
+    mut writer: Box<dyn Write + Send>,
+) -> mpsc::Sender<WriterCommand> {
+    let (writer_tx, writer_rx) = mpsc::channel::<WriterCommand>();
+
+    thread::spawn(move || {
+        while let Ok(command) = writer_rx.recv() {
+            match command {
+                WriterCommand::Write { data, ack } => {
+                    let result = writer
+                        .write_all(&data)
+                        .and_then(|_| writer.flush())
+                        .map_err(|error| error.to_string());
+                    let should_stop = result.is_err();
+                    let _ = ack.send(result);
+
+                    if should_stop {
+                        warn!(session_id = %session_id, "Terminal writer stopped after write error");
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    writer_tx
+}
+
+fn write_via_writer_tx(writer_tx: &mpsc::Sender<WriterCommand>, data: Vec<u8>) -> Result<()> {
+    if data.is_empty() {
+        return Ok(());
+    }
+
+    let (ack_tx, ack_rx) = mpsc::channel();
+    writer_tx
+        .send(WriterCommand::Write { data, ack: ack_tx })
+        .map_err(|_| anyhow!("Terminal writer is closed"))?;
+
+    match ack_rx.recv_timeout(TERMINAL_WRITE_ACK_TIMEOUT) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(anyhow!(error)),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(anyhow!("Terminal write timed out")),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(anyhow!("Terminal writer stopped")),
+    }
 }
 
 /// ConPTY style-only 空闲帧：\x1b[39m\x1b[49m\x1b[59m\x1b[0m\x1b[?25l  (25 字节)
@@ -663,49 +727,40 @@ fn sanitize_windows_output(
 ///
 /// 处理跨 chunk 的 UTF-8 多字节字符截断问题。
 /// 如果 chunk 末尾是不完整的 UTF-8 序列，将其保留到下一次 read。
+/// Windows PowerShell 5.1 在中文系统上可能输出 GBK/GB2312 字节，因此 UTF-8
+/// 严格解码失败时回退到 GBK，避免中文直接变成 replacement characters。
 fn utf8_safe_process(buf: &[u8], carry: &mut Vec<u8>) -> Option<String> {
     let mut combined = Vec::with_capacity(carry.len() + buf.len());
     combined.extend_from_slice(carry);
     combined.extend_from_slice(buf);
     carry.clear();
 
-    // 检测末尾不完整 UTF-8 序列（UTF-8 最长 4 字节，需检查末尾 4 字节）
-    let mut valid_end = combined.len();
-    for i in (combined.len().saturating_sub(4)..combined.len()).rev() {
-        let byte = combined[i];
-        if byte & 0x80 == 0 {
-            // ASCII — 完整
-            break;
-        }
-        if byte & 0xC0 == 0xC0 {
-            // 多字节起始字节
-            let expected_len = if byte & 0xF8 == 0xF0 {
-                4
-            } else if byte & 0xF0 == 0xE0 {
-                3
-            } else if byte & 0xE0 == 0xC0 {
-                2
-            } else {
-                1
-            };
-            let actual_len = combined.len() - i;
-            if actual_len < expected_len {
-                valid_end = i;
-            }
-            break;
-        }
-    }
-
-    if valid_end < combined.len() {
-        carry.extend_from_slice(&combined[valid_end..]);
-        combined.truncate(valid_end);
-    }
-
     if combined.is_empty() {
         return None;
     }
 
-    Some(String::from_utf8_lossy(&combined).to_string())
+    match std::str::from_utf8(&combined) {
+        Ok(output) => Some(output.to_string()),
+        Err(error) if error.error_len().is_none() => {
+            let valid_end = error.valid_up_to();
+            carry.extend_from_slice(&combined[valid_end..]);
+            if valid_end == 0 {
+                return None;
+            }
+
+            Some(decode_terminal_output(&combined[..valid_end]))
+        }
+        Err(_) => Some(decode_terminal_output(&combined)),
+    }
+}
+
+fn decode_terminal_output(bytes: &[u8]) -> String {
+    if let Ok(output) = std::str::from_utf8(bytes) {
+        return output.to_string();
+    }
+
+    let (decoded, _, _) = encoding_rs::GBK.decode(bytes);
+    decoded.into_owned()
 }
 
 fn normalize_prompt_text(data: &str) -> String {
@@ -715,6 +770,18 @@ fn normalize_prompt_text(data: &str) -> String {
 fn looks_like_ssh_password_prompt(prompt: &str) -> bool {
     let lower = prompt.to_ascii_lowercase();
     !lower.contains("passphrase") && (lower.ends_with("password:") || lower.ends_with("password: "))
+}
+
+fn append_ssh_session_options(args: &mut Vec<String>) {
+    for option in [
+        "ConnectTimeout=10",
+        "ServerAliveInterval=15",
+        "ServerAliveCountMax=2",
+        "TCPKeepAlive=yes",
+    ] {
+        args.push("-o".to_string());
+        args.push(option.to_string());
+    }
 }
 
 impl TerminalService {
@@ -1140,14 +1207,18 @@ impl TerminalService {
         let mut reader = spawn_result.reader;
         let writer = spawn_result.writer;
         let process = spawn_result.process;
+        let writer_tx = spawn_terminal_writer(session_id.clone(), writer);
+        let read_writer_tx = writer_tx.clone();
 
         // 状态追踪
         let status = Arc::new(Mutex::new(SessionStatus::Active));
         let last_output_at = Arc::new(Mutex::new(Instant::now()));
         let cancelled = Arc::new(AtomicBool::new(false));
-        // 输出缓冲区：2000 行 / 512KB 上限
-        let output_buffer = Arc::new(Mutex::new(OutputBuffer::new(10_000, 10 * 1024 * 1024)));
-        let replay_buffer = Arc::new(Mutex::new(ReplayBuffer::new(1024 * 1024)));
+        let output_buffer = Arc::new(Mutex::new(OutputBuffer::new(
+            LIVE_OUTPUT_MAX_LINES,
+            LIVE_OUTPUT_MAX_BYTES,
+        )));
+        let replay_buffer = Arc::new(Mutex::new(ReplayBuffer::new(LIVE_REPLAY_MAX_BYTES)));
 
         // sanitize 可开关兜底（默认关闭 — dwFlags=0 应该解决了根本问题）
         #[cfg(windows)]
@@ -1173,7 +1244,7 @@ impl TerminalService {
                 session_id.clone(),
                 TerminalSession {
                     process,
-                    writer,
+                    writer_tx,
                     status: status.clone(),
                     last_output_at: last_output_at.clone(),
                     cancelled: cancelled.clone(),
@@ -1266,7 +1337,6 @@ impl TerminalService {
         let read_output_buffer = output_buffer.clone();
         let read_replay_buffer = replay_buffer.clone();
         let reader_pid = session_pid;
-        let read_sessions = Arc::clone(&self.sessions);
         let read_ssh_auth_runtime = ssh_auth_runtime.clone();
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
@@ -1416,19 +1486,15 @@ impl TerminalService {
                                     if !runtime.auto_response_sent
                                         && looks_like_ssh_password_prompt(&last_line)
                                     {
-                                        if let Ok(mut sessions) = read_sessions.lock() {
-                                            if let Some(session) = sessions.get_mut(&sid) {
-                                                if session
-                                                    .writer
-                                                    .write_all(runtime.saved_password.as_bytes())
-                                                    .and_then(|_| session.writer.write_all(b"\n"))
-                                                    .and_then(|_| session.writer.flush())
-                                                    .is_ok()
-                                                {
-                                                    runtime.auto_response_sent = true;
-                                                    runtime.prompt_buffer.clear();
-                                                }
-                                            }
+                                        let password = format!("{}\n", runtime.saved_password);
+                                        if write_via_writer_tx(
+                                            &read_writer_tx,
+                                            password.into_bytes(),
+                                        )
+                                        .is_ok()
+                                        {
+                                            runtime.auto_response_sent = true;
+                                            runtime.prompt_buffer.clear();
                                         }
                                     }
                                 }
@@ -1545,12 +1611,12 @@ impl TerminalService {
             if let Ok(mut sessions) = sessions_for_wait.lock() {
                 // 移除前保存 output_buffer 到 dead_buffers，供事后读取
                 if let Some(session) = sessions.remove(&sid) {
-                    // 缩减缓冲：10MB → 2000行/1MB，释放内存
+                    // 会话退出后仍保留足够输出供用户回看，5 分钟后清理。
                     if let Ok(mut buf) = session.output_buffer.lock() {
-                        buf.shrink(2000, 1024 * 1024);
+                        buf.shrink(DEAD_OUTPUT_MAX_LINES, DEAD_OUTPUT_MAX_BYTES);
                     }
                     if let Ok(mut replay) = session.replay_buffer.lock() {
-                        replay.shrink(1024 * 1024);
+                        replay.shrink(DEAD_REPLAY_MAX_BYTES);
                     }
                     if let Ok(mut dead) = dead_buffers_for_wait.lock() {
                         dead.insert(
@@ -1634,31 +1700,28 @@ impl TerminalService {
 
     /// 向终端写入数据（分块写入防止 ConPTY/ink 丢字符）
     ///
-    /// 多 chunk 写入时，每个 chunk 单独获取/释放锁，并在 chunk 间添加延迟，
-    /// 避免 Windows ConPTY 输入缓冲溢出或 ink-text-input 处理不及导致丢字符。
+    /// 写入由每个 session 独立 writer 线程执行，避免一个假死 SSH 写入
+    /// 阻塞全局 sessions 锁并拖住其他窗口。
     pub fn write(&self, session_id: &str, data: &str) -> Result<()> {
         let bytes = data.as_bytes();
-        const CHUNK_SIZE: usize = 512;
-        const INTER_CHUNK_DELAY_MS: u64 = 30;
-
-        let chunks: Vec<&[u8]> = bytes.chunks(CHUNK_SIZE).collect();
+        let chunks: Vec<&[u8]> = bytes.chunks(TERMINAL_WRITE_CHUNK_SIZE).collect();
+        let writer_tx = {
+            let sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| anyhow!("sessions lock poisoned"))?;
+            sessions
+                .get(session_id)
+                .map(|session| session.writer_tx.clone())
+                .ok_or_else(|| anyhow!("Session not found: {}", session_id))?
+        };
 
         for (i, chunk) in chunks.iter().enumerate() {
-            {
-                let mut sessions = self
-                    .sessions
-                    .lock()
-                    .map_err(|_| anyhow!("sessions lock poisoned"))?;
-                let session = sessions
-                    .get_mut(session_id)
-                    .ok_or_else(|| anyhow!("Session not found: {}", session_id))?;
-                session.writer.write_all(chunk)?;
-                session.writer.flush()?;
-            } // 锁在此释放
+            write_via_writer_tx(&writer_tx, chunk.to_vec())?;
 
             // 多 chunk 时，非最后一个 chunk 后添加延迟，让 ConPTY 消化输入
             if chunks.len() > 1 && i < chunks.len() - 1 {
-                std::thread::sleep(std::time::Duration::from_millis(INTER_CHUNK_DELAY_MS));
+                std::thread::sleep(TERMINAL_WRITE_INTER_CHUNK_DELAY);
             }
         }
         Ok(())
@@ -1681,7 +1744,7 @@ impl TerminalService {
     /// 关闭终端会话
     pub fn kill(&self, session_id: &str) -> Result<()> {
         debug!(session_id = %session_id, "Terminal kill requested");
-        // 在 sessions lock 外 drop session，避免 ConPTY writer 关闭时阻塞锁
+        // 在 sessions lock 外 drop session，避免进程终止阻塞全局会话锁
         let session = {
             let mut sessions = self
                 .sessions
@@ -1692,12 +1755,12 @@ impl TerminalService {
 
         if let Some(session) = session {
             // 保存 output_buffer 到 dead_buffers，供事后读取
-            // 先缩减缓冲：10MB → 2000行/1MB，释放内存
+            // 保留足够输出供用户在关闭/断连后短时间回看。
             if let Ok(mut buf) = session.output_buffer.lock() {
-                buf.shrink(2000, 1024 * 1024);
+                buf.shrink(DEAD_OUTPUT_MAX_LINES, DEAD_OUTPUT_MAX_BYTES);
             }
             if let Ok(mut replay) = session.replay_buffer.lock() {
-                replay.shrink(1024 * 1024);
+                replay.shrink(DEAD_REPLAY_MAX_BYTES);
             }
             if let Ok(mut dead) = self.dead_buffers.lock() {
                 dead.insert(
@@ -1724,7 +1787,7 @@ impl TerminalService {
                     serde_json::json!({ "sessionId": session_id }),
                 );
             }
-            // session 在此 drop，writer handle 关闭 — 不再持有 sessions lock
+            // session 在此 drop，不再持有 sessions lock
             Ok(())
         } else {
             Err(anyhow!("Session not found: {}", session_id))
@@ -1891,7 +1954,7 @@ impl TerminalService {
 
     /// 构建 SSH 命令
     ///
-    /// 生成 `ssh -t [-p port] [-i identity_file] [user@]host 'export K=V && ... && cd path && cli_tool'`
+    /// 生成 `ssh -tt [keepalive opts] [-p port] [-i identity_file] [user@]host 'export K=V && ... && cd path && cli_tool'`
     fn build_ssh_command(
         &self,
         ssh: &SshConnectionInfo,
@@ -1900,7 +1963,8 @@ impl TerminalService {
     ) -> Result<(String, Vec<String>)> {
         let ssh_path = cached_which("ssh").map_err(|_| anyhow!("ssh not found in PATH"))?;
 
-        let mut args = vec!["-t".to_string()]; // 强制伪终端
+        let mut args = vec!["-tt".to_string()]; // 强制伪终端，避免远端 TUI 降级
+        append_ssh_session_options(&mut args);
         if ssh.port != 22 {
             args.extend(["-p".to_string(), ssh.port.to_string()]);
         }
@@ -2386,6 +2450,26 @@ mod tests {
         assert!(carry.is_empty());
     }
 
+    #[test]
+    fn test_utf8_safe_decodes_gbk_output() {
+        let mut carry = Vec::new();
+        let result = utf8_safe_process(b"\xd6\xd0\xce\xc4 ABC", &mut carry);
+        assert_eq!(result, Some("中文 ABC".to_string()));
+        assert!(carry.is_empty());
+    }
+
+    #[test]
+    fn test_utf8_safe_decodes_split_gbk_output() {
+        let mut carry = Vec::new();
+        let result1 = utf8_safe_process(b"\xd6", &mut carry);
+        assert_eq!(result1, None);
+        assert_eq!(carry, b"\xd6");
+
+        let result2 = utf8_safe_process(b"\xd0\xce\xc4", &mut carry);
+        assert_eq!(result2, Some("中文".to_string()));
+        assert!(carry.is_empty());
+    }
+
     // --- sanitize_windows_output 集成测试 (cfg(windows)) ---
 
     #[test]
@@ -2510,5 +2594,24 @@ mod tests {
             normalize_prompt_text("\x1b[31mPassword:\x1b[0m\r"),
             "Password:\n"
         );
+    }
+
+    #[test]
+    fn test_ssh_session_options_include_keepalive_and_timeout() {
+        let mut args = vec!["-tt".to_string()];
+        append_ssh_session_options(&mut args);
+
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-o" && pair[1] == "ConnectTimeout=10"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-o" && pair[1] == "ServerAliveInterval=15"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-o" && pair[1] == "ServerAliveCountMax=2"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair[0] == "-o" && pair[1] == "TCPKeepAlive=yes"));
     }
 }

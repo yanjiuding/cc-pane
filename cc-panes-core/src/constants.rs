@@ -48,5 +48,8 @@ pub mod events {
 /// 终端默认值
 pub mod terminal {
     /// 默认回滚缓冲行数
-    pub const DEFAULT_SCROLLBACK: u32 = 1_000;
+    pub const DEFAULT_SCROLLBACK: u32 = 20_000;
+
+    /// v0.9.38 及更早版本的默认回滚缓冲行数。
+    pub const LEGACY_DEFAULT_SCROLLBACK: u32 = 1_000;
 }

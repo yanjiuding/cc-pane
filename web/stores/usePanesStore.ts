@@ -24,6 +24,26 @@ function generateId(prefix: string): string {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
+const TERMINAL_LAYOUT_CHANGED_EVENT = "cc-panes:terminal-layout-changed";
+
+function notifyTerminalLayoutChanged(reason: string): void {
+  if (typeof window === "undefined") return;
+  const dispatch = () => {
+    window.dispatchEvent(
+      new CustomEvent(TERMINAL_LAYOUT_CHANGED_EVENT, {
+        detail: { reason },
+      })
+    );
+  };
+
+  if (typeof window.requestAnimationFrame === "function") {
+    window.requestAnimationFrame(dispatch);
+    return;
+  }
+
+  window.setTimeout(dispatch, 0);
+}
+
 // 创建新的面板
 function createPanel(tab?: Tab): Panel {
   const id = generateId("pane");
@@ -465,6 +485,7 @@ export const usePanesStore = create<PanesState>()(
 
         state.activePaneId = newPane.id;
       });
+      notifyTerminalLayoutChanged("pane.split");
     },
 
     splitRight: (paneId) => get().split(paneId, "right"),
@@ -537,6 +558,7 @@ export const usePanesStore = create<PanesState>()(
           }
         }
       });
+      notifyTerminalLayoutChanged("pane.close");
     },
 
     resizePanes: (paneId, sizes) => {
@@ -546,6 +568,7 @@ export const usePanesStore = create<PanesState>()(
           pane.sizes = sizes;
         }
       });
+      notifyTerminalLayoutChanged("pane.resize");
     },
 
     addTab: (paneId, opts) => {
@@ -661,6 +684,7 @@ export const usePanesStore = create<PanesState>()(
           get().selectTab(toPaneId, tabId);
         }
       }
+      notifyTerminalLayoutChanged("tab.move");
     },
 
     splitAndMoveTab: (paneId, tabId, direction) => {
@@ -752,6 +776,7 @@ export const usePanesStore = create<PanesState>()(
         activePaneId: afterState.activePaneId,
         panels: collectPanels(afterState.rootPane).map((panel) => summarizePanel(panel)),
       });
+      notifyTerminalLayoutChanged("tab.split-move");
     },
 
     closeTab: (paneId, tabId) => {
@@ -969,6 +994,7 @@ export const usePanesStore = create<PanesState>()(
         tab.activeTerminalPaneId = newLeaf.id;
         syncTabTerminalState(tab);
       });
+      notifyTerminalLayoutChanged("terminal.split");
     },
 
     closeTerminalPane: (tabId, terminalPaneId) => {
@@ -1008,6 +1034,7 @@ export const usePanesStore = create<PanesState>()(
         tab.activeTerminalPaneId = nextLeaves[Math.min(parentResult.index, nextLeaves.length - 1)]?.id;
         syncTabTerminalState(tab);
       });
+      notifyTerminalLayoutChanged("terminal.close");
     },
 
     resizeTerminalPanes: (tabId, terminalPaneId, sizes) => {
@@ -1021,6 +1048,7 @@ export const usePanesStore = create<PanesState>()(
           split.sizes = sizes;
         }
       });
+      notifyTerminalLayoutChanged("terminal.resize");
     },
 
     updateTabClaudeSession: (ptySessionId, claudeSessionId) => {

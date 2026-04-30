@@ -1,7 +1,6 @@
 import { useRef, useEffect, useCallback, forwardRef, useImperativeHandle, type CSSProperties } from "react";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { writeText as tauriWriteText } from "@tauri-apps/plugin-clipboard-manager";
@@ -20,12 +19,24 @@ import {
   buildPrimaryDeviceAttributesReport,
 } from "./terminalCapabilityReports";
 import { buildOscColorReply } from "./terminalOscColor";
+import {
+  detectAlternateBufferTransitions,
+  shouldKeepCliOutputInNormalBuffer,
+  stripAlternateBufferSequences,
+} from "./terminalBufferMode";
 import { formatTerminalFilePaths, resolveTerminalPastePayload } from "./terminalClipboard";
 import { isDropInsideTerminalHost } from "./terminalDrop";
 import { attachTerminalInputTrace } from "./terminalInputTrace";
 import { isTerminalPasteShortcut } from "./terminalKeyboard";
 import { createTerminalWriteFlowControl } from "./terminalWriteFlowControl";
-import { shouldUseTerminalWebglRenderer } from "./terminalRenderer";
+import {
+  createTerminalLayoutScheduler,
+  type TerminalLayoutScheduler,
+} from "./terminalLayoutScheduler";
+import {
+  createTerminalRendererController,
+  type TerminalRendererController,
+} from "./terminalRendererController";
 import { getTerminalTheme, type TerminalThemePalette } from "./terminalTheme";
 import "@xterm/xterm/css/xterm.css";
 
@@ -43,28 +54,13 @@ async function getCachedBuildNumber(): Promise<number> {
   return buildNumberPromise;
 }
 
-import type { CliTool, SshConnectionInfo, WslLaunchInfo } from "@/types";
+import type { CliTool, SshConnectionInfo, TerminalRendererMode, WslLaunchInfo } from "@/types";
 
 const TERMINAL_DEBUG = import.meta.env.DEV;
 const IS_WINDOWS = typeof navigator !== "undefined" && navigator.platform.startsWith("Win");
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
-const ALTERNATE_BUFFER_SEQUENCE = /\x1b\[\?(1049|1047|47)(h|l)/g;
-
-interface AlternateBufferTransition {
-  mode: string;
-  action: "enter" | "exit";
-}
-
-function detectAlternateBufferTransitions(data: string): AlternateBufferTransition[] {
-  const transitions: AlternateBufferTransition[] = [];
-  for (const match of data.matchAll(new RegExp(ALTERNATE_BUFFER_SEQUENCE.source, "g"))) {
-    transitions.push({
-      mode: match[1],
-      action: match[2] === "h" ? "enter" : "exit",
-    });
-  }
-  return transitions;
-}
+const DEFAULT_TERMINAL_SCROLLBACK = 20_000;
+const TERMINAL_LAYOUT_CHANGED_EVENT = "cc-panes:terminal-layout-changed";
 
 function resolveCliTool(cliTool?: CliTool, launchClaude?: boolean): string {
   return cliTool ?? (launchClaude ? "claude" : "none");
@@ -95,6 +91,22 @@ function applyTerminalElementTheme(
   if (!term?.element) return;
   term.element.style.backgroundColor = theme.background;
   term.element.style.color = theme.foreground;
+}
+
+async function copyTerminalSelection(selection: string): Promise<void> {
+  try {
+    await tauriWriteText(selection);
+    return;
+  } catch {
+    // Fall through to the browser clipboard API below.
+  }
+
+  const clipboard = navigator.clipboard;
+  if (!clipboard?.writeText) {
+    throw new Error("Clipboard API is unavailable");
+  }
+
+  await clipboard.writeText(selection);
 }
 
 interface TerminalViewProps {
@@ -138,13 +150,11 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     const terminalRef = useRef<HTMLDivElement>(null);
     const terminalInstanceRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
-    const webglAddonRef = useRef<WebglAddon | null>(null);
+    const rendererControllerRef = useRef<TerminalRendererController | null>(null);
+    const layoutSchedulerRef = useRef<TerminalLayoutScheduler | null>(null);
     const onDataDisposableRef = useRef<IDisposable | null>(null);
     const resizeObserverRef = useRef<ResizeObserver | null>(null);
     const currentSessionIdRef = useRef<string | null>(null);
-    const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
-    const lastContainerSizeRef = useRef<{ width: number; height: number } | null>(null);
     const wheelHandlerRef = useRef<((e: WheelEvent) => void) | null>(null);
     const pasteHandlerRef = useRef<((e: ClipboardEvent) => void) | null>(null);
     const dragDropUnlistenRef = useRef<(() => void) | null>(null);
@@ -170,6 +180,9 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     const debugInstanceIdRef = useRef(`term-${Math.random().toString(36).slice(2, 8)}`);
     const trackedBufferTypeRef = useRef<"unknown" | "normal" | "alternate">("unknown");
     const lastWheelDecisionRef = useRef<string | null>(null);
+    const isActiveRef = useRef(props.isActive);
+    const terminalRendererMode = useSettingsStore((s) => s.settings?.terminal.rendererMode ?? "auto");
+    const terminalRendererModeRef = useRef<TerminalRendererMode>(terminalRendererMode);
 
     const debugLog = useCallback((event: string, payload: Record<string, unknown> = {}) => {
       if (!TERMINAL_DEBUG) return;
@@ -182,6 +195,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         sessionId: currentSessionIdRef.current ?? props.sessionId ?? null,
         cliTool: resolveCliTool(props.cliTool, props.launchClaude),
         isActive: props.isActive,
+        renderer: rendererControllerRef.current?.getActiveRenderer() ?? null,
         xtermBuffer: terminalInstanceRef.current?.buffer.active.type ?? null,
         ...payload,
       });
@@ -194,6 +208,13 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       props.sessionId,
       props.tabId,
     ]);
+    const keepCliOutputInNormalBuffer = shouldKeepCliOutputInNormalBuffer(
+      resolveCliTool(props.cliTool, props.launchClaude),
+    );
+    const renderTerminalData = useCallback((data: string) => {
+      if (!keepCliOutputInNormalBuffer) return data;
+      return stripAlternateBufferSequences(data);
+    }, [keepCliOutputInNormalBuffer]);
 
     const syncTrackedBufferType = useCallback((reason: string) => {
       const current = terminalInstanceRef.current?.buffer.active.type;
@@ -212,19 +233,14 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       });
     }, [debugLog]);
 
-    const forceTerminalRepaint = useCallback((reason: string) => {
+    const repaintTerminal = useCallback((reason: string) => {
       const term = terminalInstanceRef.current;
       if (!term) return;
 
-      if (webglAddonRef.current) {
-        try {
-          term.clearTextureAtlas();
-        } catch (error) {
-          debugLog("renderer.repaint.clear-atlas.fail", {
-            reason,
-            error: getErrorMessage(error),
-          });
-        }
+      const renderer = rendererControllerRef.current;
+      if (renderer) {
+        renderer.repaint(reason);
+        return;
       }
 
       requestAnimationFrame(() => {
@@ -239,6 +255,13 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         }
       });
     }, [debugLog]);
+
+    const refitAndRepaintTerminal = useCallback((
+      reason: string,
+      options: { focusIfSafe?: boolean } = {},
+    ): Terminal | null => {
+      return layoutSchedulerRef.current?.flush(reason, options) ?? null;
+    }, []);
 
     const writeTerminalData = useCallback(async (
       data: string,
@@ -258,33 +281,56 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       }
       atlasResetTimerRef.current = setTimeout(() => {
         atlasResetTimerRef.current = null;
-        const term = terminalInstanceRef.current;
-        if (!term || !webglAddonRef.current) return;
 
         lastDevicePixelRatioRef.current = window.devicePixelRatio;
         debugLog("webgl.texture-atlas.clear", {
           reason,
           dpr: lastDevicePixelRatioRef.current,
         });
-        forceTerminalRepaint(`webgl.texture-atlas.${reason}`);
+        rendererControllerRef.current?.clearTextureAtlas(`webgl.texture-atlas.${reason}`);
+        layoutSchedulerRef.current?.schedule(`webgl.texture-atlas.${reason}`);
       }, 225);
-    }, [debugLog, forceTerminalRepaint, props.isActive]);
+    }, [debugLog, props.isActive]);
 
     // Expose imperative helpers to parent panes.
     useImperativeHandle(ref, () => ({
       focus: () => terminalInstanceRef.current?.focus(),
       fit: () => {
-        fitAddonRef.current?.fit();
-        forceTerminalRepaint("imperative.fit");
+        refitAndRepaintTerminal("imperative.fit");
       },
-    }), [forceTerminalRepaint]);
+    }), [refitAndRepaintTerminal]);
 
     // Keep callback refs in sync with the latest props.
     useEffect(() => {
       onSessionCreatedRef.current = props.onSessionCreated;
       onSessionExitedRef.current = props.onSessionExited;
       onReconnectRef.current = props.onReconnect;
+      isActiveRef.current = props.isActive;
     });
+
+    useEffect(() => {
+      terminalRendererModeRef.current = terminalRendererMode;
+      rendererControllerRef.current?.configure(terminalRendererMode);
+      layoutSchedulerRef.current?.schedule("settings.renderer-mode");
+    }, [terminalRendererMode]);
+
+    useEffect(() => {
+      if (typeof window === "undefined") return;
+
+      const handleLayoutChanged = (event: Event) => {
+        const reason =
+          event instanceof CustomEvent && typeof event.detail?.reason === "string"
+            ? event.detail.reason
+            : "layout";
+        debugLog("layout-change.refit.schedule", { reason });
+        layoutSchedulerRef.current?.schedule(`layout-change.${reason}`);
+      };
+
+      window.addEventListener(TERMINAL_LAYOUT_CHANGED_EVENT, handleLayoutChanged);
+      return () => {
+        window.removeEventListener(TERMINAL_LAYOUT_CHANGED_EVENT, handleLayoutChanged);
+      };
+    }, [debugLog]);
 
     // Dispose listeners, timers, observers, addons, and the terminal instance.
     const cleanup = useCallback(() => {
@@ -303,14 +349,12 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         terminalService.detachExit(currentSessionIdRef.current);
         currentSessionIdRef.current = null;
       }
-      if (resizeTimerRef.current) {
-        clearTimeout(resizeTimerRef.current);
-        resizeTimerRef.current = null;
-      }
       if (atlasResetTimerRef.current) {
         clearTimeout(atlasResetTimerRef.current);
         atlasResetTimerRef.current = null;
       }
+      layoutSchedulerRef.current?.dispose();
+      layoutSchedulerRef.current = null;
       if (resizeObserverRef.current) {
         resizeObserverRef.current.disconnect();
         resizeObserverRef.current = null;
@@ -348,25 +392,18 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       }
 
       // Dispose addons before the terminal instance.
-      const webglToDispose = webglAddonRef.current;
+      const rendererToDispose = rendererControllerRef.current;
       const fitToDispose = fitAddonRef.current;
       const termToDispose = terminalInstanceRef.current;
       terminalInstanceRef.current = null;
-      webglAddonRef.current = null;
+      rendererControllerRef.current = null;
       fitAddonRef.current = null;
       writeFlowControlRef.current?.reset();
       writeFlowControlRef.current = null;
-      lastContainerSizeRef.current = null;
       trackedBufferTypeRef.current = "unknown";
       lastWheelDecisionRef.current = null;
 
-      if (webglToDispose) {
-        try {
-          webglToDispose.dispose();
-        } catch {
-          // Safe to ignore if the WebGL addon is already torn down.
-        }
-      }
+      rendererToDispose?.dispose();
       if (fitToDispose) {
         try {
           fitToDispose.dispose();
@@ -410,11 +447,14 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       await terminalService.registerOutput(sessionId, (data) => {
         const term = terminalInstanceRef.current;
         const transitions = detectAlternateBufferTransitions(data);
+        const renderedData = renderTerminalData(data);
         if (transitions.length > 0) {
           debugLog("output.alternate-sequence.received", {
             bindSessionId: sessionId,
             transitions,
             dataLength: data.length,
+            renderedDataLength: renderedData.length,
+            stripped: keepCliOutputInNormalBuffer,
           });
         }
 
@@ -427,12 +467,20 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           return;
         }
 
-        void writeTerminalData(data, () => {
+        if (!renderedData) {
+          syncTrackedBufferType(
+            transitions.length > 0 ? "output.alternate-sequence.stripped" : "output.empty"
+          );
+          return;
+        }
+
+        void writeTerminalData(renderedData, () => {
           if (transitions.length > 0) {
             debugLog("output.alternate-sequence.applied", {
               bindSessionId: sessionId,
               transitions,
               bufferAfter: term.buffer.active.type,
+              stripped: keepCliOutputInNormalBuffer,
             });
           }
           syncTrackedBufferType(
@@ -452,7 +500,14 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       debugLog("session.bind-callbacks.end", {
         bindSessionId: sessionId,
       });
-    }, [debugLog, handleSessionExit, syncTrackedBufferType, writeTerminalData]);
+    }, [
+      debugLog,
+      handleSessionExit,
+      keepCliOutputInNormalBuffer,
+      renderTerminalData,
+      syncTrackedBufferType,
+      writeTerminalData,
+    ]);
 
     /** Attempt to reconnect an SSH-backed session. */
     const doReconnect = useCallback(async () => {
@@ -529,7 +584,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         if (!isMounted || !terminalRef.current) return;
 
         const termSettings = useSettingsStore.getState().settings?.terminal;
-        const scrollback = termSettings?.scrollback ?? 1000;
+        const scrollback = termSettings?.scrollback ?? DEFAULT_TERMINAL_SCROLLBACK;
         const fontFamily = termSettings?.fontFamily || 'Consolas, "Courier New", "Microsoft YaHei Mono", "Noto Sans Mono CJK SC", "PingFang SC", monospace';
         const term = new Terminal({
           allowProposedApi: true,
@@ -554,12 +609,29 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         writeFlowControlRef.current = createTerminalWriteFlowControl(term, {
           enabled: IS_WINDOWS,
         });
+        terminalInstanceRef.current = term;
+        fitAddonRef.current = fit;
+        layoutSchedulerRef.current = createTerminalLayoutScheduler({
+          getTerminal: () => terminalInstanceRef.current,
+          getFitAddon: () => fitAddonRef.current,
+          getHost: () => terminalRef.current,
+          getSessionId: () => currentSessionIdRef.current,
+          isActive: () => isActiveRef.current,
+          repaint: repaintTerminal,
+          resizeBackend: (cols, rows) => {
+            const sessionId = currentSessionIdRef.current;
+            if (!sessionId) return;
+            terminalService.resize({ sessionId, cols, rows });
+          },
+          logger: debugLog,
+        });
         trackedBufferTypeRef.current = term.buffer.active.type;
         debugLog("xterm.ready", {
           scrollback,
           fontFamily,
           isDark,
           initialBuffer: term.buffer.active.type,
+          rendererMode: terminalRendererModeRef.current,
           writeFlowControl: IS_WINDOWS ? "enabled" : "disabled",
         });
 
@@ -658,28 +730,18 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         term.loadAddon(unicode11);
         term.unicode.activeVersion = "11";
 
-        // Prefer WebGL only where the host renderer is reliable; WKWebView has
-        // shown stale terminal cell backgrounds after partial repaints.
-        if (shouldUseTerminalWebglRenderer()) {
-          try {
-            const webgl = new WebglAddon();
-            webgl.onContextLoss(() => {
-              console.warn("[TerminalView] WebGL context lost, falling back to the default renderer");
-              try { webgl.dispose(); } catch { /* ignore */ }
-              webglAddonRef.current = null;
-              forceTerminalRepaint("webgl.context-loss");
+        rendererControllerRef.current = createTerminalRendererController({
+          term,
+          logger: debugLog,
+          onRendererChanged: (reason, diagnostics) => {
+            debugLog("renderer.changed", {
+              reason,
+              ...diagnostics,
             });
-            term.loadAddon(webgl);
-            webglAddonRef.current = webgl;
-            debugLog("renderer.webgl.enabled", {});
-          } catch {
-            console.info("[TerminalView] WebGL not available, using the default renderer");
-          }
-        } else {
-          debugLog("renderer.webgl.disabled", {
-            reason: "webkit-host",
-          });
-        }
+            layoutSchedulerRef.current?.schedule(`renderer.${reason}`);
+          },
+        });
+        rendererControllerRef.current.configure(terminalRendererModeRef.current);
 
         const pasteTextIntoTerminal = (text: string, kind: string) => {
           if (!text) return;
@@ -798,10 +860,13 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
               const selection = term.getSelection();
               if (selection) {
                 e.preventDefault();
-                // Prefer the Web API and fall back to the Tauri clipboard plugin.
-                navigator.clipboard.writeText(selection)
-                  .catch(() => tauriWriteText(selection).catch(() => {}));
-                term.clearSelection();
+                void copyTerminalSelection(selection)
+                  .then(() => term.clearSelection())
+                  .catch((error) => {
+                    const message = getErrorMessage(error);
+                    debugLog("clipboard.copy.failed", { error: message });
+                    toast.error(`Copy failed: ${message}`);
+                  });
                 return false;
               }
               return true;
@@ -810,11 +875,9 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           return shouldTerminalHandleKey(e);
         });
 
-        // Fit once after the initial layout pass.
-        requestAnimationFrame(() => {
-          fit.fit();
-          forceTerminalRepaint("initial.fit");
-        });
+        // Fit once after the initial layout pass. Inactive/hidden tabs keep a
+        // pending layout and flush it when they become visible.
+        layoutSchedulerRef.current?.schedule("initial.fit");
 
         // Forward terminal input, with Enter-to-reconnect handling for SSH disconnects.
         const onDataDisposable = term.onData((data) => {
@@ -834,8 +897,6 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         onDataDisposableRef.current = onDataDisposable;
 
         // Debounce fit/resize work and ignore tiny layout jitter while dragging.
-        // Small sub-pixel layout changes should not trigger a full terminal resize.
-        // Pane drag handling will trigger a compensating resize after the drag completes.
         const MIN_CONTAINER_CHANGE = 5;
         const observer = new ResizeObserver((entries) => {
           if (!isMounted) return;
@@ -844,40 +905,24 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           if (!entry) return;
 
           const { width, height } = entry.contentRect;
-          if (
-            lastContainerSizeRef.current &&
-            Math.abs(width - lastContainerSizeRef.current.width) < MIN_CONTAINER_CHANGE &&
-            Math.abs(height - lastContainerSizeRef.current.height) < MIN_CONTAINER_CHANGE
-          ) {
-            return;
-          }
-          lastContainerSizeRef.current = { width, height };
-
-          if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
-          resizeTimerRef.current = setTimeout(() => {
-            requestAnimationFrame(() => {
-              if (!isMounted || !fitAddonRef.current || !terminalInstanceRef.current) return;
-              fitAddonRef.current.fit();
-              forceTerminalRepaint("resize-observer.fit");
-              const { cols, rows } = terminalInstanceRef.current;
-              if (lastSizeRef.current?.cols === cols && lastSizeRef.current?.rows === rows) return;
-              lastSizeRef.current = { cols, rows };
-              if (currentSessionIdRef.current) {
-                terminalService.resize({
-                  sessionId: currentSessionIdRef.current,
-                  cols,
-                  rows,
-                });
-              }
-            });
-          }, 150);
+          layoutSchedulerRef.current?.schedule("resize-observer.fit", {
+            delayMs: 150,
+            containerSize: { width, height },
+            minContainerDelta: MIN_CONTAINER_CHANGE,
+          });
         });
         observer.observe(terminalRef.current);
 
-        // Convert wheel events into arrow keys while the alternate buffer is active.
+        // Convert wheel events into arrow keys for non-agent TUI apps while the
+        // alternate buffer is active. Agent CLIs keep output in the normal
+        // buffer so the wheel scrolls history instead of selecting old prompts.
         const wheelHandler = (e: WheelEvent) => {
           const bufferType = term.buffer.active.type;
-          const decision = bufferType === "alternate" ? "alternate-handle" : "normal-bypass";
+          const decision = keepCliOutputInNormalBuffer
+            ? "agent-normal-scroll"
+            : bufferType === "alternate"
+              ? "alternate-handle"
+              : "normal-bypass";
           if (lastWheelDecisionRef.current !== decision) {
             lastWheelDecisionRef.current = decision;
             debugLog("wheel.mode", {
@@ -886,6 +931,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
               deltaMode: e.deltaMode,
             });
           }
+          if (keepCliOutputInNormalBuffer) return;
           if (bufferType !== 'alternate') return;
           e.preventDefault();
           e.stopPropagation();
@@ -898,8 +944,6 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         term.element?.addEventListener('wheel', wheelHandler, { passive: false });
         wheelHandlerRef.current = wheelHandler;
 
-        terminalInstanceRef.current = term;
-        fitAddonRef.current = fit;
         resizeObserverRef.current = observer;
         syncTrackedBufferType("xterm.initialized");
 
@@ -957,7 +1001,10 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
                   term,
                   sessionId,
                   getReplaySnapshot: (attachSessionId) => terminalService.getReplaySnapshot(attachSessionId),
-                  writeData: (data) => writeTerminalData(data),
+                  writeData: (data) => {
+                    const renderedData = renderTerminalData(data);
+                    return renderedData ? writeTerminalData(renderedData) : Promise.resolve();
+                  },
                   syncTrackedBufferType,
                   debugLog,
                 });
@@ -1121,8 +1168,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
       term.options.theme = terminalTheme;
       applyTerminalElementTheme(term, terminalTheme);
-      forceTerminalRepaint("theme.change");
-    }, [forceTerminalRepaint, terminalTheme]);
+      layoutSchedulerRef.current?.schedule("theme.change");
+    }, [terminalTheme]);
 
     useEffect(() => {
       if (!IS_WINDOWS) return;
@@ -1151,57 +1198,15 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         trackedBuffer: trackedBufferTypeRef.current,
       });
 
-      let rafId: number | null = null;
-      let nestedRafId: number | null = null;
       let activationCancelled = false;
 
-      const cancelScheduledRefit = () => {
-        if (rafId !== null) {
-          cancelAnimationFrame(rafId);
-          rafId = null;
-        }
-        if (nestedRafId !== null) {
-          cancelAnimationFrame(nestedRafId);
-          nestedRafId = null;
-        }
-      };
-
-      const refitTerminal = (): Terminal | null => {
-        const term = terminalInstanceRef.current;
-        const fitAddon = fitAddonRef.current;
-        if (!term || !fitAddon) return null;
-        fitAddon.fit();
-        forceTerminalRepaint("active.refit");
-        // Don't steal focus from input/textarea (e.g. tab rename input).
-        const active = document.activeElement;
-        if (!active || (active.tagName !== "INPUT" && active.tagName !== "TEXTAREA")) {
-          term.focus();
-        }
-        const { cols, rows } = term;
-        if (lastSizeRef.current?.cols !== cols || lastSizeRef.current?.rows !== rows) {
-          lastSizeRef.current = { cols, rows };
-          if (currentSessionIdRef.current) {
-            terminalService.resize({
-              sessionId: currentSessionIdRef.current,
-              cols,
-              rows,
-            });
-          }
-        }
-        return term;
-      };
-
-      const scheduleRefit = (onReady?: () => void) => {
-        // Double-rAF waits for layout to settle after hidden-tab and split changes.
-        // This keeps fit() accurate after display:none to flex transitions.
-        rafId = requestAnimationFrame(() => {
-          nestedRafId = requestAnimationFrame(() => {
-            rafId = null;
-            nestedRafId = null;
+      const scheduleRefit = (onReady?: (term: Terminal) => void) => {
+        layoutSchedulerRef.current?.schedule("active.refit", {
+          focusIfSafe: true,
+          onAfterLayout: (term) => {
             if (activationCancelled) return;
-            refitTerminal();
-            onReady?.();
-          });
+            onReady?.(term);
+          },
         });
       };
 
@@ -1209,9 +1214,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       if (props.isActive && deferredRestoreRef.current) {
         if (!props.projectPath) return;
 
-        scheduleRefit(() => {
-          const term = terminalInstanceRef.current;
-          if (!term || isUnmountedRef.current) return;
+        scheduleRefit((term) => {
+          if (isUnmountedRef.current) return;
 
           deferredRestoreRef.current = false;
 
@@ -1311,7 +1315,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
         return () => {
           activationCancelled = true;
-          cancelScheduledRefit();
+          layoutSchedulerRef.current?.cancel();
         };
       }
 
@@ -1319,7 +1323,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         scheduleRefit();
         return () => {
           activationCancelled = true;
-          cancelScheduledRefit();
+          layoutSchedulerRef.current?.cancel();
         };
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps

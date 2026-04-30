@@ -103,15 +103,17 @@ describe("useSettingsStore", () => {
       expect(defaults.theme.mode).toBe("dark");
       expect(defaults.terminal.fontSize).toBe(14);
       expect(defaults.terminal.cursorStyle).toBe("block");
+      expect(defaults.terminal.scrollback).toBe(20000);
+      expect(defaults.terminal.rendererMode).toBe("auto");
       expect(defaults.proxy.enabled).toBe(false);
       expect(defaults.general.language).toBe("zh-CN");
       expect(defaults.notification.enabled).toBe(true);
     });
 
-    it("快捷键绑定应有 19 个", () => {
+    it("快捷键绑定应有 23 个", () => {
       const defaults = useSettingsStore.getState().getDefaults();
       const bindingCount = Object.keys(defaults.shortcuts.bindings).length;
-      expect(bindingCount).toBe(19);
+      expect(bindingCount).toBe(23);
     });
 
     it("应包含关键快捷键定义", () => {
@@ -123,6 +125,10 @@ describe("useSettingsStore", () => {
       expect(bindings["close-tab"]).toBe("Ctrl+W");
       expect(bindings["settings"]).toBe("Ctrl+,");
       expect(bindings["split-right"]).toBe("Ctrl+\\");
+      expect(bindings["focus-pane-left"]).toBe("Alt+Left");
+      expect(bindings["focus-pane-right"]).toBe("Alt+Right");
+      expect(bindings["focus-pane-up"]).toBe("Alt+Up");
+      expect(bindings["focus-pane-down"]).toBe("Alt+Down");
     });
   });
 });

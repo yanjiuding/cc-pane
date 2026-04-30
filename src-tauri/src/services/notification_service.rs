@@ -3,8 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
-use tauri::AppHandle;
-use tauri::Manager;
+use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tracing::info;
 
@@ -114,6 +113,15 @@ impl NotificationService {
         );
 
         self.send_notification(app, &request.title, request.body.as_deref())?;
+        self.emit_notification_sent(
+            app,
+            &request.kind,
+            &request.title,
+            request.body.as_deref(),
+            request.source.as_deref(),
+            request.scope.as_deref(),
+            request.dedupe_key.as_deref(),
+        );
         Ok(NotificationTriggerResult::sent())
     }
 
@@ -141,7 +149,20 @@ impl NotificationService {
         } else {
             "Session exited with an error"
         };
-        let _ = self.send_notification(app, "Session Exited", Some(body));
+        if self
+            .send_notification(app, "Session Exited", Some(body))
+            .is_ok()
+        {
+            self.emit_notification_sent(
+                app,
+                "session_exited",
+                "Session Exited",
+                Some(body),
+                Some("terminal"),
+                Some("session"),
+                Some(&format!("session_exit:{session_id}")),
+            );
+        }
     }
 
     /// 等待输入通知
@@ -162,11 +183,24 @@ impl NotificationService {
             return;
         }
 
-        let _ = self.send_notification(
-            app,
-            "Action Required",
-            Some("Terminal is waiting for input confirmation"),
-        );
+        if self
+            .send_notification(
+                app,
+                "Action Required",
+                Some("Terminal is waiting for input confirmation"),
+            )
+            .is_ok()
+        {
+            self.emit_notification_sent(
+                app,
+                "waiting_input",
+                "Action Required",
+                Some("Terminal is waiting for input confirmation"),
+                Some("terminal"),
+                Some("session"),
+                Some(&format!("session_waiting_input:{session_id}")),
+            );
+        }
     }
 
     /// 清理与该会话相关的去重记录
@@ -257,6 +291,29 @@ impl NotificationService {
         builder
             .show()
             .map_err(|e| format!("Failed to show desktop notification: {}", e))
+    }
+
+    fn emit_notification_sent(
+        &self,
+        app: &AppHandle,
+        kind: &str,
+        title: &str,
+        body: Option<&str>,
+        source: Option<&str>,
+        scope: Option<&str>,
+        dedupe_key: Option<&str>,
+    ) {
+        let _ = app.emit(
+            "notification-sent",
+            serde_json::json!({
+                "kind": kind,
+                "title": title,
+                "body": body,
+                "source": source,
+                "scope": scope,
+                "dedupeKey": dedupe_key,
+            }),
+        );
     }
 }
 

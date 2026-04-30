@@ -50,6 +50,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { listen } from "@tauri-apps/api/event";
 import { isTauriReady, waitForTauri } from "@/utils";
+import { playNotificationSound } from "@/utils/notificationSound";
+import { findPaneFocusTarget, readPaneFocusRects, type PaneFocusDirection } from "@/utils/paneFocus";
 import { registerGlobalApi } from "@/utils/globalApi";
 import i18n from "@/i18n";
 import type { PaneNode, Panel as PanelType, OpenTerminalOptions, SavedSession } from "@/types";
@@ -130,6 +132,33 @@ function MainApp() {
 
   // 监听 Orchestrator 编排事件（自我对话 Claude 启动新任务）
   useOrchestratorListener();
+
+  // 后端桌面通知成功发出时，播放应用内提示音补足系统通知静音场景。
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+
+    waitForTauri().then(async (ready) => {
+      if (!ready || cancelled) return;
+      const cleanup = await listen("notification-sent", () => {
+        playNotificationSound().catch((error) => {
+          console.warn("Notification sound failed:", error);
+        });
+      });
+      if (cancelled) {
+        cleanup();
+      } else {
+        unlisten = cleanup;
+      }
+    }).catch((error) => {
+      console.warn("Notification sound listener failed:", error);
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // 注册全局 API（Skill 用）
   useEffect(() => {
@@ -395,6 +424,19 @@ function MainApp() {
   // 注册快捷键动作（所有 handler 通过 getState() 获取最新值，无需依赖）
   useEffect(() => {
     const register = useShortcutsStore.getState().registerAction;
+    const focusPane = (direction: PaneFocusDirection) => {
+      const s = usePanesStore.getState();
+      const paneOrder = s.allPanels().map((pane) => pane.id);
+      const targetPaneId = findPaneFocusTarget({
+        activePaneId: s.activePaneId,
+        direction,
+        paneOrder,
+        paneRects: readPaneFocusRects(),
+      });
+      if (targetPaneId && targetPaneId !== s.activePaneId) {
+        s.setActivePane(targetPaneId);
+      }
+    };
     register({
       id: "toggle-sidebar",
       label: i18n.t("toggle-sidebar", { ns: "shortcuts" }),
@@ -449,6 +491,26 @@ function MainApp() {
         const s = usePanesStore.getState();
         if (s.activePaneId) s.splitDown(s.activePaneId);
       },
+    });
+    register({
+      id: "focus-pane-left",
+      label: i18n.t("focus-pane-left", { ns: "shortcuts" }),
+      handler: () => focusPane("left"),
+    });
+    register({
+      id: "focus-pane-right",
+      label: i18n.t("focus-pane-right", { ns: "shortcuts" }),
+      handler: () => focusPane("right"),
+    });
+    register({
+      id: "focus-pane-up",
+      label: i18n.t("focus-pane-up", { ns: "shortcuts" }),
+      handler: () => focusPane("up"),
+    });
+    register({
+      id: "focus-pane-down",
+      label: i18n.t("focus-pane-down", { ns: "shortcuts" }),
+      handler: () => focusPane("down"),
     });
     register({
       id: "next-tab",

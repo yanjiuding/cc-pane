@@ -90,6 +90,27 @@ export default function TerminalSection({ value, onChange }: TerminalSectionProp
           />
         </div>
       </div>
+
+      <div className="flex flex-col gap-1">
+        <Label>{t("rendererMode")}</Label>
+        <select
+          value={value.rendererMode ?? "auto"}
+          onChange={(e) => update("rendererMode", e.target.value as TerminalSettings["rendererMode"])}
+          className="h-9 px-2 rounded-md text-[13px] outline-none"
+          style={{
+            border: "1px solid var(--app-border)",
+            background: "var(--app-content)",
+            color: "var(--app-text-primary)",
+          }}
+        >
+          <option value="auto">{t("rendererAuto")}</option>
+          <option value="webgl">{t("rendererWebgl")}</option>
+          <option value="dom">{t("rendererDom")}</option>
+        </select>
+        <p className="text-[11px]" style={{ color: "var(--app-text-tertiary)" }}>
+          {t("rendererHint")}
+        </p>
+      </div>
     </div>
   );
 }

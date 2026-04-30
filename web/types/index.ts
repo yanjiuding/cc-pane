@@ -52,6 +52,7 @@ export type {
   ProxySettings,
   ThemeSettings,
   TerminalSettings,
+  TerminalRendererMode,
   ShortcutSettings,
   GeneralSettings,
   NotificationSettings,

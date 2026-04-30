@@ -21,6 +21,13 @@ pub struct AppSettings {
     pub screenshot: ScreenshotSettings,
 }
 
+impl AppSettings {
+    pub fn merge_missing_defaults(&mut self) {
+        self.terminal.merge_missing_defaults();
+        self.shortcuts.merge_missing_defaults();
+    }
+}
+
 /// 代理设置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +57,9 @@ pub struct TerminalSettings {
     pub cursor_style: String, // "block" | "underline" | "bar"
     pub cursor_blink: bool,
     pub scrollback: u32,
+    /// 终端渲染器: "auto" | "webgl" | "dom"
+    #[serde(default = "default_terminal_renderer_mode")]
+    pub renderer_mode: String,
     /// 用户选择的 Shell ID（如 "pwsh", "cmd", "git-bash"），None 表示自动探测
     #[serde(default)]
     pub shell: Option<String>,
@@ -58,11 +68,41 @@ pub struct TerminalSettings {
     pub disable_conpty_sanitize: Option<bool>,
 }
 
+impl TerminalSettings {
+    pub fn merge_missing_defaults(&mut self) {
+        if self.scrollback == crate::constants::terminal::LEGACY_DEFAULT_SCROLLBACK {
+            self.scrollback = crate::constants::terminal::DEFAULT_SCROLLBACK;
+        }
+        if !matches!(self.renderer_mode.as_str(), "auto" | "webgl" | "dom") {
+            self.renderer_mode = default_terminal_renderer_mode();
+        }
+    }
+}
+
+fn default_terminal_renderer_mode() -> String {
+    "auto".to_string()
+}
+
 /// 快捷键设置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShortcutSettings {
     pub bindings: HashMap<String, String>, // actionId -> keyCombo
+}
+
+impl ShortcutSettings {
+    pub fn merge_missing_defaults(&mut self) {
+        let defaults = Self::default();
+        for (action_id, key_combo) in defaults.bindings {
+            if self.bindings.contains_key(&action_id) {
+                continue;
+            }
+            if self.bindings.values().any(|value| value == &key_combo) {
+                continue;
+            }
+            self.bindings.insert(action_id, key_combo);
+        }
+    }
 }
 
 /// 通知设置
@@ -167,6 +207,7 @@ impl Default for TerminalSettings {
             cursor_style: "block".to_string(),
             cursor_blink: true,
             scrollback: crate::constants::terminal::DEFAULT_SCROLLBACK,
+            renderer_mode: default_terminal_renderer_mode(),
             shell: None,
             disable_conpty_sanitize: None,
         }
@@ -183,6 +224,10 @@ impl Default for ShortcutSettings {
         bindings.insert("settings".to_string(), "Ctrl+,".to_string());
         bindings.insert("split-right".to_string(), "Ctrl+\\".to_string());
         bindings.insert("split-down".to_string(), "Ctrl+-".to_string());
+        bindings.insert("focus-pane-left".to_string(), "Alt+Left".to_string());
+        bindings.insert("focus-pane-right".to_string(), "Alt+Right".to_string());
+        bindings.insert("focus-pane-up".to_string(), "Alt+Up".to_string());
+        bindings.insert("focus-pane-down".to_string(), "Alt+Down".to_string());
         bindings.insert("next-tab".to_string(), "Ctrl+Tab".to_string());
         bindings.insert("prev-tab".to_string(), "Ctrl+Shift+Tab".to_string());
         bindings.insert("toggle-mini-mode".to_string(), "Ctrl+M".to_string());
@@ -269,5 +314,99 @@ impl ProxySettings {
         }
 
         vars
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shortcut_defaults_include_pane_focus_bindings() {
+        let bindings = ShortcutSettings::default().bindings;
+
+        assert_eq!(
+            bindings.get("focus-pane-left"),
+            Some(&"Alt+Left".to_string())
+        );
+        assert_eq!(
+            bindings.get("focus-pane-right"),
+            Some(&"Alt+Right".to_string())
+        );
+        assert_eq!(bindings.get("focus-pane-up"), Some(&"Alt+Up".to_string()));
+        assert_eq!(
+            bindings.get("focus-pane-down"),
+            Some(&"Alt+Down".to_string())
+        );
+    }
+
+    #[test]
+    fn merge_missing_defaults_preserves_existing_overrides() {
+        let mut settings = ShortcutSettings {
+            bindings: HashMap::from([("focus-pane-left".to_string(), "Ctrl+Alt+Left".to_string())]),
+        };
+
+        settings.merge_missing_defaults();
+
+        assert_eq!(
+            settings.bindings.get("focus-pane-left"),
+            Some(&"Ctrl+Alt+Left".to_string())
+        );
+        assert_eq!(
+            settings.bindings.get("focus-pane-right"),
+            Some(&"Alt+Right".to_string())
+        );
+    }
+
+    #[test]
+    fn merge_missing_defaults_does_not_create_binding_conflicts() {
+        let mut settings = ShortcutSettings {
+            bindings: HashMap::from([("custom-action".to_string(), "Alt+Left".to_string())]),
+        };
+
+        settings.merge_missing_defaults();
+
+        assert_eq!(
+            settings.bindings.get("custom-action"),
+            Some(&"Alt+Left".to_string())
+        );
+        assert!(!settings.bindings.contains_key("focus-pane-left"));
+        assert_eq!(
+            settings.bindings.get("focus-pane-right"),
+            Some(&"Alt+Right".to_string())
+        );
+    }
+
+    #[test]
+    fn terminal_merge_missing_defaults_migrates_legacy_scrollback() {
+        let mut settings = TerminalSettings::default();
+        settings.scrollback = crate::constants::terminal::LEGACY_DEFAULT_SCROLLBACK;
+
+        settings.merge_missing_defaults();
+
+        assert_eq!(
+            settings.scrollback,
+            crate::constants::terminal::DEFAULT_SCROLLBACK
+        );
+    }
+
+    #[test]
+    fn terminal_merge_missing_defaults_preserves_custom_scrollback() {
+        let mut settings = TerminalSettings::default();
+        settings.scrollback = 5_000;
+
+        settings.merge_missing_defaults();
+
+        assert_eq!(settings.scrollback, 5_000);
+    }
+
+    #[test]
+    fn terminal_merge_missing_defaults_resets_invalid_renderer_mode() {
+        let mut settings = TerminalSettings::default();
+        settings.renderer_mode = "unknown".to_string();
+
+        settings.merge_missing_defaults();
+
+        assert_eq!(settings.renderer_mode, "auto");
     }
 }

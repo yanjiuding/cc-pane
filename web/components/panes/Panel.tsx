@@ -377,6 +377,7 @@ export default memo(function Panel({ pane }: PanelProps) {
 
   return (
     <div
+      data-pane-id={pane.id}
       className={`flex w-full min-w-0 min-h-0 flex-col h-full overflow-hidden transition-shadow duration-300 ${
         isFullscreenPanel ? "fixed inset-0 z-[9999]" : ""
       }`}

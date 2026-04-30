@@ -137,6 +137,11 @@ describe("useShortcutsStore", () => {
       expect(parseKeyEvent(e)).toBe("Down");
     });
 
+    it("Alt+ArrowLeft 应返回 'Alt+Left'", () => {
+      const e = createKeyEvent("ArrowLeft", { altKey: true });
+      expect(parseKeyEvent(e)).toBe("Alt+Left");
+    });
+
     it("Alt+数字 应正确处理", () => {
       const e = createKeyEvent("1", { altKey: true });
       expect(parseKeyEvent(e)).toBe("Alt+1");
@@ -445,6 +450,23 @@ describe("useShortcutsStore", () => {
 
       const e = createKeyEvent("F11");
       // F11 以 F 开头，hasModifier 返回 true
+      expect(shouldTerminalHandleKey(e)).toBe(false);
+    });
+
+    it("终端聚焦时 pane 切换快捷键仍应由应用处理", () => {
+      useShortcutsStore.getState().setTerminalFocused(true);
+      useShortcutsStore.getState().registerAction({
+        id: "focus-pane-left",
+        label: "Focus Pane Left",
+        handler: vi.fn(),
+      });
+      useSettingsStore.setState({
+        settings: {
+          shortcuts: { bindings: { "focus-pane-left": "Alt+Left" } },
+        } as never,
+      });
+
+      const e = createKeyEvent("ArrowLeft", { altKey: true });
       expect(shouldTerminalHandleKey(e)).toBe(false);
     });
   });

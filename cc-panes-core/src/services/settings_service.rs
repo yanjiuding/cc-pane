@@ -17,7 +17,8 @@ impl SettingsService {
             .join(crate::utils::APP_DIR_NAME)
             .join("config.toml");
 
-        let settings = Self::load_from_file(&config_path).unwrap_or_default();
+        let mut settings = Self::load_from_file(&config_path).unwrap_or_default();
+        settings.merge_missing_defaults();
 
         info!(config_path = %config_path.display(), "Settings loaded");
 
@@ -56,7 +57,8 @@ impl SettingsService {
     }
 
     /// 更新设置
-    pub fn update_settings(&self, new_settings: AppSettings) -> Result<()> {
+    pub fn update_settings(&self, mut new_settings: AppSettings) -> Result<()> {
+        new_settings.merge_missing_defaults();
         self.save_to_file(&new_settings)?;
         info!("Settings updated and saved");
         let mut current = self.settings.lock().unwrap_or_else(|e| e.into_inner());

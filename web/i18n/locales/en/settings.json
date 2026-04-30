@@ -40,6 +40,11 @@
   "cursorBar": "Bar",
   "cursorBlink": "Cursor Blink",
   "scrollback": "Scrollback Lines",
+  "rendererMode": "Renderer",
+  "rendererAuto": "Auto (WebGL first)",
+  "rendererWebgl": "Force WebGL",
+  "rendererDom": "DOM fallback",
+  "rendererHint": "Auto keeps WebGL enabled on Chromium/WebView2 and falls back only when the host cannot support it.",
   "shellAutoDetect": "Auto-detect if empty",
 
   "shortcutsTitle": "Keyboard Shortcuts",
