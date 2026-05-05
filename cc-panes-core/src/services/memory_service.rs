@@ -136,7 +136,7 @@ impl MemoryService {
         }
 
         // 按 importance 降序排列
-        all_memories.sort_by(|a, b| b.importance.cmp(&a.importance));
+        all_memories.sort_by_key(|memory| std::cmp::Reverse(memory.importance));
 
         // 生成 Markdown 内容
         let content = format_memories_markdown(&all_memories);

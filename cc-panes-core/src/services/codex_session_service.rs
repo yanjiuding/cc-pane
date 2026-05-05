@@ -192,7 +192,7 @@ pub fn list_all_sessions(limit: usize) -> Result<Vec<CodexSession>, String> {
 
     let mut sessions = Vec::new();
     collect_session_files(&sessions_root, &mut sessions)?;
-    sessions.sort_by(|left, right| right.modified_at.cmp(&left.modified_at));
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.modified_at));
     sessions.truncate(limit);
     Ok(sessions)
 }

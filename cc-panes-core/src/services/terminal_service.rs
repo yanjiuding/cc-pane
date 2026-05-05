@@ -1928,8 +1928,8 @@ impl TerminalService {
             Err(_) => return Vec::new(),
         };
         sessions
-            .iter()
-            .filter_map(|(_id, session)| {
+            .values()
+            .filter_map(|session| {
                 let status = *session.status.lock().unwrap_or_else(|e| e.into_inner());
                 if status != SessionStatus::Exited {
                     Some(session.process.pid())

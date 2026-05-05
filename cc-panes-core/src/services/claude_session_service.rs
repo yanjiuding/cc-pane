@@ -152,7 +152,7 @@ pub fn list_sessions(project_path: &str, limit: usize) -> Result<Vec<ClaudeSessi
         }
     }
 
-    sessions.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.modified_at));
     sessions.truncate(limit);
     Ok(sessions)
 }
@@ -193,7 +193,7 @@ pub fn list_all_sessions(limit: usize) -> Result<Vec<ClaudeSession>, String> {
         }
     }
 
-    sessions.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+    sessions.sort_by_key(|session| std::cmp::Reverse(session.modified_at));
     sessions.truncate(limit);
     Ok(sessions)
 }

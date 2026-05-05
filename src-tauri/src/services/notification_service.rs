@@ -64,6 +64,16 @@ struct PreparedNotificationRequest {
     metadata: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct NotificationSentEvent<'a> {
+    kind: &'a str,
+    title: &'a str,
+    body: Option<&'a str>,
+    source: Option<&'a str>,
+    scope: Option<&'a str>,
+    dedupe_key: Option<&'a str>,
+}
+
 /// 通知服务 - 管理显式触发的桌面通知与去重
 pub struct NotificationService {
     recent_notifications: Mutex<HashMap<String, Instant>>,
@@ -115,12 +125,14 @@ impl NotificationService {
         self.send_notification(app, &request.title, request.body.as_deref())?;
         self.emit_notification_sent(
             app,
-            &request.kind,
-            &request.title,
-            request.body.as_deref(),
-            request.source.as_deref(),
-            request.scope.as_deref(),
-            request.dedupe_key.as_deref(),
+            NotificationSentEvent {
+                kind: &request.kind,
+                title: &request.title,
+                body: request.body.as_deref(),
+                source: request.source.as_deref(),
+                scope: request.scope.as_deref(),
+                dedupe_key: request.dedupe_key.as_deref(),
+            },
         );
         Ok(NotificationTriggerResult::sent())
     }
@@ -155,12 +167,14 @@ impl NotificationService {
         {
             self.emit_notification_sent(
                 app,
-                "session_exited",
-                "Session Exited",
-                Some(body),
-                Some("terminal"),
-                Some("session"),
-                Some(&format!("session_exit:{session_id}")),
+                NotificationSentEvent {
+                    kind: "session_exited",
+                    title: "Session Exited",
+                    body: Some(body),
+                    source: Some("terminal"),
+                    scope: Some("session"),
+                    dedupe_key: Some(&format!("session_exit:{session_id}")),
+                },
             );
         }
     }
@@ -193,12 +207,14 @@ impl NotificationService {
         {
             self.emit_notification_sent(
                 app,
-                "waiting_input",
-                "Action Required",
-                Some("Terminal is waiting for input confirmation"),
-                Some("terminal"),
-                Some("session"),
-                Some(&format!("session_waiting_input:{session_id}")),
+                NotificationSentEvent {
+                    kind: "waiting_input",
+                    title: "Action Required",
+                    body: Some("Terminal is waiting for input confirmation"),
+                    source: Some("terminal"),
+                    scope: Some("session"),
+                    dedupe_key: Some(&format!("session_waiting_input:{session_id}")),
+                },
             );
         }
     }
@@ -293,25 +309,16 @@ impl NotificationService {
             .map_err(|e| format!("Failed to show desktop notification: {}", e))
     }
 
-    fn emit_notification_sent(
-        &self,
-        app: &AppHandle,
-        kind: &str,
-        title: &str,
-        body: Option<&str>,
-        source: Option<&str>,
-        scope: Option<&str>,
-        dedupe_key: Option<&str>,
-    ) {
+    fn emit_notification_sent(&self, app: &AppHandle, event: NotificationSentEvent<'_>) {
         let _ = app.emit(
             "notification-sent",
             serde_json::json!({
-                "kind": kind,
-                "title": title,
-                "body": body,
-                "source": source,
-                "scope": scope,
-                "dedupeKey": dedupe_key,
+                "kind": event.kind,
+                "title": event.title,
+                "body": event.body,
+                "source": event.source,
+                "scope": event.scope,
+                "dedupeKey": event.dedupe_key,
             }),
         );
     }

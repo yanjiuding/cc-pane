@@ -1497,9 +1497,7 @@ impl McpToolHandler {
         let resolution = self.resolve_runtime_profile_preview(
             &profile,
             params.workspace_name.as_deref(),
-            bound_project
-                .as_deref()
-                .or_else(|| params.project_id.as_deref()),
+            bound_project.as_deref().or(params.project_id.as_deref()),
             provider_id.as_deref(),
         );
 
