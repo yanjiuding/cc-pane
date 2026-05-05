@@ -545,6 +545,7 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[cfg(not(windows))]
     #[test]
     fn sync_project_hooks_writes_codex_config_and_reports_degraded_status() {
         let dir = tempdir().unwrap();
@@ -581,6 +582,31 @@ mod tests {
         assert_eq!(plan.reason.as_deref(), Some(PLAN_ARCHIVE_UNSUPPORTED));
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn project_hooks_report_windows_unsupported_reason() {
+        let dir = tempdir().unwrap();
+        let project_path = dir.path();
+        let hook_binary = project_path.join("cc-panes-cli-hook");
+        fs::write(&hook_binary, b"hook").unwrap();
+
+        let adapter = CodexAdapter::new();
+        let desired = HashMap::from([("session-inject".to_string(), true)]);
+
+        let err = adapter
+            .sync_project_hooks(project_path, Some(&hook_binary), &desired)
+            .unwrap_err();
+        assert_eq!(err.to_string(), TOOL_UNSUPPORTED_ON_WINDOWS);
+
+        let statuses = adapter.get_project_hook_statuses(project_path).unwrap();
+        assert!(statuses.iter().all(|status| !status.enabled));
+        assert!(statuses.iter().all(|status| !status.supported));
+        assert!(statuses
+            .iter()
+            .all(|status| status.reason.as_deref() == Some(TOOL_UNSUPPORTED_ON_WINDOWS)));
+    }
+
+    #[cfg(not(windows))]
     #[test]
     fn get_project_hook_statuses_reports_dot_codex_file_conflict() {
         let dir = tempdir().unwrap();
