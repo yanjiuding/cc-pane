@@ -128,7 +128,7 @@ jobs:
       - name: Download current latest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release download "${{ inputs.tag }}" --pattern latest.json --dir current
+        run: gh release download "${{ inputs.tag }}" --repo wuxiran/cc-pane --pattern latest.json --dir current
 
       - name: Merge macOS updater platforms
         env:
@@ -157,4 +157,4 @@ jobs:
       - name: Upload latest.json
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ inputs.tag }}" current/latest.json --clobber
+        run: gh release upload "${{ inputs.tag }}" --repo wuxiran/cc-pane current/latest.json --clobber
