@@ -66,16 +66,15 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ inputs.tag }}"
-          version="${tag#v}"
-          archive="$(find src-tauri/target -path '*/bundle/macos/*.app.tar.gz' -type f | head -n 1)"
+          archive="$(find target -path '*/bundle/macos/*.app.tar.gz' -type f | head -n 1)"
           signature="${archive}.sig"
           if [[ ! -f "$archive" || ! -f "$signature" ]]; then
             echo "macOS updater archive or signature was not generated" >&2
-            find src-tauri/target -type f | grep '/bundle/' | sort >&2 || true
+            find target -type f | grep '/bundle/' | sort >&2 || true
             exit 1
           fi
 
-          asset="cc-panes_${version}_${{ matrix.asset_arch }}.app.tar.gz"
+          asset="cc-panes_${{ matrix.asset_arch }}.app.tar.gz"
           sig_asset="${asset}.sig"
           cp "$archive" "$asset"
           cp "$signature" "$sig_asset"
