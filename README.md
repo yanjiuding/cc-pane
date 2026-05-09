@@ -207,8 +207,8 @@ When behavior depends on the Windows desktop host, validate on Windows. WSL or L
 WeChat groups:
 
 <p>
-  <img src="docs/assets/images/wechat-group-nightcat-dev.png" alt="NightCat Dev WeChat Group" width="220" />
-  <img src="docs/assets/images/wechat-group-cc-pane.png" alt="CC-Panes WeChat Group" width="220" />
+  <img src="docs/assets/images/wechat-group-nightcat-dev.jpg" alt="NightCat Dev WeChat Group" width="220" />
+  <img src="docs/assets/images/wechat-group-cc-pane.jpg" alt="CC-Panes WeChat Group" width="220" />
 </p>
 
 ## Contributing

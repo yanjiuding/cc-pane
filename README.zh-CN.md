@@ -215,8 +215,8 @@ cc-pane/
 微信群：
 
 <p>
-  <img src="docs/assets/images/wechat-group-nightcat-dev.png" alt="NightCat Dev 微信群" width="220" />
-  <img src="docs/assets/images/wechat-group-cc-pane.png" alt="CC-Panes 微信群" width="220" />
+  <img src="docs/assets/images/wechat-group-nightcat-dev.jpg" alt="NightCat Dev 微信群" width="220" />
+  <img src="docs/assets/images/wechat-group-cc-pane.jpg" alt="CC-Panes 微信群" width="220" />
 </p>
 
 ## 参与贡献
