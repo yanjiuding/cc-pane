@@ -35,6 +35,7 @@ src-tauri/binaries/
 # 参考项目与归档（不纳入版本控制）
 _reference/
 _archived_v1/
+ref/
 
 # 工具目录
 .playwright-mcp/
