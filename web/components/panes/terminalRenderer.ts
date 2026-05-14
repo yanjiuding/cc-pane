@@ -17,6 +17,11 @@ export interface TerminalRendererEnvironment {
   window?: Window & typeof globalThis;
 }
 
+export interface TerminalRendererSessionContext {
+  cliToolId?: string | null;
+  isWindows?: boolean;
+}
+
 export function isWebKitTerminalRendererHost(userAgent: string): boolean {
   const normalized = userAgent.toLowerCase();
   if (!normalized.includes("applewebkit")) return false;
@@ -113,6 +118,17 @@ export function decideTerminalRenderer(
     webglAllowed: true,
     webgl2Supported,
   };
+}
+
+export function resolveTerminalRendererModeForSession(
+  requestedMode: string | null | undefined,
+  context: TerminalRendererSessionContext = {},
+): TerminalRendererMode {
+  const mode = normalizeTerminalRendererMode(requestedMode);
+  if (mode === "auto" && context.isWindows && context.cliToolId === "claude") {
+    return "dom";
+  }
+  return mode;
 }
 
 export function shouldUseTerminalWebglRenderer(

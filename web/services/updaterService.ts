@@ -47,10 +47,7 @@ export async function checkForAppUpdates(userInitiated: boolean): Promise<void> 
     console.error("[updater] 检查更新失败:", error);
     if (userInitiated) {
       const msg = getErrorMessage(error);
-      const hint =
-        msg.includes("request") || msg.includes("connect") || msg.includes("timed out")
-          ? "\n\n提示：如果无法访问 GitHub，请确认代理工具已开启「系统代理」模式，或在 设置 → 代理 中手动配置。"
-          : "";
+      const hint = getUpdateErrorHint(msg);
       await message(`检查更新失败：${msg}${hint}`, { title: "检查更新", kind: "error" });
     }
   }
@@ -71,11 +68,31 @@ export async function triggerUpdate(): Promise<void> {
     await promptAndInstallUpdate(update);
   } catch (error) {
     console.error("[updater] 触发更新失败:", error);
-    await message(`检查更新失败：${getErrorMessage(error)}`, { title: "检查更新", kind: "error" });
+    const msg = getErrorMessage(error);
+    await message(`检查更新失败：${msg}${getUpdateErrorHint(msg)}`, {
+      title: "检查更新",
+      kind: "error",
+    });
   }
 }
 
 // ---- internal ----
+
+function getUpdateErrorHint(message: string): string {
+  if (message.includes("fallback platforms") || message.includes("platforms object")) {
+    return "\n\n提示：当前发布清单缺少本机平台的自动更新包，请从 GitHub Release 手动下载对应平台版本，或等待补发新版。";
+  }
+
+  if (
+    message.includes("request") ||
+    message.includes("connect") ||
+    message.includes("timed out")
+  ) {
+    return "\n\n提示：如果无法访问 GitHub，请确认代理工具已开启「系统代理」模式，或在 设置 → 代理 中手动配置。";
+  }
+
+  return "";
+}
 
 async function promptAndInstallUpdate(update: Awaited<ReturnType<typeof check>>): Promise<void> {
   if (!update) return;

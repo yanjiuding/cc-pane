@@ -1,6 +1,7 @@
 pub mod claude_session_service;
 pub mod codex_session_service;
 pub mod default_skill_service;
+mod external_skill_registry;
 mod filesystem_service;
 mod history_service;
 mod journal_service;
@@ -24,12 +25,14 @@ mod ssh_machine_service;
 mod task_binding_service;
 pub mod terminal_service;
 mod todo_service;
+mod user_skill_service;
 mod workspace_service;
 mod worktree_service;
 #[cfg(target_os = "windows")]
 pub mod wsl_discovery_service;
 
 pub use default_skill_service::DefaultSkillService;
+pub use external_skill_registry::ExternalSkillRegistry;
 pub use filesystem_service::FileSystemService;
 pub use history_service::HistoryService;
 pub use journal_service::{JournalIndex, JournalService, SessionSummary};
@@ -53,5 +56,6 @@ pub use ssh_machine_service::{SshConnectivityResult, SshMachineService};
 pub use task_binding_service::TaskBindingService;
 pub use terminal_service::{OrchestratorInfo, SessionStatusInfo, ShellInfo, TerminalService};
 pub use todo_service::TodoService;
+pub use user_skill_service::{InstalledUserSkill, UserSkillContent, UserSkillService};
 pub use workspace_service::WorkspaceService;
 pub use worktree_service::{WorktreeInfo, WorktreeService};

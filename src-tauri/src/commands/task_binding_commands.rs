@@ -1,5 +1,5 @@
 use crate::models::task_binding::*;
-use crate::services::TaskBindingService;
+use crate::services::{TaskBindingService, TerminalService};
 use crate::utils::AppResult;
 use std::sync::Arc;
 use tauri::State;
@@ -55,4 +55,59 @@ pub fn query_task_bindings(
     query: TaskBindingQuery,
 ) -> AppResult<TaskBindingQueryResult> {
     service.query(query)
+}
+
+#[tauri::command]
+pub fn register_plan_leader(
+    service: State<'_, Arc<TaskBindingService>>,
+    request: RegisterPlanLeaderRequest,
+) -> AppResult<TaskBinding> {
+    debug!("cmd::register_plan_leader");
+    service.register_plan_leader(request)
+}
+
+#[tauri::command]
+pub fn register_plan_worker(
+    service: State<'_, Arc<TaskBindingService>>,
+    request: RegisterPlanWorkerRequest,
+) -> AppResult<TaskBinding> {
+    debug!("cmd::register_plan_worker");
+    service.register_plan_worker(request)
+}
+
+#[tauri::command]
+pub fn register_plan_child(
+    service: State<'_, Arc<TaskBindingService>>,
+    request: RegisterPlanChildRequest,
+) -> AppResult<TaskBinding> {
+    debug!("cmd::register_plan_child");
+    service.register_plan_child(request)
+}
+
+#[tauri::command]
+pub fn get_plan_collaboration(
+    service: State<'_, Arc<TaskBindingService>>,
+    key: PlanCollaborationKey,
+    verbose: Option<bool>,
+) -> AppResult<PlanCollaboration> {
+    service.get_plan_collaboration(key, verbose.unwrap_or(false))
+}
+
+#[tauri::command]
+pub fn reconcile_plan_collaboration(
+    task_binding_service: State<'_, Arc<TaskBindingService>>,
+    terminal_service: State<'_, Arc<TerminalService>>,
+    key: PlanCollaborationKey,
+    verbose: Option<bool>,
+) -> AppResult<PlanCollaboration> {
+    let live_sessions = terminal_service
+        .get_all_status()?
+        .into_iter()
+        .map(|status| PlanLiveSession {
+            session_id: status.session_id,
+            pane_id: None,
+            tab_id: None,
+        })
+        .collect();
+    task_binding_service.reconcile_plan_collaboration(key, live_sessions, verbose.unwrap_or(false))
 }

@@ -66,7 +66,7 @@ async function collectAppContext(): Promise<string> {
     `你是 CC-Panes 的操控助手。CC-Panes 是一个多 CLI 的多实例分屏管理桌面应用。\n` +
     `你可以使用上面列出的 /ccbook:* skill 来帮助用户管理工作空间、Todo、Plans 等。\n\n` +
     `你拥有 ccpanes MCP 工具（12 个），按类别分组：\n` +
-    `- 编排: launch_task（启动 Claude/Codex 实例）、list_projects（已注册项目）、get_task_status（任务状态）\n` +
+    `- 编排: launch_task（启动 Claude/Codex 实例，可用 runtimeKind 指定 local/wsl/ssh）、list_projects（已注册项目）、get_task_status（任务状态）\n` +
     `- 工作空间: list_workspaces、get_workspace、create_workspace、add_project_to_workspace、scan_directory\n` +
     `- 待办: query_todos、create_todo、update_todo\n` +
     `- Skill: list_skills（查看项目可用命令模板）\n\n` +

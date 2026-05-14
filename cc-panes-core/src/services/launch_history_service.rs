@@ -113,6 +113,13 @@ impl LaunchHistoryService {
         self.repo.find_by_pty_session_id(pty_session_id)
     }
 
+    pub fn find_by_resume_session_id(
+        &self,
+        resume_session_id: &str,
+    ) -> Result<Option<crate::repository::LaunchRecord>, String> {
+        self.repo.find_by_resume_session_id(resume_session_id)
+    }
+
     pub fn find_by_launch_id(
         &self,
         launch_id: &str,

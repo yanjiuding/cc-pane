@@ -112,19 +112,23 @@ export default function WorkspaceItem({
     ? providerList.find((provider) => provider.id === ws.providerId)
     : undefined;
   const isWindows = detectAppPlatform() === "windows";
-  const showExplicitWslLaunch = isWindows
-    && defaultEnvironment === "wsl"
+  const canLaunchWsl = isWindows
     && !resolveWorkspaceLaunchOptions({
       workspace: ws,
       machines: sshMachines,
       environment: "wsl",
     }).issue;
-  const cliLaunchItems = buildSidebarCliLaunchItems(t, showExplicitWslLaunch);
+  const canLaunchSsh = !resolveWorkspaceLaunchOptions({
+    workspace: ws,
+    machines: sshMachines,
+    environment: "ssh",
+  }).issue;
+  const cliLaunchItems = buildSidebarCliLaunchItems(t, canLaunchWsl, canLaunchSsh);
   const favoriteLaunchActions = filterSidebarFavoriteLaunchActions(
-    buildSidebarLaunchActions(t, showExplicitWslLaunch),
+    buildSidebarLaunchActions(t, canLaunchWsl, canLaunchSsh),
     favoriteLaunchIds,
   );
-  const allLaunchActions = buildSidebarLaunchActions(t, showExplicitWslLaunch);
+  const allLaunchActions = buildSidebarLaunchActions(t, canLaunchWsl, canLaunchSsh);
   const hideNonFavoriteLaunchActions = settings?.general.hideNonFavoriteLaunchActions ?? false;
   const shouldHideNonFavoriteLaunchActions = hideNonFavoriteLaunchActions && favoriteLaunchActions.length > 0;
   const formatLaunchIssue = useCallback((
@@ -471,6 +475,23 @@ export default function WorkspaceItem({
               <ContextMenuItem onClick={() => openWorkspace()}>
                 <Terminal /> {t("openTerminal")}
               </ContextMenuItem>
+
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <Terminal /> {t("workspaceEnv.launchThisTime", { defaultValue: "本次选择环境" })}
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent className="w-48">
+                  <ContextMenuItem onClick={() => openWorkspace(undefined, "local")}>
+                    <Terminal /> {t("workspaceEnv.local", { defaultValue: "本机" })}
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => openWorkspace(undefined, "wsl")}>
+                    <Terminal /> {t("workspaceEnv.wsl", { defaultValue: "WSL" })}
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => openWorkspace(undefined, "ssh")}>
+                    <Terminal /> {t("workspaceEnv.ssh", { defaultValue: "SSH" })}
+                  </ContextMenuItem>
+                </ContextMenuSubContent>
+              </ContextMenuSub>
 
               {cliLaunchItems.map((item) => renderCliLaunchMenuItem(item, "launch"))}
 

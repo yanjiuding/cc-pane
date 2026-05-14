@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "id": "web-design-guidelines",
+      "name": "web-design-guidelines",
+      "description": "一套完整的网页设计规范，避免页面产生廉价感。",
+      "category": "design-visual",
+      "tags": ["web", "design", "guidelines"],
+      "version": "0.0.0",
+      "recommended": true
+    },
+    {
+      "id": "frontend-design",
+      "name": "frontend-design",
+      "description": "专注前端界面设计，让页面更有审美和层次，避免模板风格。",
+      "category": "design-visual",
+      "tags": ["frontend", "design", "ui"],
+      "version": "0.0.0",
+      "recommended": true
+    },
+    {
+      "id": "ui-ux-pro-max",
+      "name": "ui-ux-pro-max",
+      "description": "更专业地关注用户体验和交互设计，适合产品界面打磨。",
+      "category": "design-visual",
+      "tags": ["ui", "ux", "product"],
+      "version": "0.0.0",
+      "recommended": true
+    },
+    {
+      "id": "canvas-design",
+      "name": "canvas-design",
+      "description": "用于封面图、海报和视觉设计，不依赖 PS 或 Figma。",
+      "category": "design-visual",
+      "tags": ["canvas", "poster", "visual"],
+      "version": "0.0.0",
+      "recommended": true
+    },
+    {
+      "id": "tailwind-design-system",
+      "name": "tailwind-design-system",
+      "description": "Tailwind CSS 设计系统，适合做前端配色、间距和组件一致性。",
+      "category": "design-visual",
+      "tags": ["tailwind", "design-system", "css"],
+      "version": "0.0.0",
+      "recommended": true
+    },
+    {
+      "id": "baoyu-cover-image",
+      "name": "baoyu-cover-image",
+      "description": "中文封面图 Skill，适合公众号封面和内容配图。",
+      "category": "design-visual",
+      "tags": ["cover", "image", "chinese"],
+      "version": "0.0.0",
+      "recommended": true
+    },
+    {
+      "id": "baoyu-comic",
+      "name": "baoyu-comic",
+      "description": "漫画风格 Skill，用于生成趣味配图。",
+      "category": "design-visual",
+      "tags": ["comic", "illustration", "image"],
+      "version": "0.0.0",
+      "recommended": true
+    },
+    {
+      "id": "baoyu-infographic",
+      "name": "baoyu-infographic",
+      "description": "信息图 Skill，用于把数据和信息变成更易读的图表。",
+      "category": "design-visual",
+      "tags": ["infographic", "chart", "data"],
+      "version": "0.0.0",
+      "recommended": true
+    },
+    {
+      "id": "ai-image-generation",
+      "name": "ai-image-generation",
+      "description": "AI 生图 Skill，用于生成配图和素材。",
+      "category": "design-visual",
+      "tags": ["image-generation", "assets", "ai"],
+      "version": "0.0.0",
+      "recommended": true
+    }
+  ]
+}

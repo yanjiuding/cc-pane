@@ -3,6 +3,7 @@ import {
   decideTerminalRenderer,
   isWebKitTerminalRendererHost,
   normalizeTerminalRendererMode,
+  resolveTerminalRendererModeForSession,
   shouldUseTerminalWebglRenderer,
 } from "./terminalRenderer";
 
@@ -74,5 +75,23 @@ describe("terminal renderer selection", () => {
   it("normalizes unknown renderer modes to auto", () => {
     expect(normalizeTerminalRendererMode("unknown")).toBe("auto");
     expect(normalizeTerminalRendererMode("dom")).toBe("dom");
+  });
+
+  it("uses DOM for Claude on Windows when renderer mode is auto", () => {
+    expect(resolveTerminalRendererModeForSession("auto", {
+      cliToolId: "claude",
+      isWindows: true,
+    })).toBe("dom");
+  });
+
+  it("keeps explicit WebGL and Codex auto renderer decisions", () => {
+    expect(resolveTerminalRendererModeForSession("webgl", {
+      cliToolId: "claude",
+      isWindows: true,
+    })).toBe("webgl");
+    expect(resolveTerminalRendererModeForSession("auto", {
+      cliToolId: "codex",
+      isWindows: true,
+    })).toBe("auto");
   });
 });

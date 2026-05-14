@@ -4,13 +4,14 @@ import { Cable, KeyRound, Layers3, Link2, Pencil, Plus, Save, Settings2, Sparkle
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useLaunchProfilesStore, usePanesStore, useProvidersStore, useSharedMcpStore, useWorkspacesStore } from "@/stores";
-import type { LaunchProfile, LaunchProfileDraft, LaunchProfileResolution, LaunchProfileRuntime } from "@/types";
+import type { DiscoveredExternalSkill, InstalledUserSkill, LaunchProfile, LaunchProfileDraft, LaunchProfileResolution, LaunchProfileRuntime, SkillMarketEntry } from "@/types";
 import { cn } from "@/lib/utils";
 import ProviderToolTabs from "./ProviderToolTabs";
 import SharedMcpSection from "@/components/settings/SharedMcpSection";
 import { CLI_TOOL_TABS, getCompatibleCliTools } from "@/types/provider";
 import type { KnownCliTool } from "@/types/terminal";
 import type { Workspace } from "@/types/workspace";
+import { skillService } from "@/services/skillService";
 
 const SYSTEM_DEFAULT_PROFILE_ID = "__system_default__";
 const WORKSPACE_FILTER_ALL = "__all_workspaces__";
@@ -38,6 +39,18 @@ const SKILL_MODE_LABELS: Record<LaunchProfileDraft["skillPolicy"]["mode"], strin
   custom: "自定义选择",
   disabled: "不注入",
 };
+
+type ExternalSkillSourceKind = "claude" | "codex" | "plugin";
+
+const EXTERNAL_SKILL_GROUPS: Array<{
+  kind: ExternalSkillSourceKind;
+  label: string;
+  policyKey: "includeExternalClaudeSkills" | "includeExternalCodexSkills" | "includeExternalPluginSkills";
+}> = [
+  { kind: "claude", label: "Claude", policyKey: "includeExternalClaudeSkills" },
+  { kind: "codex", label: "Codex", policyKey: "includeExternalCodexSkills" },
+  { kind: "plugin", label: "Plugin", policyKey: "includeExternalPluginSkills" },
+];
 
 const TOOL_LABELS: Record<KnownCliTool, string> = {
   none: "终端",
@@ -115,6 +128,45 @@ function selectedProfileSkillCount(policy: LaunchProfileDraft["skillPolicy"]): n
   return policy.profileSkills.filter((skill) => isProfileSkillSelected(policy, skill.id)).length;
 }
 
+function userSkillId(id: string): string {
+  return `user:${id}`;
+}
+
+function isUserSkillSelected(policy: LaunchProfileDraft["skillPolicy"], id: string): boolean {
+  if (policy.mode === "disabled") return false;
+  return policy.enabledSkillIds.includes(userSkillId(id));
+}
+
+function selectedUserSkillCount(policy: LaunchProfileDraft["skillPolicy"], skills: InstalledUserSkill[]): number {
+  return skills.filter((skill) => isUserSkillSelected(policy, skill.id)).length;
+}
+
+function externalSkillSourceKind(skill: DiscoveredExternalSkill): ExternalSkillSourceKind {
+  return skill.source.kind;
+}
+
+function isExternalSourceIncluded(
+  policy: LaunchProfileDraft["skillPolicy"],
+  kind: ExternalSkillSourceKind,
+): boolean {
+  const group = EXTERNAL_SKILL_GROUPS.find((item) => item.kind === kind);
+  return group ? policy[group.policyKey] ?? true : true;
+}
+
+function isExternalSkillSelected(policy: LaunchProfileDraft["skillPolicy"], skill: DiscoveredExternalSkill): boolean {
+  if (policy.mode === "disabled" || !isExternalSourceIncluded(policy, externalSkillSourceKind(skill))) return false;
+  if (policy.mode === "custom") return policy.enabledSkillIds.includes(skill.id);
+  return !policy.disabledSkillIds.includes(skill.id);
+}
+
+function selectedExternalSkillCount(policy: LaunchProfileDraft["skillPolicy"], skills: DiscoveredExternalSkill[]): number {
+  return skills.filter((skill) => isExternalSkillSelected(policy, skill)).length;
+}
+
+function installableMarketEntry(entry: SkillMarketEntry): boolean {
+  return Boolean(entry.license?.trim() && entry.contentUrl?.trim() && entry.sha256?.trim());
+}
+
 function profileDisplayName(profile: Pick<LaunchProfile, "name" | "alias">): string {
   return profile.alias?.trim() || profile.name;
 }
@@ -154,6 +206,9 @@ function systemDefaultLaunchProfileDraft(tool: KnownCliTool, runtime: LaunchProf
       disabledSkillIds: [],
       profileSkills: [],
       includeProjectSkills: true,
+      includeExternalClaudeSkills: true,
+      includeExternalCodexSkills: true,
+      includeExternalPluginSkills: true,
       target: "session",
     },
     isDefault: false,
@@ -263,6 +318,11 @@ export default function LaunchProfilesPanel({
   const [profileSkillEditorOpen, setProfileSkillEditorOpen] = useState(false);
   const [editingProfileSkillId, setEditingProfileSkillId] = useState<string | null>(null);
   const [profileSkillForm, setProfileSkillForm] = useState({ name: "", description: "", content: "" });
+  const [marketEntries, setMarketEntries] = useState<SkillMarketEntry[]>([]);
+  const [userSkills, setUserSkills] = useState<InstalledUserSkill[]>([]);
+  const [externalSkills, setExternalSkills] = useState<DiscoveredExternalSkill[]>([]);
+  const [skillMarketLoading, setSkillMarketLoading] = useState(false);
+  const [installingSkillId, setInstallingSkillId] = useState<string | null>(null);
   const workspaceContext = useMemo(
     () => workspaceFilterName === WORKSPACE_FILTER_ALL
       ? null
@@ -400,6 +460,28 @@ export default function LaunchProfilesPanel({
   const providerOptions = selectedDraftProvider && !compatibleProviders.some((provider) => provider.id === selectedDraftProvider.id)
     ? [selectedDraftProvider, ...compatibleProviders]
     : compatibleProviders;
+
+  const refreshSkillMarket = useCallback(async () => {
+    setSkillMarketLoading(true);
+    try {
+      const [entries, installed, external] = await Promise.all([
+        skillService.listSkillMarketEntries(),
+        skillService.listUserSkills(),
+        skillService.listExternalSkills(),
+      ]);
+      setMarketEntries(entries);
+      setUserSkills(installed);
+      setExternalSkills(external);
+    } catch (error) {
+      toast.error(`加载 Skill 失败: ${String(error)}`);
+    } finally {
+      setSkillMarketLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshSkillMarket();
+  }, [refreshSkillMarket]);
 
   useEffect(() => {
     if (selectedId === null || selectedId === SYSTEM_DEFAULT_PROFILE_ID) return;
@@ -568,6 +650,14 @@ export default function LaunchProfilesPanel({
           const id = profileSkillId(skill.id);
           if (!disabled.has(id)) enabled.add(id);
         }
+        for (const skill of externalSkills) {
+          if (
+            isExternalSourceIncluded(current.skillPolicy, externalSkillSourceKind(skill))
+            && !disabled.has(skill.id)
+          ) {
+            enabled.add(skill.id);
+          }
+        }
       }
 
       return {
@@ -667,6 +757,116 @@ export default function LaunchProfilesPanel({
         },
       };
     });
+  };
+  const enabledSkillIdsForCustomMode = (policy: LaunchProfileDraft["skillPolicy"]) => {
+    const enabled = new Set(policy.enabledSkillIds);
+    if (policy.mode !== "custom") {
+      const disabled = new Set(policy.disabledSkillIds);
+      for (const name of BUILTIN_SKILLS) {
+        const id = builtinSkillId(name);
+        if (!disabled.has(id)) enabled.add(id);
+      }
+      for (const skill of policy.profileSkills) {
+        const id = profileSkillId(skill.id);
+        if (!disabled.has(id)) enabled.add(id);
+      }
+      for (const skill of externalSkills) {
+        if (
+          isExternalSourceIncluded(policy, externalSkillSourceKind(skill))
+          && !disabled.has(skill.id)
+        ) {
+          enabled.add(skill.id);
+        }
+      }
+    }
+    return enabled;
+  };
+  const toggleExternalSource = (kind: ExternalSkillSourceKind, included: boolean) => {
+    const group = EXTERNAL_SKILL_GROUPS.find((item) => item.kind === kind);
+    if (!group) return;
+    setDraft((current) => ({
+      ...current,
+      skillPolicy: {
+        ...current.skillPolicy,
+        [group.policyKey]: included,
+      },
+    }));
+  };
+  const toggleExternalSkill = (skill: DiscoveredExternalSkill) => {
+    setDraft((current) => {
+      const disabled = new Set(current.skillPolicy.disabledSkillIds);
+      if (current.skillPolicy.mode === "core") {
+        if (disabled.has(skill.id)) disabled.delete(skill.id);
+        else disabled.add(skill.id);
+        return {
+          ...current,
+          skillPolicy: {
+            ...current.skillPolicy,
+            disabledSkillIds: Array.from(disabled),
+          },
+        };
+      }
+
+      const customEnabled = enabledSkillIdsForCustomMode(current.skillPolicy);
+      if (customEnabled.has(skill.id)) customEnabled.delete(skill.id);
+      else customEnabled.add(skill.id);
+      return {
+        ...current,
+        skillPolicy: {
+          ...current.skillPolicy,
+          mode: "custom",
+          enabledSkillIds: Array.from(customEnabled),
+          disabledSkillIds: Array.from(disabled).filter((item) => item !== skill.id),
+        },
+      };
+    });
+  };
+  const toggleUserSkill = (id: string) => {
+    const skillId = userSkillId(id);
+    setDraft((current) => {
+      const enabled = enabledSkillIdsForCustomMode(current.skillPolicy);
+      if (enabled.has(skillId)) enabled.delete(skillId);
+      else enabled.add(skillId);
+      return {
+        ...current,
+        skillPolicy: {
+          ...current.skillPolicy,
+          mode: "custom",
+          enabledSkillIds: Array.from(enabled),
+          disabledSkillIds: current.skillPolicy.disabledSkillIds.filter((item) => item !== skillId),
+        },
+      };
+    });
+  };
+  const installAndEnableSkill = async (entry: SkillMarketEntry) => {
+    setInstallingSkillId(entry.id);
+    try {
+      const installed = await skillService.installMarketSkill(entry.id);
+      setUserSkills((current) => {
+        const next = current.filter((skill) => skill.id !== installed.id);
+        next.push(installed);
+        return next.sort((left, right) => left.name.localeCompare(right.name));
+      });
+      const skillId = userSkillId(installed.id);
+      setDraft((current) => {
+        const enabled = enabledSkillIdsForCustomMode(current.skillPolicy);
+        enabled.add(skillId);
+        return {
+          ...current,
+          skillPolicy: {
+            ...current.skillPolicy,
+            mode: "custom",
+            enabledSkillIds: Array.from(enabled),
+            disabledSkillIds: current.skillPolicy.disabledSkillIds.filter((item) => item !== skillId),
+          },
+        };
+      });
+      toast.success(`已安装并启用 ${installed.name}`);
+    } catch (error) {
+      toast.error(`安装 Skill 失败: ${String(error)}`);
+    } finally {
+      setInstallingSkillId(null);
+    }
   };
   const selectAllBuiltinSkills = () => {
     setDraft((current) => {
@@ -787,6 +987,15 @@ export default function LaunchProfilesPanel({
   const sharedMcpSelectedCount = selectedSharedMcpCount(draft.mcpPolicy, sharedMcpNames);
   const builtinSkillSelectedCount = selectedBuiltinSkillCount(draft.skillPolicy);
   const profileSkillSelectedCount = selectedProfileSkillCount(draft.skillPolicy);
+  const installedUserSkillIds = new Set(userSkills.map((skill) => skill.id));
+  const marketEntryIds = new Set(marketEntries.map((entry) => entry.id));
+  const standaloneUserSkills = userSkills.filter((skill) => !marketEntryIds.has(skill.id));
+  const userSkillSelectedCount = selectedUserSkillCount(draft.skillPolicy, userSkills);
+  const externalSkillSelectedCount = selectedExternalSkillCount(draft.skillPolicy, externalSkills);
+  const externalSkillGroups = EXTERNAL_SKILL_GROUPS.map((group) => ({
+    ...group,
+    skills: externalSkills.filter((skill) => externalSkillSourceKind(skill) === group.kind),
+  }));
   const currentTitle = isSystemDefaultSelected ? `${toolLabel(activeTool)} 系统默认配置` : isNewProfile ? draftDisplayName(draft) : draftDisplayName(draft);
 
   return (
@@ -1360,6 +1569,223 @@ export default function LaunchProfilesPanel({
                     </label>
                   );
                 })}
+              </div>
+
+              <div className="mt-5 rounded-lg border border-border bg-background p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs font-medium" style={{ color: "var(--app-text-secondary)" }}>
+                        External Skills
+                      </div>
+                      <Badge variant="secondary" className="text-[10px]">
+                        {externalSkillSelectedCount}/{externalSkills.length}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 text-[11px]" style={{ color: "var(--app-text-tertiary)" }}>
+                      Core 模式默认通过外部池；Custom 模式只允许勾选项。
+                    </div>
+                  </div>
+                  <Button size="xs" variant="outline" disabled={skillMarketLoading} onClick={refreshSkillMarket}>
+                    {skillMarketLoading ? "刷新中" : "刷新"}
+                  </Button>
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  {EXTERNAL_SKILL_GROUPS.map((group) => {
+                    const included = isExternalSourceIncluded(draft.skillPolicy, group.kind);
+                    return (
+                      <label
+                        key={group.kind}
+                        className={cn(
+                          "flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs transition-colors",
+                          included ? "border-primary/60 bg-primary/10" : "border-border",
+                        )}
+                      >
+                        <span>{group.label}</span>
+                        <input
+                          type="checkbox"
+                          checked={included}
+                          onChange={(event) => toggleExternalSource(group.kind, event.target.checked)}
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div className="mt-3 space-y-2">
+                  {skillMarketLoading && externalSkills.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-xs" style={{ color: "var(--app-text-tertiary)" }}>
+                      正在加载外部 Skill...
+                    </div>
+                  ) : externalSkills.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-xs" style={{ color: "var(--app-text-tertiary)" }}>
+                      未发现 Claude、Codex 或 plugin 外部 Skill。
+                    </div>
+                  ) : externalSkillGroups.map((group) => {
+                    const included = isExternalSourceIncluded(draft.skillPolicy, group.kind);
+                    const selectedCount = selectedExternalSkillCount(draft.skillPolicy, group.skills);
+                    return (
+                      <details key={group.kind} className="rounded-md border border-border px-3 py-2" open={included}>
+                        <summary className="cursor-pointer text-xs font-medium" style={{ color: "var(--app-text-secondary)" }}>
+                          {group.label} ({selectedCount}/{group.skills.length})
+                        </summary>
+                        <div className="mt-2 grid grid-cols-1 gap-2">
+                          {group.skills.length === 0 ? (
+                            <div className="rounded-md border border-dashed border-border px-3 py-4 text-center text-xs" style={{ color: "var(--app-text-tertiary)" }}>
+                              这个来源下暂无 Skill。
+                            </div>
+                          ) : group.skills.map((skill) => {
+                            const checked = isExternalSkillSelected(draft.skillPolicy, skill);
+                            return (
+                              <label
+                                key={skill.id}
+                                className={cn(
+                                  "flex items-start gap-2 rounded-md border px-3 py-2 text-sm transition-colors",
+                                  checked ? "border-primary/60 bg-primary/10" : "border-border",
+                                  !included && "opacity-60",
+                                )}
+                              >
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5"
+                                  checked={checked}
+                                  disabled={!included}
+                                  onChange={() => toggleExternalSkill(skill)}
+                                />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate font-medium">{skill.name}</span>
+                                  {skill.description && (
+                                    <span className="block line-clamp-2 text-xs" style={{ color: "var(--app-text-tertiary)" }}>
+                                      {skill.description}
+                                    </span>
+                                  )}
+                                </span>
+                                <Badge variant="secondary" className="shrink-0 text-[10px]">{group.label}</Badge>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </details>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-lg border border-border bg-background p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs font-medium" style={{ color: "var(--app-text-secondary)" }}>
+                        推荐 Skill 市场
+                      </div>
+                      <Badge variant="secondary" className="text-[10px]">
+                        {userSkillSelectedCount}/{userSkills.length}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 text-[11px]" style={{ color: "var(--app-text-tertiary)" }}>
+                      官方推荐 Skill 安装到用户库。只有安装并勾选后才会注入当前运行配置。
+                    </div>
+                  </div>
+                  <Button size="xs" variant="outline" disabled={skillMarketLoading} onClick={refreshSkillMarket}>
+                    {skillMarketLoading ? "刷新中" : "刷新"}
+                  </Button>
+                </div>
+
+                <div className="mt-3 grid grid-cols-1 gap-2">
+                  {skillMarketLoading && marketEntries.length === 0 && standaloneUserSkills.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-xs" style={{ color: "var(--app-text-tertiary)" }}>
+                      正在加载官方 Skill 推荐...
+                    </div>
+                  ) : marketEntries.length === 0 && standaloneUserSkills.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-xs" style={{ color: "var(--app-text-tertiary)" }}>
+                      暂无可用推荐。离线或官方索引不可用时不会影响已有运行配置。
+                    </div>
+                  ) : (
+                    <>
+                      {marketEntries.map((entry) => {
+                        const installed = installedUserSkillIds.has(entry.id);
+                        const checked = installed && isUserSkillSelected(draft.skillPolicy, entry.id);
+                        const installable = installableMarketEntry(entry);
+                        return (
+                          <div
+                            key={entry.id}
+                            className={cn(
+                              "flex items-start gap-2 rounded-md border px-3 py-2 text-sm transition-colors",
+                              checked ? "border-primary/60 bg-primary/10" : "border-border",
+                            )}
+                          >
+                            <input
+                              type="checkbox"
+                              className="mt-0.5"
+                              checked={checked}
+                              disabled={!installed}
+                              onChange={() => toggleUserSkill(entry.id)}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="truncate font-medium">{entry.name}</span>
+                                {entry.recommended && <Badge variant="secondary" className="text-[10px]">推荐</Badge>}
+                                {entry.category && <Badge variant="outline" className="text-[10px]">{entry.category}</Badge>}
+                              </div>
+                              {entry.description && (
+                                <div className="mt-1 line-clamp-2 text-xs" style={{ color: "var(--app-text-tertiary)" }}>
+                                  {entry.description}
+                                </div>
+                              )}
+                              <div className="mt-1 flex flex-wrap gap-2 text-[11px]" style={{ color: "var(--app-text-tertiary)" }}>
+                                <span>v{entry.version}</span>
+                                {entry.license ? <span>{entry.license}</span> : <span>缺少 license</span>}
+                              </div>
+                            </div>
+                            {installed ? (
+                              <Badge variant="secondary" className="shrink-0 text-[10px]">已安装</Badge>
+                            ) : (
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                className="shrink-0"
+                                disabled={!installable || installingSkillId === entry.id}
+                                onClick={() => installAndEnableSkill(entry)}
+                                title={installable ? "安装到用户库并启用到当前运行配置" : "缺少 license、contentUrl 或 sha256，暂不能安装"}
+                              >
+                                {installingSkillId === entry.id ? "安装中" : "安装并启用"}
+                              </Button>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {standaloneUserSkills.map((skill) => {
+                        const checked = isUserSkillSelected(draft.skillPolicy, skill.id);
+                        return (
+                          <label
+                            key={skill.id}
+                            className={cn(
+                              "flex items-start gap-2 rounded-md border px-3 py-2 text-sm transition-colors",
+                              checked ? "border-primary/60 bg-primary/10" : "border-border",
+                            )}
+                          >
+                            <input
+                              type="checkbox"
+                              className="mt-0.5"
+                              checked={checked}
+                              onChange={() => toggleUserSkill(skill.id)}
+                            />
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate font-medium">{skill.name}</span>
+                              {skill.description && (
+                                <span className="block truncate text-xs" style={{ color: "var(--app-text-tertiary)" }}>
+                                  {skill.description}
+                                </span>
+                              )}
+                            </span>
+                            <Badge variant="secondary" className="shrink-0 text-[10px]">用户库</Badge>
+                          </label>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
               </div>
 
               <div className="mt-5 rounded-lg border border-border bg-background p-3">

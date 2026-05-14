@@ -67,6 +67,7 @@ export type {
   ThemeSettings,
   TerminalSettings,
   TerminalRendererMode,
+  TerminalThemeMode,
   ShortcutSettings,
   GeneralSettings,
   NotificationSettings,
@@ -109,7 +110,14 @@ export type {
   SpecSummary,
 } from "./spec";
 export type { McpServerConfig } from "./mcp";
-export type { SkillInfo, SkillSummary } from "./skill";
+export type {
+  DiscoveredExternalSkill,
+  ExternalSkillSource,
+  InstalledUserSkill,
+  SkillInfo,
+  SkillMarketEntry,
+  SkillSummary,
+} from "./skill";
 export type {
   FsEntry,
   DirListing,
@@ -150,9 +158,15 @@ export type {
 } from "./wsl";
 export type {
   TaskBindingStatus,
+  TaskBindingRole,
   TaskBinding,
   CreateTaskBindingRequest,
   UpdateTaskBindingRequest,
   TaskBindingQuery,
   TaskBindingQueryResult,
+  RegisterPlanLeaderRequest,
+  RegisterPlanWorkerRequest,
+  PlanCollaborationKey,
+  PlanCollaborationEntry,
+  PlanCollaboration,
 } from "./orchestrator";

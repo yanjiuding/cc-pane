@@ -2,7 +2,7 @@
  * Skill 管理服务层 — 封装所有 Skill 相关的 Tauri invoke 调用
  */
 import { invoke } from "@tauri-apps/api/core";
-import type { SkillInfo, SkillSummary } from "@/types";
+import type { DiscoveredExternalSkill, InstalledUserSkill, SkillInfo, SkillMarketEntry, SkillSummary } from "@/types";
 
 export const skillService = {
   /** 列出项目的所有 Skill（摘要） */
@@ -43,5 +43,32 @@ export const skillService = {
       targetProject,
       name,
     });
+  },
+
+  /** 列出 Claude / Codex / plugin 外部 Skill */
+  async listExternalSkills(source?: "claude" | "codex" | "plugin"): Promise<DiscoveredExternalSkill[]> {
+    return invoke<DiscoveredExternalSkill[]>("list_external_skills", {
+      source: source ?? null,
+    });
+  },
+
+  /** 列出官方 Skill 市场条目 */
+  async listSkillMarketEntries(): Promise<SkillMarketEntry[]> {
+    return invoke<SkillMarketEntry[]>("list_skill_market_entries");
+  },
+
+  /** 列出已安装的用户级 Skill */
+  async listUserSkills(): Promise<InstalledUserSkill[]> {
+    return invoke<InstalledUserSkill[]>("list_user_skills");
+  },
+
+  /** 从官方市场安装 Skill */
+  async installMarketSkill(skillId: string): Promise<InstalledUserSkill> {
+    return invoke<InstalledUserSkill>("install_market_skill", { skillId });
+  },
+
+  /** 移除用户级 Skill */
+  async removeUserSkill(skillId: string): Promise<boolean> {
+    return invoke<boolean>("remove_user_skill", { skillId });
   },
 };

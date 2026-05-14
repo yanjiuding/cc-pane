@@ -50,7 +50,9 @@
   "cliToolGlm": "GLM CLI",
   "cliToolOpenCode": "OpenCode",
   "cliToolCursor": "Cursor CLI",
+  "cliLocalVariant": "{{label}}（本机）",
   "cliWslVariant": "{{label}}（WSL）",
+  "cliSshVariant": "{{label}}（SSH）",
   "openFolder": "在系统文件管理器中打开",
   "copyPath": "复制路径",
   "absolutePath": "绝对路径",
@@ -270,5 +272,6 @@
   "workspaceEnv.savedAll": "运行环境配置已保存",
   "workspaceEnv.discardTitle": "放弃未保存的更改？",
   "workspaceEnv.discardDescription": "当前工作空间的运行环境配置尚未保存，关闭后这些修改会丢失。",
-  "workspaceEnv.defaultHint": "右键工作空间打开 Claude / Codex 时，会直接使用这里的默认环境。"
+  "workspaceEnv.defaultHint": "右键工作空间打开 Claude / Codex 时，会直接使用这里的默认环境。",
+  "workspaceEnv.launchThisTime": "本次选择环境"
 }

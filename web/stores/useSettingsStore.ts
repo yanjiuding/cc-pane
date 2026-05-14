@@ -52,11 +52,12 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       mode: "dark",
     },
     terminal: {
-      fontSize: 14,
+      fontSize: 15,
       fontFamily: 'Consolas, "Courier New", "Microsoft YaHei Mono", "Noto Sans Mono CJK SC", "PingFang SC", monospace',
       cursorStyle: "block",
       cursorBlink: true,
       scrollback: 20000,
+      themeMode: "followApp",
       rendererMode: "auto",
       shell: null,
       disableConptySanitize: null,

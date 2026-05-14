@@ -24,6 +24,7 @@ struct Migration {
 /// V12 = workspace snapshot identity on launch/restore records
 /// V14 = LaunchProfile identity on launch/restore records
 /// V15 = Provider selection mode on launch/restore records
+/// V16 = task_bindings plan collaboration leader/worker fields
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -254,6 +255,26 @@ const MIGRATIONS: &[Migration] = &[
         up_sql: "
             ALTER TABLE launch_history ADD COLUMN provider_selection TEXT;
             ALTER TABLE terminal_sessions ADD COLUMN provider_selection TEXT;
+        ",
+    },
+    Migration {
+        version: 16,
+        description: "task_bindings: add plan collaboration leader/worker fields",
+        up_sql: "
+            ALTER TABLE task_bindings ADD COLUMN role TEXT NOT NULL DEFAULT 'task';
+            ALTER TABLE task_bindings ADD COLUMN parent_id TEXT;
+            ALTER TABLE task_bindings ADD COLUMN plan_path TEXT;
+            ALTER TABLE task_bindings ADD COLUMN normalized_plan_path TEXT;
+            ALTER TABLE task_bindings ADD COLUMN pane_id TEXT;
+            ALTER TABLE task_bindings ADD COLUMN tab_id TEXT;
+            ALTER TABLE task_bindings ADD COLUMN resume_id TEXT;
+            ALTER TABLE task_bindings ADD COLUMN metadata TEXT;
+
+            CREATE INDEX IF NOT EXISTS idx_task_bindings_role ON task_bindings(role);
+            CREATE INDEX IF NOT EXISTS idx_task_bindings_parent ON task_bindings(parent_id);
+            CREATE INDEX IF NOT EXISTS idx_task_bindings_plan_path ON task_bindings(normalized_plan_path);
+            CREATE INDEX IF NOT EXISTS idx_task_bindings_resume ON task_bindings(resume_id);
+            CREATE INDEX IF NOT EXISTS idx_task_bindings_pane ON task_bindings(pane_id);
         ",
     },
 ];
@@ -491,6 +512,7 @@ mod tests {
             "todo_subtasks",
             "specs",
             "terminal_sessions",
+            "task_bindings",
             "schema_migrations",
         ];
         for table in &tables {
@@ -502,6 +524,37 @@ mod tests {
                 )
                 .unwrap_or(false);
             assert!(exists, "Table '{}' should exist", table);
+        }
+    }
+
+    #[test]
+    fn test_task_bindings_plan_collaboration_columns_exist() {
+        let db = Database::new_in_memory().expect("should create db");
+        let conn = db.connection().expect("should get connection");
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(task_bindings)")
+            .expect("should prepare pragma");
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .expect("should query columns")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("should collect columns");
+
+        for expected in [
+            "role",
+            "parent_id",
+            "plan_path",
+            "normalized_plan_path",
+            "pane_id",
+            "tab_id",
+            "resume_id",
+            "metadata",
+        ] {
+            assert!(
+                columns.iter().any(|column| column == expected),
+                "task_bindings should have column '{}'",
+                expected
+            );
         }
     }
 }

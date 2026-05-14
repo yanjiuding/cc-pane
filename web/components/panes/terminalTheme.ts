@@ -1,3 +1,5 @@
+import type { TerminalThemeMode } from "@/types";
+
 export interface TerminalThemePalette {
   background: string;
   foreground: string;
@@ -74,6 +76,21 @@ export const LIGHT_TERMINAL_THEME: TerminalThemePalette = {
   brightWhite: "#ebebeb",
 };
 
-export function getTerminalTheme(isDark: boolean): TerminalThemePalette {
+export function resolveTerminalThemeMode(
+  themeMode?: TerminalThemeMode | string | null,
+): TerminalThemeMode {
+  if (themeMode === "dark" || themeMode === "light" || themeMode === "followApp") {
+    return themeMode;
+  }
+  return "followApp";
+}
+
+export function getTerminalTheme(
+  isDark: boolean,
+  themeMode?: TerminalThemeMode | string | null,
+): TerminalThemePalette {
+  const resolvedMode = resolveTerminalThemeMode(themeMode);
+  if (resolvedMode === "dark") return DARK_TERMINAL_THEME;
+  if (resolvedMode === "light") return LIGHT_TERMINAL_THEME;
   return isDark ? DARK_TERMINAL_THEME : LIGHT_TERMINAL_THEME;
 }

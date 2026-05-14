@@ -1,12 +1,15 @@
 import type { KnownCliTool, WorkspaceLaunchEnvironment } from "@/types";
 
 export type SidebarLaunchCliTool = Exclude<KnownCliTool, "none">;
-export type SidebarLaunchActionEnvironment = Extract<WorkspaceLaunchEnvironment, "local" | "wsl">;
+export type SidebarLaunchActionEnvironment = WorkspaceLaunchEnvironment;
 export type SidebarLaunchActionId =
   | "terminal-default"
+  | "terminal-local"
   | "terminal-wsl"
+  | "terminal-ssh"
   | `${SidebarLaunchCliTool}-local`
-  | `${SidebarLaunchCliTool}-wsl`;
+  | `${SidebarLaunchCliTool}-wsl`
+  | `${SidebarLaunchCliTool}-ssh`;
 
 export interface SidebarLaunchAction {
   id: SidebarLaunchActionId;
@@ -43,6 +46,7 @@ export function getDefaultSidebarFavoriteLaunchActionIds(): SidebarLaunchActionI
 export function buildSidebarLaunchActions(
   t: any,
   includeWslVariant: boolean,
+  includeSshVariant = false,
 ): SidebarLaunchAction[] {
   const terminalLabel = t("openTerminal", { ns: "sidebar" });
   const actions: SidebarLaunchAction[] = [
@@ -50,6 +54,16 @@ export function buildSidebarLaunchActions(
       id: "terminal-default",
       kind: "terminal",
       label: terminalLabel,
+    },
+    {
+      id: "terminal-local",
+      kind: "terminal",
+      environment: "local",
+      label: t("cliLocalVariant", {
+        ns: "sidebar",
+        label: terminalLabel,
+        defaultValue: `${terminalLabel} (Local)`,
+      }),
     },
   ];
 
@@ -62,6 +76,18 @@ export function buildSidebarLaunchActions(
         ns: "sidebar",
         label: terminalLabel,
         defaultValue: `${terminalLabel} (WSL)`,
+      }),
+    });
+  }
+  if (includeSshVariant) {
+    actions.push({
+      id: "terminal-ssh",
+      kind: "terminal",
+      environment: "ssh",
+      label: t("cliSshVariant", {
+        ns: "sidebar",
+        label: terminalLabel,
+        defaultValue: `${terminalLabel} (SSH)`,
       }),
     });
   }
@@ -88,6 +114,19 @@ export function buildSidebarLaunchActions(
         }),
       });
     }
+    if (includeSshVariant) {
+      actions.push({
+        id: `${tool.id}-ssh`,
+        kind: "cli",
+        cliTool: tool.id,
+        environment: "ssh",
+        label: t("cliSshVariant", {
+          ns: "sidebar",
+          label,
+          defaultValue: `${label} (SSH)`,
+        }),
+      });
+    }
   }
 
   return actions;
@@ -106,8 +145,9 @@ export function filterSidebarFavoriteLaunchActions(
 export function buildSidebarCliLaunchItems(
   t: any,
   includeWslVariant: boolean,
+  includeSshVariant = false,
 ): SidebarCliLaunchItem[] {
-  return buildSidebarLaunchActions(t, includeWslVariant)
+  return buildSidebarLaunchActions(t, includeWslVariant, includeSshVariant)
     .filter((action): action is SidebarLaunchAction & { cliTool: SidebarLaunchCliTool; environment: SidebarLaunchActionEnvironment } =>
       action.kind === "cli" && !!action.cliTool && !!action.environment,
     )

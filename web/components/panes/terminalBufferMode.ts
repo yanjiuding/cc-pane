@@ -24,5 +24,5 @@ export function stripAlternateBufferSequences(data: string): string {
 }
 
 export function shouldKeepCliOutputInNormalBuffer(cliToolId: string): boolean {
-  return cliToolId === "claude" || cliToolId === "codex";
+  return cliToolId === "codex";
 }

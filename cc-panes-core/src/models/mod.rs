@@ -1,3 +1,4 @@
+pub mod external_skill;
 pub mod filesystem;
 mod history;
 pub mod launch_profile;
@@ -17,6 +18,7 @@ mod workspace;
 pub mod workspace_snapshot;
 pub mod wsl;
 
+pub use external_skill::{DiscoveredExternalSkill, ExternalSkillSource};
 pub use history::{
     // Diff 模型
     DiffChangeType,

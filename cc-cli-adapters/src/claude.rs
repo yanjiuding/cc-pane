@@ -548,6 +548,10 @@ impl CliToolAdapter for ClaudeAdapter {
         dirs::home_dir().map(|h| h.join(".claude").join("commands"))
     }
 
+    fn global_skills_dir(&self) -> Option<std::path::PathBuf> {
+        dirs::home_dir().map(|h| h.join(".claude").join("skills"))
+    }
+
     fn project_hooks(&self) -> Vec<ProjectHookDefinition> {
         HOOK_DEFS
             .iter()

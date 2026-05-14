@@ -9,7 +9,7 @@ import {
   createTestSkill,
   resetTestDataCounter,
 } from "@/test/utils/testData";
-import type { SkillInfo } from "@/types";
+import type { DiscoveredExternalSkill, InstalledUserSkill, SkillInfo, SkillMarketEntry } from "@/types";
 
 describe("skillService", () => {
   beforeEach(() => {
@@ -133,6 +133,88 @@ describe("skillService", () => {
         name: "copied-skill",
       });
       expect(result).toEqual(skill);
+    });
+  });
+
+  describe("listExternalSkills", () => {
+    it("应该调用 list_external_skills 命令并传递 source", async () => {
+      const skills: DiscoveredExternalSkill[] = [{
+        id: "claude:rust-patterns",
+        name: "Rust Patterns",
+        description: "Prefer idiomatic Rust",
+        source: { kind: "claude" },
+        path: "/home/user/.claude/skills/rust-patterns/SKILL.md",
+        contentSha256: "abc",
+        installedAt: "2026-05-12T00:00:00Z",
+      }];
+      mockTauriInvoke({ list_external_skills: skills });
+
+      const result = await skillService.listExternalSkills("claude");
+
+      expect(invoke).toHaveBeenCalledWith("list_external_skills", {
+        source: "claude",
+      });
+      expect(result).toEqual(skills);
+    });
+
+    it("未指定 source 时传 null 列出全部外部 Skill", async () => {
+      mockTauriInvoke({ list_external_skills: [] });
+
+      const result = await skillService.listExternalSkills();
+
+      expect(invoke).toHaveBeenCalledWith("list_external_skills", {
+        source: null,
+      });
+      expect(result).toEqual([]);
+    });
+  });
+
+  describe("skill market", () => {
+    it("应该调用 list_skill_market_entries 命令", async () => {
+      const entries: SkillMarketEntry[] = [{
+        id: "frontend-design",
+        name: "frontend-design",
+        description: "Frontend design guidance",
+        category: "design-visual",
+        tags: ["design"],
+        version: "1.0.0",
+        license: "MIT",
+        homepageUrl: "https://example.com",
+        contentUrl: "https://example.com/SKILL.md",
+        sha256: "abc",
+        recommended: true,
+      }];
+      mockTauriInvoke({ list_skill_market_entries: entries });
+
+      const result = await skillService.listSkillMarketEntries();
+
+      expect(invoke).toHaveBeenCalledWith("list_skill_market_entries");
+      expect(result).toEqual(entries);
+    });
+
+    it("应该调用 install_market_skill 命令", async () => {
+      const installed: InstalledUserSkill = {
+        id: "frontend-design",
+        name: "frontend-design",
+        description: "Frontend design guidance",
+        category: "design-visual",
+        tags: ["design"],
+        version: "1.0.0",
+        license: "MIT",
+        homepageUrl: "https://example.com",
+        sourceUrl: "https://example.com/SKILL.md",
+        contentSha256: "abc",
+        installedAt: "2026-05-12T00:00:00Z",
+        filePath: "/tmp/skills/user/frontend-design/SKILL.md",
+      };
+      mockTauriInvoke({ install_market_skill: installed });
+
+      const result = await skillService.installMarketSkill("frontend-design");
+
+      expect(invoke).toHaveBeenCalledWith("install_market_skill", {
+        skillId: "frontend-design",
+      });
+      expect(result).toEqual(installed);
     });
   });
 });

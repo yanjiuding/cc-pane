@@ -5,22 +5,39 @@ use crate::models::launch_profile::{
 };
 use crate::models::provider::Provider;
 use crate::models::shared_mcp::SharedMcpConfig;
+use crate::models::ExternalSkillSource;
 use crate::models::Workspace;
+use crate::services::{ExternalSkillRegistry, UserSkillContent, UserSkillService};
 use anyhow::{anyhow, Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub struct LaunchProfileService {
     config_path: PathBuf,
+    user_skills_dir: PathBuf,
+    external_skill_registry: Arc<ExternalSkillRegistry>,
     config: Mutex<LaunchProfileConfig>,
 }
 
 impl LaunchProfileService {
     pub fn new(config_path: PathBuf) -> Self {
+        Self::new_with_external_skill_registry(config_path, default_external_skill_registry())
+    }
+
+    pub fn new_with_external_skill_registry(
+        config_path: PathBuf,
+        external_skill_registry: Arc<ExternalSkillRegistry>,
+    ) -> Self {
         let config = Self::load_from_file(&config_path).unwrap_or_default();
+        let user_skills_dir = config_path
+            .parent()
+            .map(|parent| parent.join("skills").join("user"))
+            .unwrap_or_else(|| PathBuf::from("skills").join("user"));
         Self {
             config_path,
+            user_skills_dir,
+            external_skill_registry,
             config: Mutex::new(config),
         }
     }
@@ -405,7 +422,10 @@ impl LaunchProfileService {
             .unwrap_or(true)
     }
 
-    pub fn session_skill_prompt_for_profile(profile: Option<&LaunchProfile>) -> Option<String> {
+    pub fn session_skill_prompt_for_profile(
+        &self,
+        profile: Option<&LaunchProfile>,
+    ) -> Option<String> {
         let profile = profile?;
         if profile.skill_policy.mode == LaunchProfileSkillMode::Disabled
             || profile.skill_policy.target != "session"
@@ -413,33 +433,75 @@ impl LaunchProfileService {
             return None;
         }
 
-        let skills = Self::selected_profile_skills(profile);
-        if skills.is_empty() {
+        let profile_skills = Self::selected_profile_skills(profile);
+        let user_skills = self.selected_user_skill_contents(profile);
+        let allowed_skills = self.allowed_skill_entries(profile);
+        if profile_skills.is_empty() && user_skills.is_empty() && allowed_skills.is_empty() {
             return None;
         }
 
-        let mut prompt = String::from(
-            "<ccpanes-launch-profile-skills>\n\
-             The current CC-Panes launch profile selected these session skills. \
-             Follow them when they are relevant to the user's request.\n",
-        );
-        for skill in skills {
-            prompt.push_str("\n## ");
-            prompt.push_str(&skill.name);
-            prompt.push('\n');
-            if let Some(description) = skill
-                .description
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                prompt.push_str(description);
+        let mut prompt = String::new();
+        if !profile_skills.is_empty() || !user_skills.is_empty() {
+            prompt.push_str(
+                "<ccpanes-launch-profile-skills>\n\
+                 The current CC-Panes launch profile selected these session skills. \
+                 Follow them when they are relevant to the user's request.\n",
+            );
+            for skill in profile_skills {
+                prompt.push_str("\n## ");
+                prompt.push_str(&skill.name);
+                prompt.push('\n');
+                if let Some(description) = skill
+                    .description
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    prompt.push_str(description);
+                    prompt.push_str("\n\n");
+                }
+                prompt.push_str(skill.content.trim());
+                prompt.push('\n');
+            }
+            for user_skill in user_skills {
+                prompt.push_str("\n## ");
+                prompt.push_str(&user_skill.skill.name);
+                prompt.push('\n');
+                if let Some(description) = user_skill
+                    .skill
+                    .description
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    prompt.push_str(description);
+                    prompt.push_str("\n\n");
+                }
+                prompt.push_str(user_skill.content.trim());
+                prompt.push('\n');
+            }
+            prompt.push_str("</ccpanes-launch-profile-skills>");
+        }
+        if !allowed_skills.is_empty() {
+            if !prompt.is_empty() {
                 prompt.push_str("\n\n");
             }
-            prompt.push_str(skill.content.trim());
-            prompt.push('\n');
+            prompt.push_str("<allowed-skills>\n");
+            prompt.push_str(
+                "This session is limited to the following skills. Ignore any other skills that may be auto-loaded by the CLI.\n",
+            );
+            for skill in allowed_skills {
+                prompt.push_str("- ");
+                prompt.push_str(&skill.name);
+                if let Some(description) = skill.description {
+                    prompt.push_str(" (");
+                    prompt.push_str(&description);
+                    prompt.push(')');
+                }
+                prompt.push('\n');
+            }
+            prompt.push_str("</allowed-skills>");
         }
-        prompt.push_str("</ccpanes-launch-profile-skills>");
         Some(prompt)
     }
 
@@ -539,8 +601,10 @@ impl LaunchProfileService {
             None => Self::default_mcp(shared_mcp, running_mcp_urls),
         };
         let skills = match (profile.as_ref(), workspace) {
-            (Some(profile), Some(workspace)) => Self::resolve_skills(profile, workspace),
-            (Some(profile), None) => Self::resolve_base_skills(profile),
+            (Some(profile), Some(workspace)) => {
+                self.resolve_skills(profile, workspace, &mut warnings)
+            }
+            (Some(profile), None) => self.resolve_base_skills(profile, &mut warnings),
             (None, Some(workspace)) => Self::default_skills(workspace),
             (None, None) => core_skill_ids(),
         };
@@ -688,7 +752,11 @@ impl LaunchProfileService {
         servers
     }
 
-    fn resolve_base_skills(profile: &LaunchProfile) -> Vec<ResolvedSkill> {
+    fn resolve_base_skills(
+        &self,
+        profile: &LaunchProfile,
+        warnings: &mut Vec<String>,
+    ) -> Vec<ResolvedSkill> {
         match profile.skill_policy.mode {
             LaunchProfileSkillMode::Disabled => Vec::new(),
             LaunchProfileSkillMode::Core => {
@@ -714,6 +782,8 @@ impl LaunchProfileService {
                             project_path: None,
                         }),
                 );
+                skills.extend(self.resolve_selected_user_skills(profile, warnings));
+                skills.extend(self.resolve_external_skills(profile, warnings));
                 skills
             }
             LaunchProfileSkillMode::Custom => {
@@ -754,6 +824,8 @@ impl LaunchProfileService {
                             })
                         }),
                 );
+                skills.extend(self.resolve_selected_user_skills(profile, warnings));
+                skills.extend(self.resolve_external_skills(profile, warnings));
                 skills
             }
         }
@@ -801,13 +873,219 @@ impl LaunchProfileService {
         }
     }
 
+    fn selected_user_skill_ids(profile: &LaunchProfile) -> Vec<String> {
+        if profile.skill_policy.mode == LaunchProfileSkillMode::Disabled {
+            return Vec::new();
+        }
+        profile
+            .skill_policy
+            .enabled_skill_ids
+            .iter()
+            .filter_map(|id| id.strip_prefix("user:"))
+            .filter(|id| !id.trim().is_empty())
+            .map(str::to_string)
+            .collect()
+    }
+
+    fn selected_user_skill_contents(&self, profile: &LaunchProfile) -> Vec<UserSkillContent> {
+        Self::selected_user_skill_ids(profile)
+            .into_iter()
+            .filter_map(|id| {
+                UserSkillService::read_from_dir(&self.user_skills_dir, &id)
+                    .ok()
+                    .flatten()
+            })
+            .collect()
+    }
+
+    fn resolve_selected_user_skills(
+        &self,
+        profile: &LaunchProfile,
+        warnings: &mut Vec<String>,
+    ) -> Vec<ResolvedSkill> {
+        let mut skills = Vec::new();
+        for id in Self::selected_user_skill_ids(profile) {
+            match UserSkillService::read_from_dir(&self.user_skills_dir, &id) {
+                Ok(Some(user_skill)) => skills.push(ResolvedSkill {
+                    id: format!("user:{}", user_skill.skill.id),
+                    name: user_skill.skill.name,
+                    source: "user".to_string(),
+                    enabled: true,
+                    project_id: None,
+                    project_path: None,
+                }),
+                Ok(None) => warnings.push(format!("User skill '{}' is not installed", id)),
+                Err(error) => {
+                    warnings.push(format!("User skill '{}' could not be read: {}", id, error))
+                }
+            }
+        }
+        skills
+    }
+
+    fn resolve_external_skills(
+        &self,
+        profile: &LaunchProfile,
+        warnings: &mut Vec<String>,
+    ) -> Vec<ResolvedSkill> {
+        if profile.skill_policy.mode == LaunchProfileSkillMode::Disabled {
+            return Vec::new();
+        }
+
+        let selected: HashSet<&str> = profile
+            .skill_policy
+            .enabled_skill_ids
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let disabled: HashSet<&str> = profile
+            .skill_policy
+            .disabled_skill_ids
+            .iter()
+            .map(String::as_str)
+            .collect();
+        let discovered = match self.external_skill_registry.list() {
+            Ok(skills) => skills,
+            Err(error) => {
+                warnings.push(format!("External skills could not be scanned: {}", error));
+                return Vec::new();
+            }
+        };
+        let discovered_ids = discovered
+            .iter()
+            .map(|skill| skill.id.clone())
+            .collect::<HashSet<_>>();
+
+        let mut skills = Vec::new();
+        for skill in discovered {
+            if !Self::external_source_enabled(profile, &skill.source) {
+                continue;
+            }
+            let enabled = match profile.skill_policy.mode {
+                LaunchProfileSkillMode::Disabled => false,
+                LaunchProfileSkillMode::Core => !disabled.contains(skill.id.as_str()),
+                LaunchProfileSkillMode::Custom => selected.contains(skill.id.as_str()),
+            };
+            if enabled {
+                skills.push(ResolvedSkill {
+                    id: skill.id,
+                    name: skill.name,
+                    source: skill.source.resolved_source().to_string(),
+                    enabled: true,
+                    project_id: None,
+                    project_path: None,
+                });
+            }
+        }
+
+        if profile.skill_policy.mode == LaunchProfileSkillMode::Custom {
+            for id in selected {
+                if Self::is_external_skill_id(id)
+                    && Self::external_id_source_enabled(profile, id)
+                    && !discovered_ids.contains(id)
+                {
+                    warnings.push(format!("External skill '{}' is not installed", id));
+                }
+            }
+        }
+
+        skills
+    }
+
+    fn allowed_skill_entries(&self, profile: &LaunchProfile) -> Vec<AllowedSkillEntry> {
+        if profile.skill_policy.mode != LaunchProfileSkillMode::Custom
+            || profile.skill_policy.enabled_skill_ids.is_empty()
+        {
+            return Vec::new();
+        }
+
+        profile
+            .skill_policy
+            .enabled_skill_ids
+            .iter()
+            .filter_map(|id| self.allowed_skill_entry(profile, id))
+            .collect()
+    }
+
+    fn allowed_skill_entry(&self, profile: &LaunchProfile, id: &str) -> Option<AllowedSkillEntry> {
+        if let Some(name) = id.strip_prefix("builtin:") {
+            return Some(AllowedSkillEntry::new(
+                name,
+                Some("CC-Panes built-in skill"),
+            ));
+        }
+        if let Some(profile_id) = id.strip_prefix("profile:") {
+            let skill = profile
+                .skill_policy
+                .profile_skills
+                .iter()
+                .find(|skill| skill.id == profile_id)?;
+            return Some(AllowedSkillEntry::new(
+                &skill.name,
+                skill.description.as_deref(),
+            ));
+        }
+        if let Some(user_id) = id.strip_prefix("user:") {
+            let user_skill = UserSkillService::read_from_dir(&self.user_skills_dir, user_id)
+                .ok()
+                .flatten()?;
+            return Some(AllowedSkillEntry::new(
+                &user_skill.skill.name,
+                user_skill.skill.description.as_deref(),
+            ));
+        }
+        if id.starts_with("project:") {
+            let name = id.rsplit(':').next().unwrap_or(id);
+            return Some(AllowedSkillEntry::new(name, Some("Project command skill")));
+        }
+        if Self::is_external_skill_id(id) && Self::external_id_source_enabled(profile, id) {
+            let skill = self.external_skill_registry.get(id).ok().flatten()?;
+            return Some(AllowedSkillEntry::new(
+                &skill.name,
+                skill.description.as_deref(),
+            ));
+        }
+        None
+    }
+
+    fn external_source_enabled(profile: &LaunchProfile, source: &ExternalSkillSource) -> bool {
+        match source {
+            ExternalSkillSource::Claude => profile.skill_policy.include_external_claude_skills,
+            ExternalSkillSource::Codex => profile.skill_policy.include_external_codex_skills,
+            ExternalSkillSource::Plugin { .. } => {
+                profile.skill_policy.include_external_plugin_skills
+            }
+        }
+    }
+
+    fn external_id_source_enabled(profile: &LaunchProfile, id: &str) -> bool {
+        if id.starts_with("claude:") {
+            profile.skill_policy.include_external_claude_skills
+        } else if id.starts_with("codex:") {
+            profile.skill_policy.include_external_codex_skills
+        } else if id.starts_with("plugin:") {
+            profile.skill_policy.include_external_plugin_skills
+        } else {
+            false
+        }
+    }
+
+    fn is_external_skill_id(id: &str) -> bool {
+        id.starts_with("claude:") || id.starts_with("codex:") || id.starts_with("plugin:")
+    }
+
     fn default_skills(workspace: &Workspace) -> Vec<ResolvedSkill> {
         let _ = workspace;
         core_skill_ids()
     }
 
-    fn resolve_skills(profile: &LaunchProfile, workspace: &Workspace) -> Vec<ResolvedSkill> {
-        let mut skills = Self::resolve_base_skills(profile);
+    fn resolve_skills(
+        &self,
+        profile: &LaunchProfile,
+        workspace: &Workspace,
+        warnings: &mut Vec<String>,
+    ) -> Vec<ResolvedSkill> {
+        let mut skills = self.resolve_base_skills(profile, warnings);
         if profile.skill_policy.mode == LaunchProfileSkillMode::Disabled {
             return skills;
         }
@@ -851,6 +1129,32 @@ impl LaunchProfileService {
         }
         skills
     }
+}
+
+struct AllowedSkillEntry {
+    name: String,
+    description: Option<String>,
+}
+
+impl AllowedSkillEntry {
+    fn new(name: &str, description: Option<&str>) -> Self {
+        Self {
+            name: compact_prompt_line(name),
+            description: description.map(compact_prompt_line),
+        }
+    }
+}
+
+fn compact_prompt_line(value: &str) -> String {
+    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    compact.chars().take(160).collect()
+}
+
+fn default_external_skill_registry() -> Arc<ExternalSkillRegistry> {
+    let mut registry = cc_cli_adapters::CliToolRegistry::new();
+    registry.register(Arc::new(cc_cli_adapters::ClaudeAdapter::new()));
+    registry.register(Arc::new(cc_cli_adapters::CodexAdapter::new()));
+    Arc::new(ExternalSkillRegistry::new(Arc::new(registry)))
 }
 
 fn core_skill_ids() -> Vec<ResolvedSkill> {
@@ -900,11 +1204,31 @@ mod tests {
     }
 
     fn test_service() -> LaunchProfileService {
-        let path = std::env::temp_dir().join(format!(
-            "cc-panes-launch-profile-test-{}.json",
+        test_service_with_external_roots(Vec::new(), None)
+    }
+
+    fn test_service_with_external_roots(
+        skill_roots: Vec<(String, PathBuf)>,
+        plugins_root: Option<PathBuf>,
+    ) -> LaunchProfileService {
+        let dir = std::env::temp_dir().join(format!(
+            "cc-panes-launch-profile-test-{}",
             uuid::Uuid::new_v4()
         ));
-        LaunchProfileService::new(path)
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("launch-profiles.json");
+        let plugins_root = plugins_root.unwrap_or_else(|| dir.join("plugins"));
+        let external_skill_registry = Arc::new(ExternalSkillRegistry::with_roots_for_test(
+            skill_roots,
+            plugins_root,
+        ));
+        LaunchProfileService::new_with_external_skill_registry(path, external_skill_registry)
+    }
+
+    fn write_external_skill(root: &Path, id: &str, content: &str) {
+        let dir = root.join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("SKILL.md"), content).unwrap();
     }
 
     fn workspace(profile_id: &str) -> Workspace {
@@ -1485,7 +1809,8 @@ mod tests {
             &SharedMcpConfig::default(),
             &HashMap::new(),
         );
-        let prompt = LaunchProfileService::session_skill_prompt_for_profile(Some(&profile))
+        let prompt = service
+            .session_skill_prompt_for_profile(Some(&profile))
             .expect("profile skill prompt");
 
         assert!(resolution.skills.iter().any(|skill| {
@@ -1494,5 +1819,276 @@ mod tests {
         assert!(prompt.contains("<ccpanes-launch-profile-skills>"));
         assert!(prompt.contains("Review Guard"));
         assert!(prompt.contains("Prioritize regressions and missing tests."));
+    }
+
+    #[test]
+    fn selected_user_skill_resolves_and_injects_session_prompt() {
+        let service = test_service();
+        let user_skill_service = UserSkillService::new(service.user_skills_dir.clone());
+        user_skill_service
+            .write_skill(
+                &crate::services::InstalledUserSkill {
+                    id: "frontend-design".into(),
+                    name: "frontend-design".into(),
+                    description: Some("Improve frontend hierarchy".into()),
+                    category: Some("design-visual".into()),
+                    tags: vec!["design".into()],
+                    version: "1.0.0".into(),
+                    license: Some("MIT".into()),
+                    homepage_url: None,
+                    source_url: Some("https://example.com/frontend-design.md".into()),
+                    content_sha256: "sha".into(),
+                    installed_at: "2026-05-12T00:00:00Z".into(),
+                    file_path: None,
+                },
+                "Use layout, spacing, and typography deliberately.",
+            )
+            .unwrap();
+
+        let profile = service
+            .create_profile(LaunchProfileDraft {
+                name: Some("Design Skills".into()),
+                alias: None,
+                description: None,
+                provider_id: None,
+                target_tools: vec!["codex".into()],
+                target_runtime: None,
+                mcp_policy: Default::default(),
+                skill_policy: crate::models::launch_profile::LaunchProfileSkillPolicy {
+                    mode: LaunchProfileSkillMode::Custom,
+                    enabled_skill_ids: vec!["user:frontend-design".into()],
+                    ..Default::default()
+                },
+                is_default: false,
+            })
+            .unwrap();
+
+        let resolution = service.resolve_profile(
+            &LaunchProfilePreviewRequest {
+                profile_id: Some(profile.id.clone()),
+                use_system_default: false,
+                workspace_name: None,
+                project_id: None,
+                provider_id: None,
+                provider_selection: LaunchProviderSelection::Inherit,
+                cli_tool: Some("codex".into()),
+                runtime_kind: None,
+            },
+            &[],
+            &[],
+            &SharedMcpConfig::default(),
+            &HashMap::new(),
+        );
+        let prompt = service
+            .session_skill_prompt_for_profile(Some(&profile))
+            .expect("user skill prompt");
+
+        assert!(resolution.skills.iter().any(|skill| {
+            skill.id == "user:frontend-design" && skill.source == "user" && skill.enabled
+        }));
+        assert!(prompt.contains("frontend-design"));
+        assert!(prompt.contains("Use layout, spacing, and typography deliberately."));
+    }
+
+    #[test]
+    fn include_external_claude_skills_false_excludes_claude_skills() {
+        let temp = tempfile::tempdir().unwrap();
+        let claude_root = temp.path().join("claude").join("skills");
+        write_external_skill(
+            &claude_root,
+            "rust-patterns",
+            "---\nname: Rust Patterns\n---\nUse Rust.",
+        );
+        let service = test_service_with_external_roots(
+            vec![("claude".to_string(), claude_root)],
+            Some(temp.path().join("plugins")),
+        );
+        let profile = service
+            .create_profile(LaunchProfileDraft {
+                name: Some("No Claude Skills".into()),
+                alias: None,
+                description: None,
+                provider_id: None,
+                target_tools: vec!["claude".into()],
+                target_runtime: None,
+                mcp_policy: Default::default(),
+                skill_policy: crate::models::launch_profile::LaunchProfileSkillPolicy {
+                    include_external_claude_skills: false,
+                    ..Default::default()
+                },
+                is_default: false,
+            })
+            .unwrap();
+
+        let resolution = service.resolve_profile(
+            &LaunchProfilePreviewRequest {
+                profile_id: Some(profile.id),
+                use_system_default: false,
+                workspace_name: None,
+                project_id: None,
+                provider_id: None,
+                provider_selection: LaunchProviderSelection::Inherit,
+                cli_tool: Some("claude".into()),
+                runtime_kind: None,
+            },
+            &[],
+            &[],
+            &SharedMcpConfig::default(),
+            &HashMap::new(),
+        );
+
+        assert!(!resolution
+            .skills
+            .iter()
+            .any(|skill| skill.id == "claude:rust-patterns"));
+    }
+
+    #[test]
+    fn custom_policy_only_resolves_selected_external_skill() {
+        let temp = tempfile::tempdir().unwrap();
+        let claude_root = temp.path().join("claude").join("skills");
+        write_external_skill(&claude_root, "rust-patterns", "# Rust Patterns");
+        write_external_skill(&claude_root, "frontend-ui", "# Frontend UI");
+        let service = test_service_with_external_roots(
+            vec![("claude".to_string(), claude_root)],
+            Some(temp.path().join("plugins")),
+        );
+        let profile = service
+            .create_profile(LaunchProfileDraft {
+                name: Some("Selected External".into()),
+                alias: None,
+                description: None,
+                provider_id: None,
+                target_tools: vec!["claude".into()],
+                target_runtime: None,
+                mcp_policy: Default::default(),
+                skill_policy: crate::models::launch_profile::LaunchProfileSkillPolicy {
+                    mode: LaunchProfileSkillMode::Custom,
+                    enabled_skill_ids: vec!["claude:rust-patterns".into()],
+                    ..Default::default()
+                },
+                is_default: false,
+            })
+            .unwrap();
+
+        let resolution = service.resolve_profile(
+            &LaunchProfilePreviewRequest {
+                profile_id: Some(profile.id),
+                use_system_default: false,
+                workspace_name: None,
+                project_id: None,
+                provider_id: None,
+                provider_selection: LaunchProviderSelection::Inherit,
+                cli_tool: Some("claude".into()),
+                runtime_kind: None,
+            },
+            &[],
+            &[],
+            &SharedMcpConfig::default(),
+            &HashMap::new(),
+        );
+
+        assert!(resolution
+            .skills
+            .iter()
+            .any(|skill| skill.id == "claude:rust-patterns"));
+        assert!(!resolution
+            .skills
+            .iter()
+            .any(|skill| skill.id == "claude:frontend-ui"));
+    }
+
+    #[test]
+    fn disabled_external_skill_id_is_excluded_in_core_mode() {
+        let temp = tempfile::tempdir().unwrap();
+        let claude_root = temp.path().join("claude").join("skills");
+        write_external_skill(&claude_root, "rust-patterns", "# Rust Patterns");
+        write_external_skill(&claude_root, "frontend-ui", "# Frontend UI");
+        let service = test_service_with_external_roots(
+            vec![("claude".to_string(), claude_root)],
+            Some(temp.path().join("plugins")),
+        );
+        let profile = service
+            .create_profile(LaunchProfileDraft {
+                name: Some("Disable One External".into()),
+                alias: None,
+                description: None,
+                provider_id: None,
+                target_tools: vec!["claude".into()],
+                target_runtime: None,
+                mcp_policy: Default::default(),
+                skill_policy: crate::models::launch_profile::LaunchProfileSkillPolicy {
+                    disabled_skill_ids: vec!["claude:frontend-ui".into()],
+                    ..Default::default()
+                },
+                is_default: false,
+            })
+            .unwrap();
+
+        let resolution = service.resolve_profile(
+            &LaunchProfilePreviewRequest {
+                profile_id: Some(profile.id),
+                use_system_default: false,
+                workspace_name: None,
+                project_id: None,
+                provider_id: None,
+                provider_selection: LaunchProviderSelection::Inherit,
+                cli_tool: Some("claude".into()),
+                runtime_kind: None,
+            },
+            &[],
+            &[],
+            &SharedMcpConfig::default(),
+            &HashMap::new(),
+        );
+
+        assert!(resolution
+            .skills
+            .iter()
+            .any(|skill| skill.id == "claude:rust-patterns"));
+        assert!(!resolution
+            .skills
+            .iter()
+            .any(|skill| skill.id == "claude:frontend-ui"));
+    }
+
+    #[test]
+    fn custom_external_skill_prompt_appends_allowed_skills() {
+        let temp = tempfile::tempdir().unwrap();
+        let claude_root = temp.path().join("claude").join("skills");
+        write_external_skill(
+            &claude_root,
+            "rust-patterns",
+            "---\nname: Idiomatic Rust\ndescription: Prefer type-safe Rust\n---\nFull content is not embedded.",
+        );
+        let service = test_service_with_external_roots(
+            vec![("claude".to_string(), claude_root)],
+            Some(temp.path().join("plugins")),
+        );
+        let profile = service
+            .create_profile(LaunchProfileDraft {
+                name: Some("Allowed External".into()),
+                alias: None,
+                description: None,
+                provider_id: None,
+                target_tools: vec!["claude".into()],
+                target_runtime: None,
+                mcp_policy: Default::default(),
+                skill_policy: crate::models::launch_profile::LaunchProfileSkillPolicy {
+                    mode: LaunchProfileSkillMode::Custom,
+                    enabled_skill_ids: vec!["claude:rust-patterns".into()],
+                    ..Default::default()
+                },
+                is_default: false,
+            })
+            .unwrap();
+
+        let prompt = service
+            .session_skill_prompt_for_profile(Some(&profile))
+            .expect("allowed skills prompt");
+
+        assert!(prompt.contains("<allowed-skills>"));
+        assert!(prompt.contains("- Idiomatic Rust (Prefer type-safe Rust)"));
+        assert!(!prompt.contains("Full content is not embedded."));
     }
 }

@@ -28,6 +28,7 @@ export interface ThemeSettings {
 
 /** 终端设置 */
 export type TerminalRendererMode = "auto" | "webgl" | "dom";
+export type TerminalThemeMode = "followApp" | "dark" | "light";
 
 export interface TerminalSettings {
   fontSize: number;
@@ -35,6 +36,8 @@ export interface TerminalSettings {
   cursorStyle: string;
   cursorBlink: boolean;
   scrollback: number;
+  /** 终端主题: followApp 跟随应用, dark 深色终端, light 浅色终端 */
+  themeMode: TerminalThemeMode;
   /** 终端渲染器: auto 默认优先 WebGL, webgl 强制尝试, dom 诊断降级 */
   rendererMode: TerminalRendererMode;
   /** 用户选择的 Shell ID（如 "pwsh", "cmd"），null 表示自动探测 */

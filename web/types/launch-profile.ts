@@ -20,6 +20,9 @@ export interface LaunchProfileSkillPolicy {
   disabledSkillIds: string[];
   profileSkills: LaunchProfileSkill[];
   includeProjectSkills: boolean;
+  includeExternalClaudeSkills: boolean;
+  includeExternalCodexSkills: boolean;
+  includeExternalPluginSkills: boolean;
   target: "session" | string;
 }
 
@@ -76,7 +79,7 @@ export interface ResolvedMcpServer {
 export interface ResolvedSkill {
   id: string;
   name: string;
-  source: string;
+  source: "builtin" | "profile" | "project" | "user" | string;
   enabled: boolean;
   projectId?: string | null;
   projectPath?: string | null;
@@ -115,6 +118,9 @@ export function defaultLaunchProfileDraft(provider?: Provider | null): LaunchPro
       disabledSkillIds: [],
       profileSkills: [],
       includeProjectSkills: true,
+      includeExternalClaudeSkills: true,
+      includeExternalCodexSkills: true,
+      includeExternalPluginSkills: true,
       target: "session",
     },
     isDefault: false,

@@ -26,8 +26,15 @@ export default function TerminalSection({ value, onChange }: TerminalSectionProp
           <Label>{t("fontSize")}</Label>
           <Input
             type="number"
+            min={10}
+            max={32}
+            step={1}
             value={value.fontSize}
             onChange={(e) => update("fontSize", Number(e.target.value))}
+            onBlur={(e) => {
+              const next = Math.min(32, Math.max(10, Number(e.target.value) || 15));
+              if (next !== value.fontSize) update("fontSize", next);
+            }}
           />
         </div>
         <div className="flex flex-col gap-1 flex-1">
@@ -37,6 +44,24 @@ export default function TerminalSection({ value, onChange }: TerminalSectionProp
             onChange={(e) => update("fontFamily", e.target.value)}
           />
         </div>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <Label>{t("terminalTheme")}</Label>
+        <select
+          value={value.themeMode ?? "followApp"}
+          onChange={(e) => update("themeMode", e.target.value as TerminalSettings["themeMode"])}
+          className="h-9 px-2 rounded-md text-[13px] outline-none"
+          style={{
+            border: "1px solid var(--app-border)",
+            background: "var(--app-content)",
+            color: "var(--app-text-primary)",
+          }}
+        >
+          <option value="followApp">{t("terminalThemeFollowApp")}</option>
+          <option value="dark">{t("terminalThemeDark")}</option>
+          <option value="light">{t("terminalThemeLight")}</option>
+        </select>
       </div>
 
       <div className="flex gap-2 items-end">

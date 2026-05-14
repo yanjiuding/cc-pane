@@ -408,6 +408,75 @@ impl HistoryRepository {
         }
     }
 
+    pub fn find_by_resume_session_id(
+        &self,
+        resume_session_id: &str,
+    ) -> Result<Option<LaunchRecord>, String> {
+        let conn = self.db.connection().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT
+                    id,
+                    project_id,
+                    project_name,
+                    project_path,
+                    launched_at,
+                    pty_session_id,
+                    COALESCE(resume_session_id, claude_session_id) AS resume_session_id,
+                    COALESCE(cli_tool, 'none') AS cli_tool,
+                    COALESCE(runtime_kind, 'local') AS runtime_kind,
+                    wsl_distro,
+                    last_prompt,
+                    workspace_name,
+                    workspace_path,
+                    launch_cwd,
+                    provider_id,
+                    provider_selection,
+                    launch_profile_id,
+                    COALESCE(workspace_snapshot_id, workspace_session_id) AS workspace_snapshot_id
+                 FROM launch_history
+                 WHERE resume_session_id = ?1 OR claude_session_id = ?1
+                 ORDER BY launched_at DESC
+                 LIMIT 1",
+            )
+            .map_err(|e| {
+                error!(table = "launch_history", resume_session_id = %resume_session_id, err = %e, "SQL prepare find_by_resume_session_id failed");
+                e.to_string()
+            })?;
+
+        let result = stmt.query_row(rusqlite::params![resume_session_id], |row| {
+            Ok(LaunchRecord {
+                id: row.get(0)?,
+                project_id: row.get(1)?,
+                project_name: row.get(2)?,
+                project_path: row.get(3)?,
+                launched_at: row.get(4)?,
+                pty_session_id: row.get(5)?,
+                resume_session_id: row.get(6)?,
+                cli_tool: row.get(7)?,
+                runtime_kind: row.get(8)?,
+                wsl_distro: row.get(9)?,
+                last_prompt: row.get(10)?,
+                workspace_name: row.get(11)?,
+                workspace_path: row.get(12)?,
+                launch_cwd: row.get(13)?,
+                provider_id: row.get(14)?,
+                provider_selection: row.get(15)?,
+                launch_profile_id: row.get(16)?,
+                workspace_snapshot_id: row.get(17)?,
+            })
+        });
+
+        match result {
+            Ok(record) => Ok(Some(record)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => {
+                error!(table = "launch_history", resume_session_id = %resume_session_id, err = %e, "SQL find_by_resume_session_id failed");
+                Err(e.to_string())
+            }
+        }
+    }
+
     pub fn find_by_launch_id(&self, launch_id: &str) -> Result<Option<LaunchRecord>, String> {
         let conn = self.db.connection().map_err(|e| e.to_string())?;
         let mut stmt = conn

@@ -44,6 +44,7 @@ import {
   createTerminalRendererController,
   type TerminalRendererController,
 } from "./terminalRendererController";
+import { resolveTerminalRendererModeForSession } from "./terminalRenderer";
 import { getTerminalTheme, type TerminalThemePalette } from "./terminalTheme";
 import "@xterm/xterm/css/xterm.css";
 
@@ -61,12 +62,33 @@ async function getCachedBuildNumber(): Promise<number> {
   return buildNumberPromise;
 }
 
-import type { CliTool, CreateSessionRequest, SshConnectionInfo, TerminalRendererMode, WslLaunchInfo } from "@/types";
+import type { CliTool, CreateSessionRequest, SshConnectionInfo, TerminalRendererMode, TerminalThemeMode, WslLaunchInfo } from "@/types";
 
 const TERMINAL_DEBUG = import.meta.env.DEV;
 const IS_WINDOWS = typeof navigator !== "undefined" && navigator.platform.startsWith("Win");
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+const DEFAULT_TERMINAL_FONT_SIZE = 15;
+const MIN_TERMINAL_FONT_SIZE = 10;
+const MAX_TERMINAL_FONT_SIZE = 32;
+const DEFAULT_TERMINAL_FONT_FAMILY = 'Consolas, "Courier New", "Microsoft YaHei Mono", "Noto Sans Mono CJK SC", "PingFang SC", monospace';
 const DEFAULT_TERMINAL_SCROLLBACK = 20_000;
+
+type TerminalCursorStyle = "block" | "underline" | "bar";
+
+function normalizeTerminalFontSize(value?: number | null): number {
+  if (!Number.isFinite(value)) return DEFAULT_TERMINAL_FONT_SIZE;
+  const rounded = Math.round(value as number);
+  return Math.min(MAX_TERMINAL_FONT_SIZE, Math.max(MIN_TERMINAL_FONT_SIZE, rounded));
+}
+
+function normalizeTerminalFontFamily(value?: string | null): string {
+  const trimmed = value?.trim();
+  return trimmed || DEFAULT_TERMINAL_FONT_FAMILY;
+}
+
+function normalizeTerminalCursorStyle(value?: string | null): TerminalCursorStyle {
+  return value === "underline" || value === "bar" ? value : "block";
+}
 
 function resolveCliTool(cliTool?: CliTool, launchClaude?: boolean): string {
   return cliTool ?? (launchClaude ? "claude" : "none");
@@ -155,7 +177,12 @@ export interface TerminalViewHandle {
 const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
   function TerminalView(props, ref) {
     const isDark = useThemeStore((s) => s.isDark);
-    const terminalTheme = getTerminalTheme(isDark);
+    const terminalThemeMode = useSettingsStore((s): TerminalThemeMode => s.settings?.terminal.themeMode ?? "followApp");
+    const terminalFontSize = useSettingsStore((s) => normalizeTerminalFontSize(s.settings?.terminal.fontSize));
+    const terminalFontFamily = useSettingsStore((s) => normalizeTerminalFontFamily(s.settings?.terminal.fontFamily));
+    const terminalCursorStyle = useSettingsStore((s) => normalizeTerminalCursorStyle(s.settings?.terminal.cursorStyle));
+    const terminalCursorBlink = useSettingsStore((s) => s.settings?.terminal.cursorBlink ?? true);
+    const terminalTheme = getTerminalTheme(isDark, terminalThemeMode);
     const terminalRef = useRef<HTMLDivElement>(null);
     const terminalInstanceRef = useRef<Terminal | null>(null);
     const fitAddonRef = useRef<FitAddon | null>(null);
@@ -192,7 +219,19 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     const lastDragFitAtRef = useRef(0);
     const isActiveRef = useRef(props.isActive);
     const terminalRendererMode = useSettingsStore((s) => s.settings?.terminal.rendererMode ?? "auto");
-    const terminalRendererModeRef = useRef<TerminalRendererMode>(terminalRendererMode);
+    const effectiveCliTool = resolveCliTool(props.cliTool, props.launchClaude);
+    const resolveRendererMode = useCallback((mode: TerminalRendererMode) => {
+      return resolveTerminalRendererModeForSession(mode, {
+        cliToolId: effectiveCliTool,
+        isWindows: IS_WINDOWS,
+      });
+    }, [effectiveCliTool]);
+    const terminalRendererModeRef = useRef<TerminalRendererMode>(
+      resolveTerminalRendererModeForSession(terminalRendererMode, {
+        cliToolId: effectiveCliTool,
+        isWindows: IS_WINDOWS,
+      })
+    );
 
     const debugLog = useCallback((event: string, payload: Record<string, unknown> = {}) => {
       if (!TERMINAL_DEBUG) return;
@@ -203,24 +242,21 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         projectPath: props.projectPath,
         propSessionId: props.sessionId ?? null,
         sessionId: currentSessionIdRef.current ?? props.sessionId ?? null,
-        cliTool: resolveCliTool(props.cliTool, props.launchClaude),
+        cliTool: effectiveCliTool,
         isActive: props.isActive,
         renderer: rendererControllerRef.current?.getActiveRenderer() ?? null,
         xtermBuffer: terminalInstanceRef.current?.buffer.active.type ?? null,
         ...payload,
       });
     }, [
-      props.cliTool,
+      effectiveCliTool,
       props.isActive,
-      props.launchClaude,
       props.paneId,
       props.projectPath,
       props.sessionId,
       props.tabId,
     ]);
-    const keepCliOutputInNormalBuffer = shouldKeepCliOutputInNormalBuffer(
-      resolveCliTool(props.cliTool, props.launchClaude),
-    );
+    const keepCliOutputInNormalBuffer = shouldKeepCliOutputInNormalBuffer(effectiveCliTool);
     const renderTerminalData = useCallback((data: string) => {
       if (!keepCliOutputInNormalBuffer) return data;
       return stripAlternateBufferSequences(data);
@@ -319,10 +355,11 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     });
 
     useEffect(() => {
-      terminalRendererModeRef.current = terminalRendererMode;
-      rendererControllerRef.current?.configure(terminalRendererMode);
+      const effectiveRendererMode = resolveRendererMode(terminalRendererMode);
+      terminalRendererModeRef.current = effectiveRendererMode;
+      rendererControllerRef.current?.configure(effectiveRendererMode);
       layoutSchedulerRef.current?.schedule("settings.renderer-mode");
-    }, [terminalRendererMode]);
+    }, [resolveRendererMode, terminalRendererMode]);
 
     useEffect(() => {
       if (typeof window === "undefined") return;
@@ -595,11 +632,15 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
         const termSettings = useSettingsStore.getState().settings?.terminal;
         const scrollback = termSettings?.scrollback ?? DEFAULT_TERMINAL_SCROLLBACK;
-        const fontFamily = termSettings?.fontFamily || 'Consolas, "Courier New", "Microsoft YaHei Mono", "Noto Sans Mono CJK SC", "PingFang SC", monospace';
+        const fontSize = normalizeTerminalFontSize(termSettings?.fontSize);
+        const fontFamily = normalizeTerminalFontFamily(termSettings?.fontFamily);
+        const cursorStyle = normalizeTerminalCursorStyle(termSettings?.cursorStyle);
+        const cursorBlink = termSettings?.cursorBlink ?? true;
         const term = new Terminal({
           allowProposedApi: true,
-          cursorBlink: true,
-          fontSize: 14,
+          cursorBlink,
+          cursorStyle,
+          fontSize,
           scrollback,
           fontFamily,
           ...(navigator.platform.startsWith('Win') && buildNumber && buildNumber > 0 && {
@@ -639,6 +680,9 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         debugLog("xterm.ready", {
           scrollback,
           fontFamily,
+          fontSize,
+          cursorStyle,
+          cursorBlink,
           isDark,
           initialBuffer: term.buffer.active.type,
           rendererMode: terminalRendererModeRef.current,
@@ -672,7 +716,10 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           const response = buildOscColorReply(
             ident,
             data,
-            getTerminalTheme(useThemeStore.getState().isDark),
+            getTerminalTheme(
+              useThemeStore.getState().isDark,
+              useSettingsStore.getState().settings?.terminal.themeMode,
+            ),
           );
           debugLog("terminal.osc.query", {
             sessionId,
@@ -1180,6 +1227,22 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       applyTerminalElementTheme(term, terminalTheme);
       layoutSchedulerRef.current?.schedule("theme.change");
     }, [terminalTheme]);
+
+    useEffect(() => {
+      const term = terminalInstanceRef.current;
+      if (!term) return;
+
+      term.options.fontSize = terminalFontSize;
+      term.options.fontFamily = terminalFontFamily;
+      term.options.cursorStyle = terminalCursorStyle;
+      term.options.cursorBlink = terminalCursorBlink;
+      layoutSchedulerRef.current?.schedule("settings.terminal-appearance", { force: true });
+    }, [
+      terminalCursorBlink,
+      terminalCursorStyle,
+      terminalFontFamily,
+      terminalFontSize,
+    ]);
 
     useEffect(() => {
       if (!IS_WINDOWS) return;

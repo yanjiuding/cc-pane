@@ -21,7 +21,7 @@ import {
   getWorkspaceProjectKind,
   resolveWorkspaceProjectLaunchOptions,
 } from "@/utils";
-import type { Workspace, WorkspaceProject, OpenTerminalOptions, SpecEntry, SshConnectionInfo } from "@/types";
+import type { Workspace, WorkspaceProject, OpenTerminalOptions, SpecEntry, SshConnectionInfo, WorkspaceLaunchEnvironment } from "@/types";
 import { buildSidebarCliLaunchItems } from "./launchMenu";
 
 interface ProjectListViewProps {
@@ -150,19 +150,24 @@ export default function ProjectListView({
       {projects.map((project) => {
         const isSsh = !!project.ssh;
         const projectKind = getWorkspaceProjectKind(project);
-        const showExplicitWslLaunch = isWindows
-          && defaultEnvironment === "wsl"
+        const canLaunchWsl = isWindows
           && !resolveWorkspaceProjectLaunchOptions({
             workspace: ws,
             project,
             machines: sshMachines,
             environment: "wsl",
           }).issue;
-        const cliLaunchItems = buildSidebarCliLaunchItems(t, showExplicitWslLaunch);
+        const canLaunchSsh = !resolveWorkspaceProjectLaunchOptions({
+          workspace: ws,
+          project,
+          machines: sshMachines,
+          environment: "ssh",
+        }).issue;
+        const cliLaunchItems = buildSidebarCliLaunchItems(t, canLaunchWsl, canLaunchSsh);
         const displayName = project.alias || (isSsh ? getSshDisplayName(project.ssh!) : getProjectName(project.path));
         const launchProject = (
           cliTool?: OpenTerminalOptions["cliTool"],
-          environment?: typeof defaultEnvironment,
+          environment?: WorkspaceLaunchEnvironment,
         ) => {
           const { options, issue } = resolveWorkspaceProjectLaunchOptions({
             workspace: ws,
@@ -213,6 +218,22 @@ export default function ProjectListView({
               <ContextMenuItem onClick={() => launchProject()}>
                 <Terminal /> {t("openTerminal")}
               </ContextMenuItem>
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <Terminal /> {t("workspaceEnv.launchThisTime", { defaultValue: "本次选择环境" })}
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent className="w-48">
+                  <ContextMenuItem onClick={() => launchProject(undefined, "local")}>
+                    <Terminal /> {t("workspaceEnv.local", { defaultValue: "本机" })}
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => launchProject(undefined, "wsl")}>
+                    <Terminal /> {t("workspaceEnv.wsl", { defaultValue: "WSL" })}
+                  </ContextMenuItem>
+                  <ContextMenuItem onClick={() => launchProject(undefined, "ssh")}>
+                    <Terminal /> {t("workspaceEnv.ssh", { defaultValue: "SSH" })}
+                  </ContextMenuItem>
+                </ContextMenuSubContent>
+              </ContextMenuSub>
               {cliLaunchItems.map((item) => (
                 <ContextMenuItem
                   key={item.key}

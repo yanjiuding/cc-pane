@@ -50,7 +50,9 @@
   "cliToolGlm": "GLM CLI",
   "cliToolOpenCode": "OpenCode",
   "cliToolCursor": "Cursor CLI",
+  "cliLocalVariant": "{{label}} (Local)",
   "cliWslVariant": "{{label}} (WSL)",
+  "cliSshVariant": "{{label}} (SSH)",
   "openFolder": "Reveal in System Explorer",
   "copyPath": "Copy Path",
   "absolutePath": "Absolute Path",
@@ -270,5 +272,6 @@
   "workspaceEnv.savedAll": "Environment configuration saved",
   "workspaceEnv.discardTitle": "Discard unsaved changes?",
   "workspaceEnv.discardDescription": "This workspace environment configuration has unsaved changes. Closing now will lose them.",
-  "workspaceEnv.defaultHint": "Right-click workspace launches for Claude / Codex use this default environment."
+  "workspaceEnv.defaultHint": "Right-click workspace launches for Claude / Codex use this default environment.",
+  "workspaceEnv.launchThisTime": "Choose Environment For This Launch"
 }

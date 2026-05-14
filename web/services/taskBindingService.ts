@@ -8,6 +8,10 @@ import type {
   UpdateTaskBindingRequest,
   TaskBindingQuery,
   TaskBindingQueryResult,
+  RegisterPlanLeaderRequest,
+  RegisterPlanWorkerRequest,
+  PlanCollaborationKey,
+  PlanCollaboration,
 } from "@/types";
 
 export const taskBindingService = {
@@ -39,5 +43,31 @@ export const taskBindingService = {
   /** 查询编排任务列表 */
   async query(query: TaskBindingQuery = {}): Promise<TaskBindingQueryResult> {
     return invoke<TaskBindingQueryResult>("query_task_bindings", { query });
+  },
+
+  /** 登记 Plan-to-Codex leader */
+  async registerPlanLeader(request: RegisterPlanLeaderRequest): Promise<TaskBinding> {
+    return invoke<TaskBinding>("register_plan_leader", { request });
+  },
+
+  /** 登记 Plan-to-Codex worker */
+  async registerPlanWorker(request: RegisterPlanWorkerRequest): Promise<TaskBinding> {
+    return invoke<TaskBinding>("register_plan_worker", { request });
+  },
+
+  /** 查询 Plan 协作关系 */
+  async getPlanCollaboration(
+    key: PlanCollaborationKey,
+    verbose = false
+  ): Promise<PlanCollaboration> {
+    return invoke<PlanCollaboration>("get_plan_collaboration", { key, verbose });
+  },
+
+  /** 校准 Plan 协作关系的 live 状态 */
+  async reconcilePlanCollaboration(
+    key: PlanCollaborationKey,
+    verbose = false
+  ): Promise<PlanCollaboration> {
+    return invoke<PlanCollaboration>("reconcile_plan_collaboration", { key, verbose });
   },
 };

@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+const DEFAULT_TERMINAL_FONT_SIZE: u16 = 15;
+const MIN_TERMINAL_FONT_SIZE: u16 = 10;
+const MAX_TERMINAL_FONT_SIZE: u16 = 32;
+
 /// 应用设置
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +64,9 @@ pub struct TerminalSettings {
     pub cursor_style: String, // "block" | "underline" | "bar"
     pub cursor_blink: bool,
     pub scrollback: u32,
+    /// 终端主题: "followApp" | "dark" | "light"
+    #[serde(default = "default_terminal_theme_mode")]
+    pub theme_mode: String,
     /// 终端渲染器: "auto" | "webgl" | "dom"
     #[serde(default = "default_terminal_renderer_mode")]
     pub renderer_mode: String,
@@ -76,10 +83,20 @@ impl TerminalSettings {
         if self.scrollback == crate::constants::terminal::LEGACY_DEFAULT_SCROLLBACK {
             self.scrollback = crate::constants::terminal::DEFAULT_SCROLLBACK;
         }
+        if self.font_size < MIN_TERMINAL_FONT_SIZE || self.font_size > MAX_TERMINAL_FONT_SIZE {
+            self.font_size = DEFAULT_TERMINAL_FONT_SIZE;
+        }
+        if !matches!(self.theme_mode.as_str(), "followApp" | "dark" | "light") {
+            self.theme_mode = default_terminal_theme_mode();
+        }
         if !matches!(self.renderer_mode.as_str(), "auto" | "webgl" | "dom") {
             self.renderer_mode = default_terminal_renderer_mode();
         }
     }
+}
+
+fn default_terminal_theme_mode() -> String {
+    "followApp".to_string()
 }
 
 fn default_terminal_renderer_mode() -> String {
@@ -289,11 +306,12 @@ impl Default for ThemeSettings {
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
-            font_size: 14,
+            font_size: DEFAULT_TERMINAL_FONT_SIZE,
             font_family: "Consolas, \"Courier New\", monospace".to_string(),
             cursor_style: "block".to_string(),
             cursor_blink: true,
             scrollback: crate::constants::terminal::DEFAULT_SCROLLBACK,
+            theme_mode: default_terminal_theme_mode(),
             renderer_mode: default_terminal_renderer_mode(),
             shell: None,
             disable_conpty_sanitize: None,
@@ -515,6 +533,18 @@ mod tests {
         settings.merge_missing_defaults();
 
         assert_eq!(settings.renderer_mode, "auto");
+    }
+
+    #[test]
+    fn terminal_merge_missing_defaults_normalizes_appearance_values() {
+        let mut settings = TerminalSettings::default();
+        settings.font_size = 5;
+        settings.theme_mode = "unknown".to_string();
+
+        settings.merge_missing_defaults();
+
+        assert_eq!(settings.font_size, DEFAULT_TERMINAL_FONT_SIZE);
+        assert_eq!(settings.theme_mode, "followApp");
     }
 
     #[test]

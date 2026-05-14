@@ -17,9 +17,9 @@ describe("terminalBufferMode", () => {
     expect(stripAlternateBufferSequences("a\x1b[?1049hb\x1b[?1049lc")).toBe("abc");
   });
 
-  it("keeps Codex and Claude output in the normal buffer", () => {
+  it("keeps Codex output in the normal buffer", () => {
     expect(shouldKeepCliOutputInNormalBuffer("codex")).toBe(true);
-    expect(shouldKeepCliOutputInNormalBuffer("claude")).toBe(true);
+    expect(shouldKeepCliOutputInNormalBuffer("claude")).toBe(false);
     expect(shouldKeepCliOutputInNormalBuffer("none")).toBe(false);
   });
 });

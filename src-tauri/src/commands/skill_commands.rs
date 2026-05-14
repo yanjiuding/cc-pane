@@ -1,6 +1,9 @@
 use crate::services::skill_service::{SkillInfo, SkillSummary};
 use crate::services::SkillService;
+use crate::services::{SkillMarketEntry, SkillMarketService};
 use crate::utils::{validate_path, AppResult};
+use cc_panes_core::models::DiscoveredExternalSkill;
+use cc_panes_core::services::{ExternalSkillRegistry, InstalledUserSkill};
 use std::sync::Arc;
 use tauri::State;
 use tracing::debug;
@@ -58,4 +61,59 @@ pub fn copy_skill(
     validate_path(&source_project)?;
     validate_path(&target_project)?;
     service.copy_skill(&source_project, &target_project, &name)
+}
+
+#[tauri::command]
+pub fn list_external_skills(
+    source: Option<String>,
+    registry: State<'_, Arc<ExternalSkillRegistry>>,
+) -> AppResult<Vec<DiscoveredExternalSkill>> {
+    let source = source
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+    match source.as_deref() {
+        None => registry.list(),
+        Some("claude" | "codex" | "plugin") => {
+            registry.list_by_source_filter(source.as_deref().unwrap())
+        }
+        Some(other) => Err(format!(
+            "Unsupported external skill source '{}'; expected claude, codex, or plugin",
+            other
+        )
+        .into()),
+    }
+}
+
+#[tauri::command]
+pub async fn list_skill_market_entries(
+    service: State<'_, Arc<SkillMarketService>>,
+) -> AppResult<Vec<SkillMarketEntry>> {
+    service.list_market_entries().await
+}
+
+#[tauri::command]
+pub fn list_user_skills(
+    service: State<'_, Arc<SkillMarketService>>,
+) -> AppResult<Vec<InstalledUserSkill>> {
+    service.list_user_skills()
+}
+
+#[tauri::command]
+pub async fn install_market_skill(
+    skill_id: String,
+    service: State<'_, Arc<SkillMarketService>>,
+) -> AppResult<InstalledUserSkill> {
+    debug!(skill_id = %skill_id, "cmd::install_market_skill");
+    service.install_market_skill(&skill_id).await
+}
+
+#[tauri::command]
+pub fn remove_user_skill(
+    skill_id: String,
+    service: State<'_, Arc<SkillMarketService>>,
+) -> AppResult<bool> {
+    debug!(skill_id = %skill_id, "cmd::remove_user_skill");
+    service.remove_user_skill(&skill_id)
 }

@@ -101,9 +101,10 @@ describe("useSettingsStore", () => {
       const defaults = useSettingsStore.getState().getDefaults();
 
       expect(defaults.theme.mode).toBe("dark");
-      expect(defaults.terminal.fontSize).toBe(14);
+      expect(defaults.terminal.fontSize).toBe(15);
       expect(defaults.terminal.cursorStyle).toBe("block");
       expect(defaults.terminal.scrollback).toBe(20000);
+      expect(defaults.terminal.themeMode).toBe("followApp");
       expect(defaults.terminal.rendererMode).toBe("auto");
       expect(defaults.proxy.enabled).toBe(false);
       expect(defaults.general.language).toBe("zh-CN");

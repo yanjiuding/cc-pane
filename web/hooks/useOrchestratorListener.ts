@@ -12,6 +12,7 @@
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { toast } from "sonner";
 import {
   usePanesStore,
   useActivityBarStore,
@@ -20,7 +21,7 @@ import {
 } from "@/stores";
 import { isTauriReady } from "@/utils";
 
-import type { CliTool, LaunchProviderSelection } from "@/types";
+import type { CliTool, LaunchProviderSelection, SshConnectionInfo, WslLaunchInfo } from "@/types";
 
 interface OrchestratorLaunchPayload {
   taskId: string;
@@ -35,6 +36,11 @@ interface OrchestratorLaunchPayload {
   resumeId?: string;  // 对应 Rust OrchestratorLaunchEvent.resume_id
   paneId?: string;
   cliTool?: string;
+  runtimeKind?: string;
+  runtimeSource?: string;
+  notice?: string;
+  wsl?: WslLaunchInfo;
+  ssh?: SshConnectionInfo;
 }
 
 export function useOrchestratorListener() {
@@ -59,6 +65,8 @@ export function useOrchestratorListener() {
             title,
             paneId: targetPaneId,
             cliTool: rawCliTool,
+            wsl,
+            ssh,
           } = event.payload;
 
           console.info(
@@ -96,8 +104,13 @@ export function useOrchestratorListener() {
             providerSelection,
             workspacePath,
             cliTool: resolvedCliTool,
+            wsl,
+            ssh,
             customTitle: title,
           });
+          if (event.payload.notice) {
+            toast.info(event.payload.notice);
+          }
         }
       )
       .then((fn) => unlisteners.push(fn));

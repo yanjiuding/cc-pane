@@ -101,6 +101,7 @@ use commands::{
     // Orchestrator 命令
     get_orchestrator_port,
     get_orchestrator_token,
+    get_plan_collaboration,
     get_plan_content,
     get_popup_tab_data,
     get_project,
@@ -142,6 +143,8 @@ use commands::{
     init_ccpanes,
     // Local History 命令
     init_project_history,
+    // Skill 命令
+    install_market_skill,
     is_fullscreen,
     // Worktree 命令
     is_git_repo,
@@ -155,6 +158,7 @@ use commands::{
     list_deleted_files,
     // Local History - 目录级历史 + 最近更改
     list_directory_changes,
+    list_external_skills,
     list_file_versions,
     list_file_versions_by_branch,
     list_labels,
@@ -168,11 +172,12 @@ use commands::{
     list_projects,
     // Provider 命令
     list_providers,
-    // Skill 命令
+    list_skill_market_entries,
     list_skills,
     list_specs,
     // SSH Machine 命令
     list_ssh_machines,
+    list_user_skills,
     list_workspace_snapshots,
     // Workspace 命令
     list_workspaces,
@@ -195,11 +200,16 @@ use commands::{
     read_clipboard_file_paths,
     read_config_dir_info,
     read_session_state,
+    reconcile_plan_collaboration,
+    register_plan_child,
+    register_plan_leader,
+    register_plan_worker,
     remove_mcp_server,
     remove_project,
     remove_provider,
     remove_shared_mcp_server,
     remove_ssh_machine,
+    remove_user_skill,
     remove_workspace_project,
     remove_worktree,
     rename_workspace,
@@ -273,12 +283,13 @@ use repository::{
     TodoRepository,
 };
 use services::{
-    FileSystemService, HistoryService, JournalService, LaunchHistoryService, LaunchProfileService,
-    McpConfigService, MemoryService, NotificationService, OrchestratorService, PlanService,
-    ProcessMonitorService, ProjectCliHooksService, ProjectContextService, ProjectService,
-    ProviderService, ScreenshotService, SessionRestoreService, SettingsService, SharedMcpService,
-    SkillService, SpecService, SshCredentialService, SshMachineService, TaskBindingService,
-    TerminalService, TodoService, WorkspaceService, WorktreeService,
+    ExternalSkillRegistry, FileSystemService, HistoryService, JournalService, LaunchHistoryService,
+    LaunchProfileService, McpConfigService, MemoryService, NotificationService,
+    OrchestratorService, PlanService, ProcessMonitorService, ProjectCliHooksService,
+    ProjectContextService, ProjectService, ProviderService, ScreenshotService,
+    SessionRestoreService, SettingsService, SharedMcpService, SkillMarketService, SkillService,
+    SpecService, SshCredentialService, SshMachineService, TaskBindingService, TerminalService,
+    TodoService, WorkspaceService, WorktreeService,
 };
 use std::sync::Arc;
 use utils::AppPaths;
@@ -869,13 +880,6 @@ pub fn run() {
     let worktree_service = Arc::new(WorktreeService::new());
     let workspace_service = Arc::new(WorkspaceService::new(app_paths.workspaces_dir()));
     let provider_service = Arc::new(ProviderService::new(app_paths.providers_path()));
-    let launch_profile_service =
-        Arc::new(LaunchProfileService::new(app_paths.launch_profiles_path()));
-    let notification_service = Arc::new(NotificationService::new());
-    let mcp_config_service = Arc::new(McpConfigService::new());
-    let skill_service = Arc::new(SkillService::new());
-    let plan_service = Arc::new(PlanService::new());
-    let filesystem_service = Arc::new(FileSystemService::new());
     let cli_registry = {
         let mut reg = cc_cli_adapters::CliToolRegistry::new();
         reg.register(Arc::new(cc_cli_adapters::ClaudeAdapter::new()));
@@ -887,6 +891,20 @@ pub fn run() {
         reg.register(Arc::new(cc_cli_adapters::CursorAdapter::new()));
         Arc::new(reg)
     };
+    let external_skill_registry = Arc::new(ExternalSkillRegistry::new(cli_registry.clone()));
+    let launch_profile_service = Arc::new(LaunchProfileService::new_with_external_skill_registry(
+        app_paths.launch_profiles_path(),
+        external_skill_registry.clone(),
+    ));
+    let notification_service = Arc::new(NotificationService::new());
+    let mcp_config_service = Arc::new(McpConfigService::new());
+    let skill_service = Arc::new(SkillService::new());
+    let skill_market_service = Arc::new(SkillMarketService::new(
+        app_paths.skills_dir(),
+        app_paths.user_skills_dir(),
+    ));
+    let plan_service = Arc::new(PlanService::new());
+    let filesystem_service = Arc::new(FileSystemService::new());
     let project_cli_hooks_service = Arc::new(ProjectCliHooksService::new(cli_registry.clone()));
     let ssh_credential_service = Arc::new(SshCredentialService::new());
     let terminal_service = Arc::new(TerminalService::new(
@@ -973,6 +991,8 @@ pub fn run() {
         .manage(spec_service)
         .manage(mcp_config_service)
         .manage(skill_service)
+        .manage(skill_market_service)
+        .manage(external_skill_registry)
         .manage(plan_service)
         .manage(filesystem_service)
         .manage(memory_service)
@@ -1112,10 +1132,12 @@ pub fn run() {
                 let shared_mcp_svc = app.state::<Arc<SharedMcpService>>();
                 let proj_svc = app.state::<Arc<ProjectService>>();
                 let ws_svc_orch = app.state::<Arc<WorkspaceService>>();
+                let ssh_machine_svc = app.state::<Arc<SshMachineService>>();
                 let todo_svc = app.state::<Arc<TodoService>>();
                 let tb_svc = app.state::<Arc<TaskBindingService>>();
                 let spec_svc = app.state::<Arc<SpecService>>();
                 let skill_svc = app.state::<Arc<SkillService>>();
+                let external_skill_registry = app.state::<Arc<ExternalSkillRegistry>>();
                 let lh_svc = app.state::<Arc<LaunchHistoryService>>();
                 let notif_svc = app.state::<Arc<NotificationService>>();
                 let settings_svc = app.state::<Arc<SettingsService>>();
@@ -1127,10 +1149,12 @@ pub fn run() {
                     shared_mcp_svc.inner().clone(),
                     proj_svc.inner().clone(),
                     ws_svc_orch.inner().clone(),
+                    ssh_machine_svc.inner().clone(),
                     todo_svc.inner().clone(),
                     tb_svc.inner().clone(),
                     spec_svc.inner().clone(),
                     skill_svc.inner().clone(),
+                    external_skill_registry.inner().clone(),
                     lh_svc.inner().clone(),
                     notif_svc.inner().clone(),
                     settings_svc.inner().clone(),
@@ -1523,10 +1547,15 @@ pub fn run() {
             remove_mcp_server,
             // Skill 命令
             list_skills,
+            list_external_skills,
             get_skill,
             save_skill,
             delete_skill,
             copy_skill,
+            list_skill_market_entries,
+            list_user_skills,
+            install_market_skill,
+            remove_user_skill,
             // Plan 命令
             list_plans,
             get_plan_content,
@@ -1558,6 +1587,11 @@ pub fn run() {
             update_task_binding,
             delete_task_binding,
             query_task_bindings,
+            register_plan_leader,
+            register_plan_worker,
+            register_plan_child,
+            get_plan_collaboration,
+            reconcile_plan_collaboration,
             // Memory 命令
             search_memory,
             store_memory,

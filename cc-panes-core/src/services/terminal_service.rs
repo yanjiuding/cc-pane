@@ -358,56 +358,85 @@ pub struct SessionOutput {
     pub lines: Vec<String>,
 }
 
-/// 检测 Claude Code spinner 行（无实质内容，应被过滤）
+fn is_spinner_decoration(c: char) -> bool {
+    matches!(
+        c,
+        '✻' | '✽' | '✶' | '✢' | '●' | '·' | '*' | '○' | '◉' | '◌' | '◦' | '•'
+    )
+}
+
+fn normalize_spinner_line(line: &str) -> String {
+    let trimmed = line.trim().trim_start_matches(|c: char| {
+        is_spinner_decoration(c) || c.is_ascii_digit() || c.is_whitespace()
+    });
+    let mut normalized = String::with_capacity(trimmed.len());
+    let mut previous_ascii_letter = None;
+
+    for ch in trimmed.chars() {
+        if is_spinner_decoration(ch) || ch.is_ascii_digit() {
+            continue;
+        }
+
+        if ch.is_ascii_alphabetic() {
+            let lower = ch.to_ascii_lowercase();
+            if previous_ascii_letter == Some(lower) {
+                continue;
+            }
+            normalized.push(lower);
+            previous_ascii_letter = Some(lower);
+            continue;
+        }
+
+        previous_ascii_letter = None;
+        if ch.is_whitespace() {
+            if !normalized.ends_with(' ') {
+                normalized.push(' ');
+            }
+        } else {
+            normalized.push(ch);
+        }
+    }
+
+    normalized.trim().to_string()
+}
+
+/// 检测 Claude/Codex 动态状态行（无实质内容，应被过滤）
 fn is_spinner_line(line: &str) -> bool {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
+    let text = normalize_spinner_line(line);
+    if text.is_empty() {
         return false;
     }
 
     const SPINNER_WORDS: &[&str] = &[
-        "Reticulating",
-        "Swirling",
-        "Whirlpooling",
-        "Quantumizing",
-        "Synthesizing",
-        "Materializing",
-        "Crystallizing",
-        "Harmonizing",
-        "Calibrating",
-        "Percolating",
-        "Amalgamating",
-        "Coalescing",
+        "reticulating",
+        "swirling",
+        "whirlpooling",
+        "quantumizing",
+        "synthesizing",
+        "materializing",
+        "crystalizing",
+        "harmonizing",
+        "calibrating",
+        "percolating",
+        "amalgamating",
+        "coalescing",
+        "bondogling",
+        "churned",
     ];
 
-    /*
+    if SPINNER_WORDS.iter().any(|word| text.starts_with(word)) {
+        return true;
+    }
 
-    let text = trimmed.trim_start_matches(|c: char| {
-        matches!(
-            c,
-            '✻' | '✽' | '✶' | '✢' | '●' | '·' | '*' | ' ' | '○' | '◉' | '◌'
-        )
-    });
-
-    */
-    let text = trimmed.trim_start_matches(|c: char| {
-        matches!(
-            c,
-            '✻' | '✽' | '✶' | '✢' | '●' | '·' | '*' | ' ' | '○' | '◉' | '◌'
-        )
-    });
-
-    SPINNER_WORDS.iter().any(|word| {
-        if let Some(rest) = text.strip_prefix(word) {
-            /*
-            let rest = rest.trim_start_matches('…').trim_start_matches("...");
-            */
-            let rest = rest.trim_start_matches('…').trim_start_matches("...");
-            rest.is_empty() || rest.chars().all(|c| c.is_ascii_digit())
-        } else {
-            false
-        }
-    })
+    text == "thinking more"
+        || text == "almost done thinking"
+        || text.starts_with("thinking more ")
+        || text.starts_with("almost done thinking ")
+        || text == "working"
+        || text.starts_with("working(")
+        || text.starts_with("working (")
+        || text.starts_with("workinw")
+        || text.starts_with("waiting for background terminal")
 }
 
 impl OutputBuffer {
@@ -1103,8 +1132,11 @@ impl TerminalService {
             selected_shared_mcp_config_toml_for_codex(&allowed_mcp_server_ids, &shared_mcp_config);
         let sync_project_hooks =
             LaunchProfileService::should_sync_project_hooks_for_profile(resolved_profile.as_ref());
-        let profile_skill_prompt =
-            LaunchProfileService::session_skill_prompt_for_profile(resolved_profile.as_ref());
+        let profile_skill_prompt = self
+            .launch_profile_service
+            .read()
+            .as_ref()
+            .and_then(|svc| svc.session_skill_prompt_for_profile(resolved_profile.as_ref()));
         let launch_append_system_prompt = merge_session_prompts([
             append_system_prompt.map(str::to_string),
             profile_skill_prompt.clone(),
@@ -2515,6 +2547,27 @@ mod tests {
         let snapshot = replay.snapshot();
         assert_eq!(snapshot.data, "567890");
         assert_eq!(snapshot.buffer_mode, TerminalBufferMode::Normal);
+    }
+
+    #[test]
+    fn test_spinner_line_filters_claude_dynamic_status() {
+        assert!(is_spinner_line("✶ Boondoggling… (44s · ↓ 1.5k tokens)"));
+        assert!(is_spinner_line("✻thinking more"));
+        assert!(is_spinner_line("almost done thinking"));
+        assert!(is_spinner_line(
+            "◦Waiting for background terminal(15m 35s • esc to interrupt)"
+        ));
+    }
+
+    #[test]
+    fn test_spinner_line_filters_garbled_status_fragments() {
+        assert!(is_spinner_line("WWoorrkkiinWngWogorrkkiin1ngg"));
+    }
+
+    #[test]
+    fn test_spinner_line_keeps_real_content() {
+        assert!(!is_spinner_line("可以开工 M-1 Spike。"));
+        assert!(!is_spinner_line("Maven 进程还有 CPU 活动，先继续等。"));
     }
 
     // --- strip_ansi_escapes 单元测试 ---

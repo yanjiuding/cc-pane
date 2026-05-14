@@ -15,12 +15,13 @@ use crate::models::todo::{
 use crate::models::{
     CliTool, LaunchProfile, LaunchProfileDraft, LaunchProfileMcpMode, LaunchProfileMcpPolicy,
     LaunchProfilePreviewRequest, LaunchProfileResolution, LaunchProfileSkillMode,
-    LaunchProfileSkillPolicy, LaunchProviderSelection, Workspace, WslLaunchInfo,
+    LaunchProfileSkillPolicy, LaunchProviderSelection, SshConnectionInfo, Workspace,
+    WorkspaceLaunchEnvironment, WslLaunchInfo,
 };
 use crate::services::{
-    LaunchHistoryService, LaunchProfileService, NotificationRequest, NotificationService,
-    ProjectService, ProviderService, SettingsService, SharedMcpService, SkillService, SpecService,
-    TerminalService, TodoService, WorkspaceService,
+    ExternalSkillRegistry, LaunchHistoryService, LaunchProfileService, NotificationRequest,
+    NotificationService, ProjectService, ProviderService, SettingsService, SharedMcpService,
+    SkillService, SpecService, SshMachineService, TerminalService, TodoService, WorkspaceService,
 };
 use crate::utils::AppPaths;
 use anyhow::Result;
@@ -59,6 +60,9 @@ pub struct LaunchTaskRequest {
     pub provider_selection: Option<String>,
     pub workspace_name: Option<String>,
     pub workspace_path: Option<String>,
+    /// 本次启动运行环境：local / wsl / ssh。未传时保持旧行为，使用 workspace.defaultEnvironment。
+    #[serde(alias = "runtime", alias = "environment")]
+    pub runtime_kind: Option<String>,
     pub title: Option<String>,
     /// 恢复指定 Claude 会话（传入 session UUID）
     pub resume_id: Option<String>,
@@ -76,6 +80,10 @@ pub struct LaunchTaskResponse {
     pub task_id: String,
     pub session_id: String,
     pub status: String,
+    pub runtime_kind: String,
+    pub runtime_source: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
 }
 
 /// 项目信息
@@ -124,6 +132,11 @@ pub struct OrchestratorLaunchEvent {
     pub resume_id: Option<String>,
     pub pane_id: Option<String>,
     pub cli_tool: Option<String>,
+    pub runtime_kind: String,
+    pub runtime_source: String,
+    pub notice: Option<String>,
+    pub wsl: Option<WslLaunchInfo>,
+    pub ssh: Option<SshConnectionInfo>,
 }
 
 /// 文件浏览器导航事件
@@ -163,6 +176,52 @@ fn parse_provider_selection(
         "none" => Ok(LaunchProviderSelection::None),
         other => Err(format!("Unknown providerSelection '{}'", other)),
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LaunchRuntimeKind {
+    Local,
+    Wsl,
+    Ssh,
+}
+
+impl LaunchRuntimeKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Wsl => "wsl",
+            Self::Ssh => "ssh",
+        }
+    }
+}
+
+fn parse_launch_runtime_kind(value: &str) -> std::result::Result<LaunchRuntimeKind, String> {
+    match value {
+        "local" => Ok(LaunchRuntimeKind::Local),
+        "wsl" => Ok(LaunchRuntimeKind::Wsl),
+        "ssh" => Ok(LaunchRuntimeKind::Ssh),
+        other => Err(format!(
+            "Unknown runtimeKind '{}'; expected local, wsl, or ssh",
+            other
+        )),
+    }
+}
+
+fn workspace_runtime_kind(workspace: &Workspace) -> LaunchRuntimeKind {
+    match workspace.default_environment {
+        WorkspaceLaunchEnvironment::Local => LaunchRuntimeKind::Local,
+        WorkspaceLaunchEnvironment::Wsl => LaunchRuntimeKind::Wsl,
+        WorkspaceLaunchEnvironment::Ssh => LaunchRuntimeKind::Ssh,
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedLaunchRuntime {
+    kind: LaunchRuntimeKind,
+    source: &'static str,
+    notice: Option<String>,
+    wsl: Option<WslLaunchInfo>,
+    ssh: Option<SshConnectionInfo>,
 }
 
 fn parse_runtime_mcp_mode(mode: Option<&str>) -> std::result::Result<LaunchProfileMcpMode, String> {
@@ -225,10 +284,12 @@ pub struct AppState {
     pub shared_mcp_service: Arc<SharedMcpService>,
     pub project_service: Arc<ProjectService>,
     pub workspace_service: Arc<WorkspaceService>,
+    pub ssh_machine_service: Arc<SshMachineService>,
     pub todo_service: Arc<TodoService>,
     pub task_binding_service: Arc<crate::services::TaskBindingService>,
     pub spec_service: Arc<SpecService>,
     pub skill_service: Arc<SkillService>,
+    pub external_skill_registry: Arc<ExternalSkillRegistry>,
     pub launch_history_service: Arc<LaunchHistoryService>,
     pub notification_service: Arc<NotificationService>,
     pub settings_service: Arc<SettingsService>,
@@ -287,10 +348,12 @@ impl OrchestratorService {
         shared_mcp_service: Arc<SharedMcpService>,
         project_service: Arc<ProjectService>,
         workspace_service: Arc<WorkspaceService>,
+        ssh_machine_service: Arc<SshMachineService>,
         todo_service: Arc<TodoService>,
         task_binding_service: Arc<crate::services::TaskBindingService>,
         spec_service: Arc<SpecService>,
         skill_service: Arc<SkillService>,
+        external_skill_registry: Arc<ExternalSkillRegistry>,
         launch_history_service: Arc<LaunchHistoryService>,
         notification_service: Arc<NotificationService>,
         settings_service: Arc<SettingsService>,
@@ -306,10 +369,12 @@ impl OrchestratorService {
             shared_mcp_service,
             project_service,
             workspace_service,
+            ssh_machine_service,
             todo_service,
             task_binding_service,
             spec_service,
             skill_service,
+            external_skill_registry,
             launch_history_service,
             notification_service,
             settings_service,
@@ -574,6 +639,9 @@ struct McpLaunchTaskParams {
     /// 工作空间名称（自动解析 workspace_path 和 provider）
     #[serde(rename = "workspaceName")]
     workspace_name: Option<String>,
+    /// 本次启动运行环境：local / wsl / ssh。优先级高于 workspace.defaultEnvironment。
+    #[serde(rename = "runtimeKind", alias = "runtime", alias = "environment")]
+    runtime_kind: Option<String>,
     /// 恢复指定 Claude 会话（传入 session UUID，可从 list_launch_history 获取 claudeSessionId）
     #[serde(rename = "resumeId")]
     resume_id: Option<String>,
@@ -685,6 +753,12 @@ struct McpListSkillsParams {
     project_path: String,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpListExternalSkillsParams {
+    /// 外部 Skill 来源：claude / codex / plugin；不传则返回全部
+    source: Option<String>,
+}
+
 // ---- File MCP 参数 ----
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -753,6 +827,12 @@ struct McpGetSessionOutputParams {
     lines: Option<usize>,
 }
 
+fn notification_metadata_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": ["object", "null"]
+    })
+}
+
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct McpTriggerNotificationParams {
@@ -765,6 +845,8 @@ struct McpTriggerNotificationParams {
     dedupe_key: Option<String>,
     #[serde(rename = "onlyWhenUnfocused")]
     only_when_unfocused: Option<bool>,
+    #[serde(default)]
+    #[schemars(schema_with = "notification_metadata_schema")]
     metadata: Option<serde_json::Value>,
 }
 
@@ -827,11 +909,31 @@ struct McpListResumeSessionsParams {
 struct McpCreateTaskBindingParams {
     /// 任务标题（简短描述）
     title: String,
+    /// 角色：task/leader/worker
+    role: Option<String>,
+    /// 父任务 ID（worker 指向 leader）
+    #[serde(rename = "parentId")]
+    parent_id: Option<String>,
+    /// Plan 文件路径
+    #[serde(rename = "planPath")]
+    plan_path: Option<String>,
+    /// 已归一化 Plan 文件路径
+    #[serde(rename = "normalizedPlanPath")]
+    normalized_plan_path: Option<String>,
     /// 完整 prompt（可能比 title 长）
     prompt: Option<String>,
     /// 关联终端会话 ID
     #[serde(rename = "sessionId")]
     session_id: Option<String>,
+    /// Claude/Codex 可恢复会话 ID
+    #[serde(rename = "resumeId")]
+    resume_id: Option<String>,
+    /// UI pane ID（仅作快速定位缓存）
+    #[serde(rename = "paneId")]
+    pane_id: Option<String>,
+    /// UI tab ID（仅作快速定位缓存）
+    #[serde(rename = "tabId")]
+    tab_id: Option<String>,
     /// 项目路径
     #[serde(rename = "projectPath")]
     project_path: String,
@@ -841,6 +943,10 @@ struct McpCreateTaskBindingParams {
     /// CLI 工具类型：claude/codex/gemini/opencode/cursor
     #[serde(rename = "cliTool")]
     cli_tool: Option<String>,
+    /// 附加元数据（小 JSON 对象）
+    #[serde(default)]
+    #[schemars(schema_with = "notification_metadata_schema")]
+    metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -849,6 +955,16 @@ struct McpUpdateTaskBindingParams {
     id: String,
     /// 新标题
     title: Option<String>,
+    /// 新角色：task/leader/worker
+    role: Option<String>,
+    /// 父任务 ID
+    #[serde(rename = "parentId")]
+    parent_id: Option<String>,
+    /// Plan 文件路径
+    #[serde(rename = "planPath")]
+    plan_path: Option<String>,
+    /// 完整 prompt
+    prompt: Option<String>,
     /// 新状态：pending/running/waiting/completed/failed
     status: Option<String>,
     /// 进度 0-100
@@ -859,22 +975,140 @@ struct McpUpdateTaskBindingParams {
     /// 关联终端会话 ID
     #[serde(rename = "sessionId")]
     session_id: Option<String>,
+    /// Claude/Codex 可恢复会话 ID
+    #[serde(rename = "resumeId")]
+    resume_id: Option<String>,
+    /// UI pane ID
+    #[serde(rename = "paneId")]
+    pane_id: Option<String>,
+    /// UI tab ID
+    #[serde(rename = "tabId")]
+    tab_id: Option<String>,
     /// 退出码
     #[serde(rename = "exitCode")]
     exit_code: Option<i32>,
+    /// 附加元数据（小 JSON 对象）
+    #[serde(default)]
+    #[schemars(schema_with = "notification_metadata_schema")]
+    metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct McpQueryTaskBindingsParams {
     /// 按状态过滤：pending/running/waiting/completed/failed
     status: Option<String>,
+    /// 按角色过滤：task/leader/worker
+    role: Option<String>,
+    /// 按父任务 ID 过滤
+    #[serde(rename = "parentId")]
+    parent_id: Option<String>,
+    /// 按 Plan 文件路径过滤
+    #[serde(rename = "planPath")]
+    plan_path: Option<String>,
+    /// 按 pane ID 过滤
+    #[serde(rename = "paneId")]
+    pane_id: Option<String>,
+    /// 按 session ID 过滤
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+    /// 按 resume ID 过滤
+    #[serde(rename = "resumeId")]
+    resume_id: Option<String>,
     /// 按项目路径过滤
     #[serde(rename = "projectPath")]
     project_path: Option<String>,
+    /// 按工作空间过滤
+    #[serde(rename = "workspaceName")]
+    workspace_name: Option<String>,
     /// 搜索关键词
     search: Option<String>,
     /// 返回数量上限（默认 50）
     limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpRegisterPlanLeaderParams {
+    /// Plan 文件路径
+    #[serde(rename = "planPath")]
+    plan_path: String,
+    /// 项目路径
+    #[serde(rename = "projectPath")]
+    project_path: String,
+    /// 标题
+    title: Option<String>,
+    /// 完整 prompt
+    prompt: Option<String>,
+    /// leader 的 PTY session ID
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+    /// leader 的 Claude/Codex resume ID
+    #[serde(rename = "resumeId")]
+    resume_id: Option<String>,
+    /// UI pane ID
+    #[serde(rename = "paneId")]
+    pane_id: Option<String>,
+    /// UI tab ID
+    #[serde(rename = "tabId")]
+    tab_id: Option<String>,
+    /// 工作空间名称
+    #[serde(rename = "workspaceName")]
+    workspace_name: Option<String>,
+    /// CLI 工具类型，默认 claude
+    #[serde(rename = "cliTool")]
+    cli_tool: Option<String>,
+    #[serde(default)]
+    #[schemars(schema_with = "notification_metadata_schema")]
+    metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpRegisterPlanWorkerParams {
+    /// leader TaskBinding ID
+    #[serde(rename = "leaderId")]
+    leader_id: Option<String>,
+    /// Plan 文件路径（leaderId 不传时使用）
+    #[serde(rename = "planPath")]
+    plan_path: Option<String>,
+    /// worker 的 PTY session ID
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    /// 项目路径
+    #[serde(rename = "projectPath")]
+    project_path: String,
+    /// 标题
+    title: Option<String>,
+    /// 完整 prompt（可选，用于审计/重派）
+    prompt: Option<String>,
+    /// worker 的 Claude/Codex resume ID
+    #[serde(rename = "resumeId")]
+    resume_id: Option<String>,
+    /// UI pane ID
+    #[serde(rename = "paneId")]
+    pane_id: Option<String>,
+    /// UI tab ID
+    #[serde(rename = "tabId")]
+    tab_id: Option<String>,
+    /// 工作空间名称
+    #[serde(rename = "workspaceName")]
+    workspace_name: Option<String>,
+    /// CLI 工具类型，默认 codex
+    #[serde(rename = "cliTool")]
+    cli_tool: Option<String>,
+    #[serde(default)]
+    #[schemars(schema_with = "notification_metadata_schema")]
+    metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpPlanCollaborationParams {
+    /// leader TaskBinding ID
+    #[serde(rename = "leaderId")]
+    leader_id: Option<String>,
+    /// Plan 文件路径
+    #[serde(rename = "planPath")]
+    plan_path: Option<String>,
+    /// 是否返回 prompt/metadata/completionSummary
+    verbose: Option<bool>,
 }
 
 // ============ Runtime Config MCP 参数 ============
@@ -905,6 +1139,12 @@ struct McpRuntimeSkillPolicyParams {
     disabled_skill_ids: Option<Vec<String>>,
     /// 是否启用工作空间项目 Skill
     include_project_skills: Option<bool>,
+    /// 是否允许 Claude 全局 Agent Skills
+    include_external_claude_skills: Option<bool>,
+    /// 是否允许 Codex 全局 Skills
+    include_external_codex_skills: Option<bool>,
+    /// 是否允许 Claude plugin 注入的 Skills
+    include_external_plugin_skills: Option<bool>,
     /// Skill 注入目标，当前主要使用 session
     target: Option<String>,
 }
@@ -1094,6 +1334,15 @@ fn build_runtime_skill_policy(
         policy.disabled_skill_ids = clean_string_list(params.disabled_skill_ids.as_deref());
         if let Some(value) = params.include_project_skills {
             policy.include_project_skills = value;
+        }
+        if let Some(value) = params.include_external_claude_skills {
+            policy.include_external_claude_skills = value;
+        }
+        if let Some(value) = params.include_external_codex_skills {
+            policy.include_external_codex_skills = value;
+        }
+        if let Some(value) = params.include_external_plugin_skills {
+            policy.include_external_plugin_skills = value;
         }
         if let Some(target) = trim_optional_string(params.target.clone()) {
             policy.target = target;
@@ -1615,11 +1864,16 @@ impl McpToolHandler {
             None
         };
         let initial_prompt = initial_prompt_owned.as_deref();
-        let wsl_info = resolve_wsl_launch_info(
+        let runtime = match resolve_launch_runtime(
             &params.project_path,
             ws_name.as_deref(),
-            &self.state.workspace_service,
-        );
+            params.runtime_kind.as_deref(),
+            params.resume_id.as_deref(),
+            &self.state,
+        ) {
+            Ok(runtime) => runtime,
+            Err(error) => return format!("错误: {}", error),
+        };
 
         // 创建 PTY 会话（resume 时传 resume_id）
         let session_id = match self.state.terminal_service.create_session(
@@ -1638,13 +1892,18 @@ impl McpToolHandler {
             false,
             None,
             initial_prompt,
-            None,
-            wsl_info.as_ref(),
+            runtime.ssh.as_ref(),
+            runtime.wsl.as_ref(),
         ) {
             Ok(sid) => sid,
             Err(e) => {
                 error!(err = %e, "mcp::launch_task failed to create session");
-                return format!("错误: 创建会话失败: {}", e);
+                let runtime_notice = runtime
+                    .notice
+                    .as_deref()
+                    .map(|notice| format!("{} ", notice))
+                    .unwrap_or_default();
+                return format!("错误: 创建会话失败: {}{}", runtime_notice, e);
             }
         };
 
@@ -1678,6 +1937,11 @@ impl McpToolHandler {
             resume_id: params.resume_id.clone(),
             pane_id: params.pane_id.clone(),
             cli_tool: params.cli_tool.clone(),
+            runtime_kind: runtime.kind.as_str().to_string(),
+            runtime_source: runtime.source.to_string(),
+            notice: runtime.notice.clone(),
+            wsl: runtime.wsl.clone(),
+            ssh: runtime.ssh.clone(),
         };
         let _ = self
             .state
@@ -1687,7 +1951,10 @@ impl McpToolHandler {
         serde_json::json!({
             "taskId": task_id,
             "sessionId": session_id,
-            "status": "launching"
+            "status": "launching",
+            "runtimeKind": runtime.kind.as_str(),
+            "runtimeSource": runtime.source,
+            "notice": runtime.notice
         })
         .to_string()
     }
@@ -1967,6 +2234,40 @@ impl McpToolHandler {
         debug!(project = %params.project_path, "mcp::list_skills");
         match self.state.skill_service.list_skills(&params.project_path) {
             Ok(skills) => serde_json::json!({ "skills": skills }).to_string(),
+            Err(e) => format!("错误: {}", e),
+        }
+    }
+
+    /// 列出全局外部 Skill（Claude/Codex/plugin），不读取项目 .claude/commands
+    #[tool]
+    async fn list_external_skills(
+        &self,
+        Parameters(params): Parameters<McpListExternalSkillsParams>,
+    ) -> String {
+        let source = params
+            .source
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase);
+        let result = match source.as_deref() {
+            None => self.state.external_skill_registry.list(),
+            Some("claude" | "codex" | "plugin") => self
+                .state
+                .external_skill_registry
+                .list_by_source_filter(source.as_deref().unwrap()),
+            Some(other) => {
+                return format!(
+                    "错误: unsupported source '{}'; expected claude, codex, or plugin",
+                    other
+                );
+            }
+        };
+        match result {
+            Ok(skills) => {
+                let total = skills.len();
+                serde_json::json!({ "skills": skills, "total": total }).to_string()
+            }
             Err(e) => format!("错误: {}", e),
         }
     }
@@ -2521,17 +2822,25 @@ impl McpToolHandler {
         &self,
         Parameters(params): Parameters<McpCreateTaskBindingParams>,
     ) -> String {
-        use crate::models::task_binding::CreateTaskBindingRequest;
+        use crate::models::task_binding::{CreateTaskBindingRequest, TaskBindingRole};
         info!(title = %params.title, "mcp::create_task_binding");
 
         let req = CreateTaskBindingRequest {
             title: params.title,
+            role: params.role.and_then(|s| s.parse::<TaskBindingRole>().ok()),
+            parent_id: params.parent_id,
+            plan_path: params.plan_path,
+            normalized_plan_path: params.normalized_plan_path,
             prompt: params.prompt,
             session_id: params.session_id,
+            resume_id: params.resume_id,
+            pane_id: params.pane_id,
+            tab_id: params.tab_id,
             todo_id: None,
             project_path: params.project_path,
             workspace_name: params.workspace_name,
             cli_tool: params.cli_tool,
+            metadata: params.metadata,
         };
 
         match self.state.task_binding_service.create(req) {
@@ -2547,13 +2856,22 @@ impl McpToolHandler {
         &self,
         Parameters(params): Parameters<McpUpdateTaskBindingParams>,
     ) -> String {
-        use crate::models::task_binding::{TaskBindingStatus, UpdateTaskBindingRequest};
+        use crate::models::task_binding::{
+            TaskBindingRole, TaskBindingStatus, UpdateTaskBindingRequest,
+        };
         info!(id = %params.id, "mcp::update_task_binding");
 
         let req = UpdateTaskBindingRequest {
             title: params.title,
-            prompt: None,
+            role: params.role.and_then(|s| s.parse::<TaskBindingRole>().ok()),
+            parent_id: params.parent_id,
+            plan_path: params.plan_path,
+            normalized_plan_path: None,
+            prompt: params.prompt,
             session_id: params.session_id,
+            resume_id: params.resume_id,
+            pane_id: params.pane_id,
+            tab_id: params.tab_id,
             status: params
                 .status
                 .and_then(|s| s.parse::<TaskBindingStatus>().ok()),
@@ -2561,6 +2879,7 @@ impl McpToolHandler {
             completion_summary: params.completion_summary,
             exit_code: params.exit_code,
             sort_order: None,
+            metadata: params.metadata,
         };
 
         match self.state.task_binding_service.update(&params.id, req) {
@@ -2576,15 +2895,22 @@ impl McpToolHandler {
         &self,
         Parameters(params): Parameters<McpQueryTaskBindingsParams>,
     ) -> String {
-        use crate::models::task_binding::{TaskBindingQuery, TaskBindingStatus};
+        use crate::models::task_binding::{TaskBindingQuery, TaskBindingRole, TaskBindingStatus};
         debug!("mcp::query_task_bindings");
 
         let query = TaskBindingQuery {
             status: params
                 .status
                 .and_then(|s| s.parse::<TaskBindingStatus>().ok()),
+            role: params.role.and_then(|s| s.parse::<TaskBindingRole>().ok()),
+            parent_id: params.parent_id,
+            plan_path: params.plan_path,
+            normalized_plan_path: None,
+            pane_id: params.pane_id,
+            session_id: params.session_id,
+            resume_id: params.resume_id,
             project_path: params.project_path,
-            workspace_name: None,
+            workspace_name: params.workspace_name,
             search: params.search,
             limit: params.limit,
             offset: None,
@@ -2596,6 +2922,258 @@ impl McpToolHandler {
             Err(e) => format!("错误: 查询 TaskBindings 失败: {}", e),
         }
     }
+
+    /// 登记 Plan-to-Codex 的 leader（发起规划的会话）。
+    #[tool]
+    async fn register_plan_leader(
+        &self,
+        Parameters(params): Parameters<McpRegisterPlanLeaderParams>,
+    ) -> String {
+        use crate::models::task_binding::RegisterPlanLeaderRequest;
+        info!(plan_path = %params.plan_path, "mcp::register_plan_leader");
+
+        let req = RegisterPlanLeaderRequest {
+            plan_path: params.plan_path,
+            project_path: params.project_path,
+            title: params.title,
+            prompt: params.prompt,
+            session_id: params.session_id,
+            resume_id: params.resume_id,
+            pane_id: params.pane_id,
+            tab_id: params.tab_id,
+            workspace_name: params.workspace_name,
+            cli_tool: params.cli_tool,
+            metadata: params.metadata,
+        };
+
+        match self.state.task_binding_service.register_plan_leader(req) {
+            Ok(binding) => serde_json::to_string(&binding)
+                .unwrap_or_else(|e| format!("错误: 序列化失败: {}", e)),
+            Err(e) => format!("错误: 登记 Plan leader 失败: {}", e),
+        }
+    }
+
+    /// 登记 Plan-to-Codex 的 worker（被派发执行的会话）。
+    #[tool]
+    async fn register_plan_worker(
+        &self,
+        Parameters(params): Parameters<McpRegisterPlanWorkerParams>,
+    ) -> String {
+        use crate::models::task_binding::RegisterPlanWorkerRequest;
+        info!(session_id = %params.session_id, "mcp::register_plan_worker");
+
+        let req = RegisterPlanWorkerRequest {
+            leader_id: params.leader_id,
+            plan_path: params.plan_path,
+            session_id: params.session_id,
+            project_path: params.project_path,
+            title: params.title,
+            prompt: params.prompt,
+            resume_id: params.resume_id,
+            pane_id: params.pane_id,
+            tab_id: params.tab_id,
+            workspace_name: params.workspace_name,
+            cli_tool: params.cli_tool,
+            metadata: params.metadata,
+        };
+
+        match self.state.task_binding_service.register_plan_worker(req) {
+            Ok(binding) => serde_json::to_string(&binding)
+                .unwrap_or_else(|e| format!("错误: 序列化失败: {}", e)),
+            Err(e) => format!("错误: 登记 Plan worker 失败: {}", e),
+        }
+    }
+
+    /// 兼容旧称：登记 Plan-to-Codex 的 worker。新流程请使用 register_plan_worker。
+    #[tool]
+    async fn register_plan_child(
+        &self,
+        Parameters(params): Parameters<McpRegisterPlanWorkerParams>,
+    ) -> String {
+        use crate::models::task_binding::RegisterPlanChildRequest;
+        info!(session_id = %params.session_id, "mcp::register_plan_child");
+
+        let req = RegisterPlanChildRequest {
+            leader_id: params.leader_id,
+            plan_path: params.plan_path,
+            session_id: params.session_id,
+            project_path: params.project_path,
+            title: params.title,
+            prompt: params.prompt,
+            resume_id: params.resume_id,
+            pane_id: params.pane_id,
+            tab_id: params.tab_id,
+            workspace_name: params.workspace_name,
+            cli_tool: params.cli_tool,
+            metadata: params.metadata,
+        };
+
+        match self.state.task_binding_service.register_plan_child(req) {
+            Ok(binding) => serde_json::to_string(&binding)
+                .unwrap_or_else(|e| format!("错误: 序列化失败: {}", e)),
+            Err(e) => format!("错误: 登记 Plan worker 失败: {}", e),
+        }
+    }
+
+    /// 查询一个 Plan 的 leader/worker 协作关系。默认 compact，不返回 prompt/metadata。
+    #[tool]
+    async fn get_plan_collaboration(
+        &self,
+        Parameters(params): Parameters<McpPlanCollaborationParams>,
+    ) -> String {
+        use crate::models::task_binding::PlanCollaborationKey;
+        debug!("mcp::get_plan_collaboration");
+
+        let key = PlanCollaborationKey {
+            leader_id: params.leader_id,
+            plan_path: params.plan_path,
+            normalized_plan_path: None,
+        };
+
+        match self
+            .state
+            .task_binding_service
+            .get_plan_collaboration(key, params.verbose.unwrap_or(false))
+        {
+            Ok(result) => serde_json::to_string(&result)
+                .unwrap_or_else(|e| format!("错误: 序列化失败: {}", e)),
+            Err(e) => format!("错误: 查询 Plan 协作关系失败: {}", e),
+        }
+    }
+
+    /// 对一个 Plan 的 leader/worker 协作关系做活跃状态校准。
+    #[tool]
+    async fn reconcile_plan_collaboration(
+        &self,
+        Parameters(params): Parameters<McpPlanCollaborationParams>,
+    ) -> String {
+        use crate::models::task_binding::PlanCollaborationKey;
+        debug!("mcp::reconcile_plan_collaboration");
+
+        let key = PlanCollaborationKey {
+            leader_id: params.leader_id,
+            plan_path: params.plan_path,
+            normalized_plan_path: None,
+        };
+        let live_sessions = collect_plan_live_sessions(&self.state).await;
+
+        match self
+            .state
+            .task_binding_service
+            .reconcile_plan_collaboration(key, live_sessions, params.verbose.unwrap_or(false))
+        {
+            Ok(result) => serde_json::to_string(&result)
+                .unwrap_or_else(|e| format!("错误: 序列化失败: {}", e)),
+            Err(e) => format!("错误: 校准 Plan 协作关系失败: {}", e),
+        }
+    }
+}
+
+async fn collect_plan_live_sessions(
+    state: &AppState,
+) -> Vec<crate::models::task_binding::PlanLiveSession> {
+    let mut live_sessions = match state.terminal_service.get_all_status() {
+        Ok(statuses) => statuses
+            .into_iter()
+            .map(|status| {
+                (
+                    status.session_id.clone(),
+                    crate::models::task_binding::PlanLiveSession {
+                        session_id: status.session_id,
+                        pane_id: None,
+                        tab_id: None,
+                    },
+                )
+            })
+            .collect::<HashMap<_, _>>(),
+        Err(error) => {
+            warn!(err = %error, "Failed to collect live terminal sessions for plan reconcile");
+            HashMap::new()
+        }
+    };
+
+    if let Some(panes) = query_frontend_panes(state).await {
+        apply_pane_locations(&mut live_sessions, &panes);
+    }
+
+    live_sessions.into_values().collect()
+}
+
+async fn query_frontend_panes(state: &AppState) -> Option<serde_json::Value> {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+    {
+        let mut queries = state
+            .pending_queries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        queries.insert(request_id.clone(), tx);
+    }
+
+    let event = OrchestratorQueryEvent {
+        request_id: request_id.clone(),
+    };
+    if let Err(error) = state.app_handle.emit("orchestrator-query-panes", &event) {
+        warn!(err = %error, "Failed to emit orchestrator-query-panes for plan reconcile");
+        let mut queries = state
+            .pending_queries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        queries.remove(&request_id);
+        return None;
+    }
+
+    match tokio::time::timeout(std::time::Duration::from_secs(5), rx).await {
+        Ok(Ok(data)) => serde_json::from_str(&data).ok(),
+        Ok(Err(error)) => {
+            warn!(err = %error, "Plan reconcile pane query channel closed");
+            None
+        }
+        Err(_) => {
+            let mut queries = state
+                .pending_queries
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            queries.remove(&request_id);
+            None
+        }
+    }
+}
+
+fn apply_pane_locations(
+    live_sessions: &mut HashMap<String, crate::models::task_binding::PlanLiveSession>,
+    panes: &serde_json::Value,
+) {
+    let Some(panes) = panes.get("panes").and_then(|value| value.as_array()) else {
+        return;
+    };
+
+    for pane in panes {
+        let pane_id = pane
+            .get("paneId")
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
+        let Some(tabs) = pane.get("tabs").and_then(|value| value.as_array()) else {
+            continue;
+        };
+        for tab in tabs {
+            let Some(session_id) = tab.get("sessionId").and_then(|value| value.as_str()) else {
+                continue;
+            };
+            let entry = live_sessions
+                .entry(session_id.to_string())
+                .or_insert_with(|| crate::models::task_binding::PlanLiveSession {
+                    session_id: session_id.to_string(),
+                    pane_id: None,
+                    tab_id: None,
+                });
+            entry.pane_id = pane_id.clone();
+            entry.tab_id = tab
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+        }
+    }
 }
 
 #[tool_handler]
@@ -2604,19 +3182,19 @@ impl ServerHandler for McpToolHandler {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(concat!(
                 "CC-Panes Orchestrator: 管理 Claude Code 多实例编排与工作空间。\n",
-                "编排: launch_task（启动 Claude 实例）、list_projects（已注册项目）、get_task_status（任务状态）\n",
+                "编排: launch_task（启动 Claude 实例，runtimeKind 可显式指定 local/wsl/ssh）、list_projects（已注册项目）、get_task_status（任务状态）\n",
                 "PTY 控制: write_to_session（向会话写入文本/命令）、get_session_status（查询会话状态）、list_sessions（列出所有会话）、kill_session（终止会话）、get_session_output（读取输出内容）\n",
                 "工作空间: list_workspaces、get_workspace、create_workspace、add_project_to_workspace、scan_directory\n",
                 "待办: query_todos、create_todo、update_todo\n",
-                "编排任务: create_task_binding、update_task_binding、query_task_bindings\n",
+                "编排任务: create_task_binding、update_task_binding、query_task_bindings、register_plan_leader、register_plan_worker、get_plan_collaboration、reconcile_plan_collaboration\n",
                 "运行配置: create_runtime_config（创建/更新运行配置，可选创建共享 MCP，并绑定 workspace/project）\n",
-                "Skill: list_skills（查看项目可用命令模板）\n",
+                "Skill: list_skills（查看项目可用命令模板）、list_external_skills（查看 Claude/Codex/plugin 全局 Skill）\n",
                 "文件: open_folder（导航文件浏览器）、open_file（编辑器打开文件）、close_file（关闭标签）、list_open_files（查询打开的文件）\n",
                 "面板: list_panes（查询当前面板布局和标签信息，返回 paneId 可用于 launch_task）\n",
                 "历史: list_launch_history（查询启动历史，含 resumeSessionId/cliTool）、list_resume_sessions（查询 Claude/Codex 会话列表）、list_claude_sessions（兼容旧流程）\n",
                 "典型编排流程: launch_task → get_session_status（等完成）→ get_session_output（读结果）\n",
                 "典型项目流程: scan_directory 发现项目 → create_workspace → add_project_to_workspace → launch_task\n",
-                "典型 resume 流程: list_launch_history(projectPath) → 找到 resumeSessionId + cliTool → launch_task(projectPath, resumeId=resumeSessionId, cliTool=cliTool)",
+                "典型 resume 流程: list_launch_history(projectPath) → 找到 resumeSessionId + cliTool + runtimeKind → launch_task(projectPath, resumeId=resumeSessionId, cliTool=cliTool, runtimeKind=runtimeKind)",
             ))
     }
 }
@@ -2668,14 +3246,13 @@ fn windows_path_to_wsl_path(path: &str) -> Option<String> {
     ))
 }
 
-#[cfg(target_os = "windows")]
-fn resolve_wsl_launch_info(
+fn find_workspace_for_launch(
     project_path: &str,
     workspace_name: Option<&str>,
     workspace_service: &WorkspaceService,
-) -> Option<WslLaunchInfo> {
+) -> Option<Workspace> {
     let normalized_project_path = normalize_path(project_path);
-    let workspace = workspace_name
+    workspace_name
         .and_then(|name| workspace_service.get_workspace(name).ok())
         .or_else(|| {
             workspace_service
@@ -2689,15 +3266,42 @@ fn resolve_wsl_launch_info(
                             .any(|project| normalize_path(&project.path) == normalized_project_path)
                     })
                 })
-        });
-    let workspace_wsl = workspace
-        .as_ref()
-        .filter(|ws| ws.default_environment == crate::models::WorkspaceLaunchEnvironment::Wsl);
+        })
+}
 
+#[cfg(target_os = "windows")]
+fn join_remote_path(root: &str, relative: &str) -> String {
+    let root = root.trim_end_matches('/');
+    let relative = relative.trim_start_matches('/');
+    if relative.is_empty() {
+        root.to_string()
+    } else {
+        format!("{root}/{relative}")
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn workspace_relative_path(project_path: &str, workspace_path: &str) -> Option<String> {
+    let normalized_project = normalize_path(project_path);
+    let normalized_workspace = normalize_path(workspace_path);
+    if normalized_project == normalized_workspace {
+        return Some(String::new());
+    }
+    let prefix = format!("{}/", normalized_workspace.trim_end_matches('/'));
+    normalized_project
+        .strip_prefix(&prefix)
+        .map(|value| value.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_wsl_launch_info(
+    project_path: &str,
+    workspace: Option<&Workspace>,
+) -> Option<WslLaunchInfo> {
     if let Some((distro, remote_path)) = parse_wsl_unc_path(project_path) {
         return Some(WslLaunchInfo {
             remote_path,
-            workspace_remote_path: workspace_wsl
+            workspace_remote_path: workspace
                 .and_then(|ws| ws.wsl.as_ref())
                 .and_then(|cfg| cfg.remote_path.clone())
                 .filter(|path| !path.trim().is_empty()),
@@ -2705,25 +3309,32 @@ fn resolve_wsl_launch_info(
         });
     }
 
-    let workspace = workspace_wsl?;
+    let normalized_project_path = normalize_path(project_path);
+    let workspace_remote_path = workspace
+        .and_then(|ws| ws.wsl.as_ref())
+        .and_then(|cfg| cfg.remote_path.clone())
+        .filter(|path| !path.trim().is_empty());
     let remote_path = workspace
-        .projects
-        .iter()
-        .find(|project| normalize_path(&project.path) == normalized_project_path)
-        .and_then(|project| project.wsl_remote_path.clone())
-        .filter(|path| !path.trim().is_empty())
+        .and_then(|ws| {
+            ws.projects
+                .iter()
+                .find(|project| normalize_path(&project.path) == normalized_project_path)
+                .and_then(|project| project.wsl_remote_path.clone())
+                .filter(|path| !path.trim().is_empty())
+                .or_else(|| {
+                    let workspace_path = ws.path.as_deref()?;
+                    let relative = workspace_relative_path(project_path, workspace_path)?;
+                    let remote_root = workspace_remote_path.as_deref()?;
+                    Some(join_remote_path(remote_root, &relative))
+                })
+        })
         .or_else(|| windows_path_to_wsl_path(project_path))?;
 
     Some(WslLaunchInfo {
         remote_path,
-        workspace_remote_path: workspace
-            .wsl
-            .as_ref()
-            .and_then(|cfg| cfg.remote_path.clone())
-            .filter(|path| !path.trim().is_empty()),
+        workspace_remote_path,
         distro: workspace
-            .wsl
-            .as_ref()
+            .and_then(|ws| ws.wsl.as_ref())
             .and_then(|cfg| cfg.distro.clone())
             .filter(|distro| !distro.trim().is_empty()),
     })
@@ -2732,10 +3343,195 @@ fn resolve_wsl_launch_info(
 #[cfg(not(target_os = "windows"))]
 fn resolve_wsl_launch_info(
     _project_path: &str,
-    _workspace_name: Option<&str>,
-    _workspace_service: &WorkspaceService,
+    _workspace: Option<&Workspace>,
 ) -> Option<WslLaunchInfo> {
     None
+}
+
+fn resolve_ssh_launch_info(
+    project_path: &str,
+    workspace: Option<&Workspace>,
+    ssh_machine_service: &SshMachineService,
+) -> Option<SshConnectionInfo> {
+    let normalized_project_path = normalize_path(project_path);
+    if let Some(project_ssh) = workspace.and_then(|ws| {
+        ws.projects
+            .iter()
+            .find(|project| normalize_path(&project.path) == normalized_project_path)
+            .and_then(|project| project.ssh.clone())
+    }) {
+        return Some(project_ssh);
+    }
+
+    let ssh_launch = workspace.and_then(|ws| ws.ssh_launch.as_ref())?;
+    let machine_id = ssh_launch.machine_id.as_deref()?.trim();
+    let remote_path = ssh_launch.remote_path.as_deref()?.trim();
+    if machine_id.is_empty() || remote_path.is_empty() {
+        return None;
+    }
+    let machine = ssh_machine_service.get(machine_id)?;
+    Some(SshConnectionInfo {
+        host: machine.host,
+        port: machine.port,
+        user: machine.user,
+        remote_path: remote_path.to_string(),
+        identity_file: machine.identity_file,
+        machine_id: Some(machine.id),
+        auth_method: Some(machine.auth_method),
+    })
+}
+
+fn runtime_notice(
+    workspace: Option<&Workspace>,
+    kind: LaunchRuntimeKind,
+    source: &'static str,
+) -> Option<String> {
+    let workspace = workspace?;
+    let default = workspace_runtime_kind(workspace);
+    if source == "explicit" && default != kind {
+        return Some(format!(
+            "workspace '{}' 默认是 {}，本次按显式 runtimeKind='{}' 启动。",
+            workspace.name,
+            default.as_str(),
+            kind.as_str()
+        ));
+    }
+    if source == "history" && default != kind {
+        return Some(format!(
+            "workspace '{}' 默认是 {}，resume 历史记录为 {}，本次按历史 runtimeKind 启动。",
+            workspace.name,
+            default.as_str(),
+            kind.as_str()
+        ));
+    }
+    if source == "workspace_default" && kind == LaunchRuntimeKind::Wsl {
+        return Some(format!(
+            "workspace '{}' 默认是 WSL，未传 runtimeKind，已按 WSL 启动；如需 Windows local，请传 runtimeKind='local'。",
+            workspace.name
+        ));
+    }
+    None
+}
+
+fn select_launch_runtime_kind(
+    explicit_runtime: Option<LaunchRuntimeKind>,
+    history_runtime: Option<LaunchRuntimeKind>,
+    path_runtime: Option<LaunchRuntimeKind>,
+    workspace_default: Option<LaunchRuntimeKind>,
+) -> (LaunchRuntimeKind, &'static str) {
+    if let Some(runtime) = explicit_runtime {
+        (runtime, "explicit")
+    } else if let Some(runtime) = history_runtime {
+        (runtime, "history")
+    } else if let Some(runtime) = path_runtime {
+        (runtime, "path")
+    } else if let Some(runtime) = workspace_default {
+        (runtime, "workspace_default")
+    } else {
+        (LaunchRuntimeKind::Local, "default")
+    }
+}
+
+fn resolve_launch_runtime(
+    project_path: &str,
+    workspace_name: Option<&str>,
+    requested_runtime: Option<&str>,
+    resume_id: Option<&str>,
+    state: &AppState,
+) -> std::result::Result<ResolvedLaunchRuntime, String> {
+    let workspace =
+        find_workspace_for_launch(project_path, workspace_name, &state.workspace_service);
+    let explicit_runtime = requested_runtime
+        .map(str::trim)
+        .filter(|runtime| !runtime.is_empty())
+        .map(parse_launch_runtime_kind)
+        .transpose()?;
+    let history_runtime = if explicit_runtime.is_none() {
+        resume_id
+            .and_then(|id| {
+                state
+                    .launch_history_service
+                    .find_by_resume_session_id(id)
+                    .ok()
+                    .flatten()
+            })
+            .and_then(|record| parse_launch_runtime_kind(&record.runtime_kind).ok())
+    } else {
+        None
+    };
+    let path_runtime = if explicit_runtime.is_none() && history_runtime.is_none() {
+        #[cfg(target_os = "windows")]
+        {
+            parse_wsl_unc_path(project_path).map(|_| LaunchRuntimeKind::Wsl)
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            None
+        }
+    } else {
+        None
+    };
+    let workspace_default = workspace.as_ref().map(workspace_runtime_kind);
+
+    let (kind, source) = select_launch_runtime_kind(
+        explicit_runtime,
+        history_runtime,
+        path_runtime,
+        workspace_default,
+    );
+
+    let wsl = if kind == LaunchRuntimeKind::Wsl {
+        let resolved = resolve_wsl_launch_info(project_path, workspace.as_ref());
+        if resolved.is_none() {
+            return Err(match source {
+                "explicit" => {
+                    "runtimeKind='wsl' 但无法解析 WSL 路径。请配置 workspace.wsl.remotePath、项目 wslRemotePath，或传可转换的 Windows 路径。".to_string()
+                }
+                "workspace_default" => workspace
+                    .as_ref()
+                    .map(|ws| format!(
+                        "workspace '{}' 默认是 WSL，但无法解析 WSL 路径。请选择 local，或配置 WSL 路径。",
+                        ws.name
+                    ))
+                    .unwrap_or_else(|| "无法解析 WSL 路径。".to_string()),
+                _ => "无法解析 WSL 路径。".to_string(),
+            });
+        }
+        resolved
+    } else {
+        None
+    };
+
+    let ssh = if kind == LaunchRuntimeKind::Ssh {
+        let resolved =
+            resolve_ssh_launch_info(project_path, workspace.as_ref(), &state.ssh_machine_service);
+        if resolved.is_none() {
+            return Err(match source {
+                "explicit" => {
+                    "runtimeKind='ssh' 但无法解析 SSH 连接。请配置 workspace.sshLaunch 或使用已登记的 SSH 项目。".to_string()
+                }
+                "workspace_default" => workspace
+                    .as_ref()
+                    .map(|ws| format!(
+                        "workspace '{}' 默认是 SSH，但 SSH 配置不完整。请选择 local/wsl，或补齐 SSH 运行环境。",
+                        ws.name
+                    ))
+                    .unwrap_or_else(|| "无法解析 SSH 连接。".to_string()),
+                _ => "无法解析 SSH 连接。".to_string(),
+            });
+        }
+        resolved
+    } else {
+        None
+    };
+
+    Ok(ResolvedLaunchRuntime {
+        kind,
+        source,
+        notice: runtime_notice(workspace.as_ref(), kind, source),
+        wsl,
+        ssh,
+    })
 }
 
 // ============ 路径白名单 ============
@@ -2917,11 +3713,21 @@ async fn handle_launch_task(
         None
     };
     let initial_prompt = initial_prompt_owned.as_deref();
-    let wsl_info = resolve_wsl_launch_info(
+    let runtime = match resolve_launch_runtime(
         &req.project_path,
         workspace_name.as_deref(),
-        &state.workspace_service,
-    );
+        req.runtime_kind.as_deref(),
+        req.resume_id.as_deref(),
+        &state,
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!(ApiError { error })),
+            );
+        }
+    };
 
     let session_id = match state.terminal_service.create_session(
         None,
@@ -2939,8 +3745,8 @@ async fn handle_launch_task(
         false,
         None,
         initial_prompt,
-        None,
-        wsl_info.as_ref(),
+        runtime.ssh.as_ref(),
+        runtime.wsl.as_ref(),
     ) {
         Ok(sid) => {
             info!(session_id = %sid, "REST::launch_task session created");
@@ -2948,10 +3754,15 @@ async fn handle_launch_task(
         }
         Err(e) => {
             error!(project = %req.project_path, err = %e, "REST::launch_task failed to create session");
+            let runtime_notice = runtime
+                .notice
+                .as_deref()
+                .map(|notice| format!("{} ", notice))
+                .unwrap_or_default();
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!(ApiError {
-                    error: format!("Failed to create session: {}", e)
+                    error: format!("Failed to create session: {}{}", runtime_notice, e)
                 })),
             );
         }
@@ -2985,6 +3796,11 @@ async fn handle_launch_task(
         resume_id: req.resume_id.clone(),
         pane_id: req.pane_id.clone(),
         cli_tool: req.cli_tool.clone(),
+        runtime_kind: runtime.kind.as_str().to_string(),
+        runtime_source: runtime.source.to_string(),
+        notice: runtime.notice.clone(),
+        wsl: runtime.wsl.clone(),
+        ssh: runtime.ssh.clone(),
     };
     let _ = state.app_handle.emit("orchestrator-launch-task", &event);
 
@@ -2992,6 +3808,9 @@ async fn handle_launch_task(
         task_id,
         session_id,
         status: "launching".to_string(),
+        runtime_kind: runtime.kind.as_str().to_string(),
+        runtime_source: runtime.source.to_string(),
+        notice: runtime.notice,
     };
 
     (StatusCode::OK, Json(serde_json::json!(response)))
@@ -3682,6 +4501,25 @@ mod tests {
     }
 
     #[test]
+    fn test_trigger_notification_metadata_schema_is_object() {
+        let schema = serde_json::to_value(schemars::schema_for!(McpTriggerNotificationParams))
+            .expect("serialize schema");
+        let metadata_schema = &schema["properties"]["metadata"];
+
+        assert!(metadata_schema.is_object());
+        assert_ne!(metadata_schema, &serde_json::json!(true));
+        assert_eq!(
+            metadata_schema["type"],
+            serde_json::json!(["object", "null"])
+        );
+        if let Some(required) = schema["required"].as_array() {
+            assert!(!required
+                .iter()
+                .any(|field| field.as_str() == Some("metadata")));
+        }
+    }
+
+    #[test]
     fn test_build_runtime_shared_mcp_servers_allocates_and_reuses_ports() {
         let mut config = SharedMcpConfig::default();
         config.servers.insert(
@@ -3724,6 +4562,30 @@ mod tests {
         assert_eq!(servers[1].1.port, 3101);
     }
 
+    #[test]
+    fn test_launch_runtime_explicit_local_overrides_workspace_wsl_default() {
+        let selected = select_launch_runtime_kind(
+            Some(LaunchRuntimeKind::Local),
+            None,
+            None,
+            Some(LaunchRuntimeKind::Wsl),
+        );
+
+        assert_eq!(selected, (LaunchRuntimeKind::Local, "explicit"));
+    }
+
+    #[test]
+    fn test_launch_runtime_resume_history_overrides_workspace_wsl_default() {
+        let selected = select_launch_runtime_kind(
+            None,
+            Some(LaunchRuntimeKind::Local),
+            None,
+            Some(LaunchRuntimeKind::Wsl),
+        );
+
+        assert_eq!(selected, (LaunchRuntimeKind::Local, "history"));
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn test_resolve_wsl_launch_info_prefers_workspace_project_remote_path() {
@@ -3748,7 +4610,8 @@ mod tests {
             .write_workspace_json("ws-wsl", &workspace)
             .expect("persist workspace");
 
-        let info = resolve_wsl_launch_info(r"D:\workspace\repo", Some("ws-wsl"), &service)
+        let workspace = service.get_workspace("ws-wsl").expect("load workspace");
+        let info = resolve_wsl_launch_info(r"D:\workspace\repo", Some(&workspace))
             .expect("resolve wsl info");
         assert_eq!(info.remote_path, "/home/dev/workspace/repo");
         assert_eq!(
@@ -3761,12 +4624,6 @@ mod tests {
     #[cfg(not(target_os = "windows"))]
     #[test]
     fn test_resolve_wsl_launch_info_is_disabled_on_non_windows() {
-        let dir = tempfile::tempdir().expect("create temp dir");
-        let service = WorkspaceService::new(dir.path().to_path_buf());
-
-        assert!(
-            resolve_wsl_launch_info(r"\\wsl.localhost\Ubuntu\home\dev\repo", None, &service,)
-                .is_none()
-        );
+        assert!(resolve_wsl_launch_info(r"\\wsl.localhost\Ubuntu\home\dev\repo", None).is_none());
     }
 }

@@ -99,11 +99,12 @@ export function createTestSettings(overrides?: Partial<AppSettings>): AppSetting
     },
     theme: { mode: "dark" },
     terminal: {
-      fontSize: 14,
+      fontSize: 15,
       fontFamily: "monospace",
       cursorStyle: "block",
       cursorBlink: true,
       scrollback: 20000,
+      themeMode: "followApp",
       rendererMode: "auto",
       shell: null,
       disableConptySanitize: null,
