@@ -23,7 +23,7 @@ use crate::services::{
     NotificationService, ProjectService, ProviderService, SettingsService, SharedMcpService,
     SkillService, SpecService, SshMachineService, TerminalService, TodoService, WorkspaceService,
 };
-use crate::utils::AppPaths;
+use crate::utils::{validate_command, validate_mcp_name, validate_path, AppPaths};
 use anyhow::Result;
 use axum::{
     extract::{DefaultBodyLimit, Json, Path as AxumPath, Request, State},
@@ -33,7 +33,10 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use cc_panes_core::models::shared_mcp::{BridgeMode, SharedMcpConfig, SharedMcpServerConfig};
+use cc_panes_core::models::shared_mcp::{
+    BridgeMode, SharedMcpConfig, SharedMcpServerConfig, SharedMcpServerStatus,
+};
+use cc_panes_core::services::mcp_config_service::McpServerConfig;
 use rmcp::{
     handler::server::router::tool::ToolRouter,
     handler::server::wrapper::Parameters,
@@ -282,6 +285,7 @@ pub struct AppState {
     pub provider_service: Arc<ProviderService>,
     pub launch_profile_service: Arc<LaunchProfileService>,
     pub shared_mcp_service: Arc<SharedMcpService>,
+    pub mcp_config_service: Arc<crate::services::McpConfigService>,
     pub project_service: Arc<ProjectService>,
     pub workspace_service: Arc<WorkspaceService>,
     pub ssh_machine_service: Arc<SshMachineService>,
@@ -346,6 +350,7 @@ impl OrchestratorService {
         provider_service: Arc<ProviderService>,
         launch_profile_service: Arc<LaunchProfileService>,
         shared_mcp_service: Arc<SharedMcpService>,
+        mcp_config_service: Arc<crate::services::McpConfigService>,
         project_service: Arc<ProjectService>,
         workspace_service: Arc<WorkspaceService>,
         ssh_machine_service: Arc<SshMachineService>,
@@ -367,6 +372,7 @@ impl OrchestratorService {
             provider_service,
             launch_profile_service,
             shared_mcp_service,
+            mcp_config_service,
             project_service,
             workspace_service,
             ssh_machine_service,
@@ -1111,6 +1117,68 @@ struct McpPlanCollaborationParams {
     verbose: Option<bool>,
 }
 
+// ============ MCP Config MCP 参数 ============
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpProjectMcpParams {
+    /// 项目路径（必须是已注册项目）
+    #[serde(rename = "projectPath")]
+    project_path: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpNamedProjectMcpParams {
+    /// 项目路径（必须是已注册项目）
+    #[serde(rename = "projectPath")]
+    project_path: String,
+    /// MCP Server 名称
+    name: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpUpsertProjectMcpServerParams {
+    /// 项目路径（必须是已注册项目）
+    #[serde(rename = "projectPath")]
+    project_path: String,
+    /// MCP Server 名称
+    name: String,
+    /// 启动命令，例如 npx、node、python
+    command: String,
+    /// 命令参数；不传则默认为空数组
+    args: Option<Vec<String>>,
+    /// 环境变量；不传则默认为空对象
+    env: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct McpUpsertSharedMcpServerParams {
+    /// 共享 MCP Server 名称
+    name: String,
+    /// 原始启动命令，例如 npx、node、python
+    command: String,
+    /// 原始命令参数；不传则更新时保留原值，创建时默认为空数组
+    args: Option<Vec<String>>,
+    /// 环境变量；不传则更新时保留原值，创建时默认为空对象
+    env: Option<HashMap<String, String>>,
+    /// 是否启用共享；不传则更新时保留原值，创建时默认为 true
+    shared: Option<bool>,
+    /// HTTP 端口；不传则更新时保留原值，创建时自动分配
+    port: Option<u16>,
+    /// 桥接模式：mcp-proxy 或 native-http
+    bridge_mode: Option<String>,
+    /// 写入配置后是否启动；默认 false
+    start: Option<bool>,
+    /// 如果该共享 MCP 正在运行，是否重启以应用新配置；start=true 时会自动重启
+    restart_if_running: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpSharedMcpServerNameParams {
+    /// 共享 MCP Server 名称
+    name: String,
+}
+
 // ============ Runtime Config MCP 参数 ============
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1435,6 +1503,86 @@ fn build_runtime_shared_mcp_servers(
     }
 
     Ok(servers)
+}
+
+fn build_upsert_shared_mcp_server_config(
+    params: McpUpsertSharedMcpServerParams,
+    config: &SharedMcpConfig,
+) -> std::result::Result<(String, SharedMcpServerConfig), String> {
+    let name = required_trimmed(&params.name, "name")?;
+    let command = required_trimmed(&params.command, "command")?;
+    validate_mcp_name(&name).map_err(|error| error.to_string())?;
+    validate_command(&command).map_err(|error| error.to_string())?;
+
+    let existing = config.servers.get(&name);
+    let port = if let Some(port) = params.port {
+        validate_runtime_shared_port(&name, port, config, &HashMap::new())?;
+        port
+    } else if let Some(existing) = existing {
+        existing.port
+    } else {
+        allocate_runtime_shared_port(config, &HashMap::new())?
+    };
+
+    let bridge_mode = match params.bridge_mode.as_deref() {
+        Some(value) => parse_bridge_mode(Some(value))?,
+        None => existing
+            .map(|server| server.bridge_mode.clone())
+            .unwrap_or_default(),
+    };
+
+    let server = SharedMcpServerConfig {
+        command,
+        args: params
+            .args
+            .or_else(|| existing.map(|server| server.args.clone()))
+            .unwrap_or_default(),
+        env: params
+            .env
+            .or_else(|| existing.map(|server| server.env.clone()))
+            .unwrap_or_default(),
+        shared: params
+            .shared
+            .or_else(|| existing.map(|server| server.shared))
+            .unwrap_or(true),
+        port,
+        bridge_mode,
+    };
+
+    Ok((name, server))
+}
+
+fn mask_mcp_env_values(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(serde_json::Value::Object(env)) = map.get_mut("env") {
+                for value in env.values_mut() {
+                    *value = serde_json::Value::String("***".to_string());
+                }
+            }
+            for child in map.values_mut() {
+                mask_mcp_env_values(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                mask_mcp_env_values(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn to_masked_mcp_json<T: Serialize>(value: &T) -> serde_json::Value {
+    match serde_json::to_value(value) {
+        Ok(mut value) => {
+            mask_mcp_env_values(&mut value);
+            value
+        }
+        Err(error) => serde_json::json!({
+            "serializationError": error.to_string()
+        }),
+    }
 }
 
 fn runtime_profile_matches_key(profile: &LaunchProfile, name: &str, alias: Option<&str>) -> bool {
@@ -1969,6 +2117,279 @@ impl McpToolHandler {
         match self.create_runtime_config_impl(params) {
             Ok(result) => serde_json::to_string_pretty(&result)
                 .unwrap_or_else(|error| format!("错误: 序列化失败: {}", error)),
+            Err(error) => format!("错误: {}", error),
+        }
+    }
+
+    /// 列出项目的所有 MCP Server 配置（读取 project/.claude/settings.local.json）。
+    #[tool]
+    async fn list_mcp_servers(
+        &self,
+        Parameters(params): Parameters<McpProjectMcpParams>,
+    ) -> String {
+        debug!(project = %params.project_path, "mcp::list_mcp_servers");
+        if let Err(error) = validate_path(&params.project_path) {
+            return format!("错误: {}", error);
+        }
+        if !is_project_registered(&self.state, &params.project_path) {
+            return format!("错误: 项目路径 '{}' 未注册", params.project_path);
+        }
+        match self
+            .state
+            .mcp_config_service
+            .list_mcp_servers(&params.project_path)
+        {
+            Ok(servers) => {
+                serde_json::json!({ "servers": to_masked_mcp_json(&servers) }).to_string()
+            }
+            Err(error) => format!("错误: {}", error),
+        }
+    }
+
+    /// 获取项目的单个 MCP Server 配置。
+    #[tool]
+    async fn get_mcp_server(
+        &self,
+        Parameters(params): Parameters<McpNamedProjectMcpParams>,
+    ) -> String {
+        debug!(project = %params.project_path, name = %params.name, "mcp::get_mcp_server");
+        if let Err(error) = validate_path(&params.project_path) {
+            return format!("错误: {}", error);
+        }
+        if !is_project_registered(&self.state, &params.project_path) {
+            return format!("错误: 项目路径 '{}' 未注册", params.project_path);
+        }
+        match self
+            .state
+            .mcp_config_service
+            .get_mcp_server(&params.project_path, &params.name)
+        {
+            Ok(server) => serde_json::json!({ "server": to_masked_mcp_json(&server) }).to_string(),
+            Err(error) => format!("错误: {}", error),
+        }
+    }
+
+    /// 添加或更新项目级 MCP Server 配置，写入 project/.claude/settings.local.json。
+    #[tool]
+    async fn upsert_mcp_server(
+        &self,
+        Parameters(params): Parameters<McpUpsertProjectMcpServerParams>,
+    ) -> String {
+        info!(project = %params.project_path, name = %params.name, "mcp::upsert_mcp_server");
+        if let Err(error) = validate_path(&params.project_path) {
+            return format!("错误: {}", error);
+        }
+        if !is_project_registered(&self.state, &params.project_path) {
+            return format!("错误: 项目路径 '{}' 未注册", params.project_path);
+        }
+        if let Err(error) = validate_mcp_name(&params.name) {
+            return format!("错误: {}", error);
+        }
+        if let Err(error) = validate_command(&params.command) {
+            return format!("错误: {}", error);
+        }
+
+        let config = McpServerConfig {
+            command: params.command,
+            args: params.args.unwrap_or_default(),
+            env: params.env.unwrap_or_default(),
+        };
+        match self.state.mcp_config_service.upsert_mcp_server(
+            &params.project_path,
+            &params.name,
+            config.clone(),
+        ) {
+            Ok(()) => serde_json::json!({
+                "projectPath": params.project_path,
+                "name": params.name,
+                "config": to_masked_mcp_json(&config),
+                "updated": true
+            })
+            .to_string(),
+            Err(error) => format!("错误: {}", error),
+        }
+    }
+
+    /// 删除项目级 MCP Server 配置。
+    #[tool]
+    async fn remove_mcp_server(
+        &self,
+        Parameters(params): Parameters<McpNamedProjectMcpParams>,
+    ) -> String {
+        info!(project = %params.project_path, name = %params.name, "mcp::remove_mcp_server");
+        if let Err(error) = validate_path(&params.project_path) {
+            return format!("错误: {}", error);
+        }
+        if !is_project_registered(&self.state, &params.project_path) {
+            return format!("错误: 项目路径 '{}' 未注册", params.project_path);
+        }
+        match self
+            .state
+            .mcp_config_service
+            .remove_mcp_server(&params.project_path, &params.name)
+        {
+            Ok(removed) => serde_json::json!({
+                "projectPath": params.project_path,
+                "name": params.name,
+                "removed": removed
+            })
+            .to_string(),
+            Err(error) => format!("错误: {}", error),
+        }
+    }
+
+    /// 获取共享 MCP 全局配置。
+    #[tool]
+    async fn get_shared_mcp_config(&self) -> String {
+        debug!("mcp::get_shared_mcp_config");
+        serde_json::to_string_pretty(&to_masked_mcp_json(
+            &self.state.shared_mcp_service.get_config(),
+        ))
+        .unwrap_or_else(|error| format!("错误: 序列化失败: {}", error))
+    }
+
+    /// 获取共享 MCP Server 运行状态。
+    #[tool]
+    async fn get_shared_mcp_status(&self) -> String {
+        debug!("mcp::get_shared_mcp_status");
+        serde_json::json!({
+            "servers": to_masked_mcp_json(&self.state.shared_mcp_service.get_all_status())
+        })
+        .to_string()
+    }
+
+    /// 添加或更新共享 MCP Server 配置，可选立即启动或重启。
+    #[tool]
+    async fn upsert_shared_mcp_server(
+        &self,
+        Parameters(params): Parameters<McpUpsertSharedMcpServerParams>,
+    ) -> String {
+        info!(name = %params.name, "mcp::upsert_shared_mcp_server");
+        let config = self.state.shared_mcp_service.get_config();
+        let start = params.start.unwrap_or(false);
+        let restart_if_running = params.restart_if_running.unwrap_or(false);
+        let (name, server) = match build_upsert_shared_mcp_server_config(params, &config) {
+            Ok(value) => value,
+            Err(error) => return format!("错误: {}", error),
+        };
+
+        let was_running = self
+            .state
+            .shared_mcp_service
+            .get_all_status()
+            .iter()
+            .any(|info| info.name == name && info.status == SharedMcpServerStatus::Running);
+
+        if let Err(error) = self
+            .state
+            .shared_mcp_service
+            .upsert_server(&name, server.clone())
+        {
+            return format!("错误: {}", error);
+        }
+
+        let mut started = false;
+        let mut restarted = false;
+        let mut warnings = Vec::<String>::new();
+        if start || (was_running && restart_if_running) {
+            let result = if was_running {
+                restarted = true;
+                started = start;
+                self.state.shared_mcp_service.restart_server(&name)
+            } else {
+                started = true;
+                self.state.shared_mcp_service.start_server(&name)
+            };
+            if let Err(error) = result {
+                warnings.push(format!(
+                    "Failed to start/restart shared MCP server: {}",
+                    error
+                ));
+            }
+        }
+
+        serde_json::json!({
+            "name": name,
+            "config": to_masked_mcp_json(&server),
+            "updated": true,
+            "started": started,
+            "restarted": restarted,
+            "warnings": warnings
+        })
+        .to_string()
+    }
+
+    /// 删除共享 MCP Server 配置（会先停止运行中的进程）。
+    #[tool]
+    async fn remove_shared_mcp_server(
+        &self,
+        Parameters(params): Parameters<McpSharedMcpServerNameParams>,
+    ) -> String {
+        info!(name = %params.name, "mcp::remove_shared_mcp_server");
+        match self.state.shared_mcp_service.remove_server(&params.name) {
+            Ok(()) => serde_json::json!({ "name": params.name, "removed": true }).to_string(),
+            Err(error) => format!("错误: {}", error),
+        }
+    }
+
+    /// 启动共享 MCP Server。
+    #[tool]
+    async fn start_shared_mcp_server(
+        &self,
+        Parameters(params): Parameters<McpSharedMcpServerNameParams>,
+    ) -> String {
+        info!(name = %params.name, "mcp::start_shared_mcp_server");
+        match self.state.shared_mcp_service.start_server(&params.name) {
+            Ok(()) => serde_json::json!({ "name": params.name, "started": true }).to_string(),
+            Err(error) => format!("错误: {}", error),
+        }
+    }
+
+    /// 停止共享 MCP Server。
+    #[tool]
+    async fn stop_shared_mcp_server(
+        &self,
+        Parameters(params): Parameters<McpSharedMcpServerNameParams>,
+    ) -> String {
+        info!(name = %params.name, "mcp::stop_shared_mcp_server");
+        if !self
+            .state
+            .shared_mcp_service
+            .get_config()
+            .servers
+            .contains_key(&params.name)
+        {
+            return format!("错误: Shared MCP server '{}' not found", params.name);
+        }
+        let was_running = self
+            .state
+            .shared_mcp_service
+            .get_all_status()
+            .iter()
+            .any(|info| info.name == params.name && info.status == SharedMcpServerStatus::Running);
+        self.state.shared_mcp_service.stop_server(&params.name);
+        serde_json::json!({ "name": params.name, "stopped": was_running }).to_string()
+    }
+
+    /// 重启共享 MCP Server。
+    #[tool]
+    async fn restart_shared_mcp_server(
+        &self,
+        Parameters(params): Parameters<McpSharedMcpServerNameParams>,
+    ) -> String {
+        info!(name = %params.name, "mcp::restart_shared_mcp_server");
+        match self.state.shared_mcp_service.restart_server(&params.name) {
+            Ok(()) => serde_json::json!({ "name": params.name, "restarted": true }).to_string(),
+            Err(error) => format!("错误: {}", error),
+        }
+    }
+
+    /// 从 ~/.claude.json 导入 stdio MCP Server 到共享 MCP 配置。
+    #[tool]
+    async fn import_shared_mcp_from_claude(&self) -> String {
+        info!("mcp::import_shared_mcp_from_claude");
+        match self.state.shared_mcp_service.import_from_claude_json() {
+            Ok(imported) => serde_json::json!({ "imported": imported }).to_string(),
             Err(error) => format!("错误: {}", error),
         }
     }
@@ -3181,20 +3602,11 @@ impl ServerHandler for McpToolHandler {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(concat!(
-                "CC-Panes Orchestrator: 管理 Claude Code 多实例编排与工作空间。\n",
-                "编排: launch_task（启动 Claude 实例，runtimeKind 可显式指定 local/wsl/ssh）、list_projects（已注册项目）、get_task_status（任务状态）\n",
-                "PTY 控制: write_to_session（向会话写入文本/命令）、get_session_status（查询会话状态）、list_sessions（列出所有会话）、kill_session（终止会话）、get_session_output（读取输出内容）\n",
-                "工作空间: list_workspaces、get_workspace、create_workspace、add_project_to_workspace、scan_directory\n",
-                "待办: query_todos、create_todo、update_todo\n",
-                "编排任务: create_task_binding、update_task_binding、query_task_bindings、register_plan_leader、register_plan_worker、get_plan_collaboration、reconcile_plan_collaboration\n",
-                "运行配置: create_runtime_config（创建/更新运行配置，可选创建共享 MCP，并绑定 workspace/project）\n",
-                "Skill: list_skills（查看项目可用命令模板）、list_external_skills（查看 Claude/Codex/plugin 全局 Skill）\n",
-                "文件: open_folder（导航文件浏览器）、open_file（编辑器打开文件）、close_file（关闭标签）、list_open_files（查询打开的文件）\n",
-                "面板: list_panes（查询当前面板布局和标签信息，返回 paneId 可用于 launch_task）\n",
-                "历史: list_launch_history（查询启动历史，含 resumeSessionId/cliTool）、list_resume_sessions（查询 Claude/Codex 会话列表）、list_claude_sessions（兼容旧流程）\n",
-                "典型编排流程: launch_task → get_session_status（等完成）→ get_session_output（读结果）\n",
-                "典型项目流程: scan_directory 发现项目 → create_workspace → add_project_to_workspace → launch_task\n",
-                "典型 resume 流程: list_launch_history(projectPath) → 找到 resumeSessionId + cliTool + runtimeKind → launch_task(projectPath, resumeId=resumeSessionId, cliTool=cliTool, runtimeKind=runtimeKind)",
+                "CC-Panes Orchestrator: 多 CLI（Claude/Codex）多实例编排与工作空间管理。\n",
+                "工具按需调用，完整列表见 tools/list。\n",
+                "典型流程: launch_task → get_session_status → get_session_output。\n",
+                "项目接入: scan_directory → create_workspace → add_project_to_workspace → launch_task。\n",
+                "Resume: list_launch_history(projectPath) → 取 resumeSessionId/cliTool/runtimeKind → launch_task(resumeId, cliTool, runtimeKind)。",
             ))
     }
 }
@@ -4560,6 +4972,110 @@ mod tests {
         assert_eq!(servers[0].1.port, 3100);
         assert_eq!(servers[1].0, "playwright");
         assert_eq!(servers[1].1.port, 3101);
+    }
+
+    #[test]
+    fn test_build_upsert_shared_mcp_server_config_allocates_new_port() {
+        let mut config = SharedMcpConfig::default();
+        config.servers.insert(
+            "context7".into(),
+            SharedMcpServerConfig {
+                command: "npx".into(),
+                args: vec!["-y".into(), "@upstash/context7-mcp".into()],
+                env: HashMap::new(),
+                shared: true,
+                port: 3100,
+                bridge_mode: BridgeMode::McpProxy,
+            },
+        );
+
+        let (name, server) = build_upsert_shared_mcp_server_config(
+            McpUpsertSharedMcpServerParams {
+                name: "playwright".into(),
+                command: "npx".into(),
+                args: Some(vec!["-y".into(), "@playwright/mcp".into()]),
+                env: None,
+                shared: None,
+                port: None,
+                bridge_mode: None,
+                start: None,
+                restart_if_running: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        assert_eq!(name, "playwright");
+        assert_eq!(server.port, 3101);
+        assert!(server.shared);
+        assert_eq!(server.bridge_mode, BridgeMode::McpProxy);
+    }
+
+    #[test]
+    fn test_build_upsert_shared_mcp_server_config_preserves_existing_optional_fields() {
+        let mut config = SharedMcpConfig::default();
+        config.servers.insert(
+            "context7".into(),
+            SharedMcpServerConfig {
+                command: "npx".into(),
+                args: vec!["-y".into(), "@upstash/context7-mcp".into()],
+                env: HashMap::from([("API_KEY".into(), "secret".into())]),
+                shared: false,
+                port: 3110,
+                bridge_mode: BridgeMode::NativeHttp,
+            },
+        );
+
+        let (_, server) = build_upsert_shared_mcp_server_config(
+            McpUpsertSharedMcpServerParams {
+                name: "context7".into(),
+                command: "node".into(),
+                args: None,
+                env: None,
+                shared: None,
+                port: None,
+                bridge_mode: None,
+                start: None,
+                restart_if_running: None,
+            },
+            &config,
+        )
+        .unwrap();
+
+        assert_eq!(server.command, "node");
+        assert_eq!(server.args, vec!["-y", "@upstash/context7-mcp"]);
+        assert_eq!(
+            server.env.get("API_KEY").map(String::as_str),
+            Some("secret")
+        );
+        assert!(!server.shared);
+        assert_eq!(server.port, 3110);
+        assert_eq!(server.bridge_mode, BridgeMode::NativeHttp);
+    }
+
+    #[test]
+    fn test_to_masked_mcp_json_masks_nested_env_values() {
+        let config = SharedMcpServerConfig {
+            command: "npx".into(),
+            args: vec!["-y".into(), "server".into()],
+            env: HashMap::from([
+                ("API_KEY".into(), "secret".into()),
+                ("DEBUG".into(), "true".into()),
+            ]),
+            shared: true,
+            port: 3100,
+            bridge_mode: BridgeMode::McpProxy,
+        };
+
+        let value = to_masked_mcp_json(&serde_json::json!({
+            "server": config,
+            "nested": [{ "env": { "TOKEN": "abc" } }]
+        }));
+
+        assert_eq!(value["server"]["env"]["API_KEY"], "***");
+        assert_eq!(value["server"]["env"]["DEBUG"], "***");
+        assert_eq!(value["nested"][0]["env"]["TOKEN"], "***");
+        assert_eq!(value["server"]["command"], "npx");
     }
 
     #[test]

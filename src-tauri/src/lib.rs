@@ -1130,6 +1130,7 @@ pub fn run() {
                 let prov_svc = app.state::<Arc<ProviderService>>();
                 let launch_profile_svc = app.state::<Arc<LaunchProfileService>>();
                 let shared_mcp_svc = app.state::<Arc<SharedMcpService>>();
+                let mcp_config_svc = app.state::<Arc<McpConfigService>>();
                 let proj_svc = app.state::<Arc<ProjectService>>();
                 let ws_svc_orch = app.state::<Arc<WorkspaceService>>();
                 let ssh_machine_svc = app.state::<Arc<SshMachineService>>();
@@ -1147,6 +1148,7 @@ pub fn run() {
                     prov_svc.inner().clone(),
                     launch_profile_svc.inner().clone(),
                     shared_mcp_svc.inner().clone(),
+                    mcp_config_svc.inner().clone(),
                     proj_svc.inner().clone(),
                     ws_svc_orch.inner().clone(),
                     ssh_machine_svc.inner().clone(),
