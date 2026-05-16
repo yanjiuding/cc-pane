@@ -1195,7 +1195,12 @@ impl TerminalService {
         // 解析 Shell 配置
         let shell_id = self.settings_service.get_settings().terminal.shell.clone();
 
-        let _ = workspace_name;
+        env_vars.insert("CC_PANES_PROJECT_PATH".to_string(), project_path.to_string());
+        if let Some(name) = workspace_name {
+            if !name.trim().is_empty() {
+                env_vars.insert("CC_PANES_WORKSPACE_NAME".to_string(), name.to_string());
+            }
+        }
 
         // 注入 Orchestrator API 信息到所有 PTY 会话（仅本地模式）
         if !is_ssh {
