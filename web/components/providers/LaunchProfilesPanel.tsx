@@ -46,10 +46,11 @@ const EXTERNAL_SKILL_GROUPS: Array<{
   kind: ExternalSkillSourceKind;
   label: string;
   policyKey: "includeExternalClaudeSkills" | "includeExternalCodexSkills" | "includeExternalPluginSkills";
+  applicableTools: KnownCliTool[];
 }> = [
-  { kind: "claude", label: "Claude", policyKey: "includeExternalClaudeSkills" },
-  { kind: "codex", label: "Codex", policyKey: "includeExternalCodexSkills" },
-  { kind: "plugin", label: "Plugin", policyKey: "includeExternalPluginSkills" },
+  { kind: "claude", label: "Claude", policyKey: "includeExternalClaudeSkills", applicableTools: ["claude"] },
+  { kind: "codex", label: "Codex", policyKey: "includeExternalCodexSkills", applicableTools: ["codex"] },
+  { kind: "plugin", label: "Plugin", policyKey: "includeExternalPluginSkills", applicableTools: ["claude"] },
 ];
 
 const TOOL_LABELS: Record<KnownCliTool, string> = {
@@ -991,8 +992,15 @@ export default function LaunchProfilesPanel({
   const marketEntryIds = new Set(marketEntries.map((entry) => entry.id));
   const standaloneUserSkills = userSkills.filter((skill) => !marketEntryIds.has(skill.id));
   const userSkillSelectedCount = selectedUserSkillCount(draft.skillPolicy, userSkills);
-  const externalSkillSelectedCount = selectedExternalSkillCount(draft.skillPolicy, externalSkills);
-  const externalSkillGroups = EXTERNAL_SKILL_GROUPS.map((group) => ({
+  const visibleExternalSkillGroups = EXTERNAL_SKILL_GROUPS.filter((group) =>
+    group.applicableTools.includes(activeTool),
+  );
+  const visibleExternalSkillKinds = new Set(visibleExternalSkillGroups.map((group) => group.kind));
+  const visibleExternalSkills = externalSkills.filter((skill) =>
+    visibleExternalSkillKinds.has(externalSkillSourceKind(skill)),
+  );
+  const externalSkillSelectedCount = selectedExternalSkillCount(draft.skillPolicy, visibleExternalSkills);
+  const externalSkillGroups = visibleExternalSkillGroups.map((group) => ({
     ...group,
     skills: externalSkills.filter((skill) => externalSkillSourceKind(skill) === group.kind),
   }));
@@ -1571,6 +1579,7 @@ export default function LaunchProfilesPanel({
                 })}
               </div>
 
+              {visibleExternalSkillGroups.length > 0 && (
               <div className="mt-5 rounded-lg border border-border bg-background p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
@@ -1579,7 +1588,7 @@ export default function LaunchProfilesPanel({
                         External Skills
                       </div>
                       <Badge variant="secondary" className="text-[10px]">
-                        {externalSkillSelectedCount}/{externalSkills.length}
+                        {externalSkillSelectedCount}/{visibleExternalSkills.length}
                       </Badge>
                     </div>
                     <div className="mt-1 text-[11px]" style={{ color: "var(--app-text-tertiary)" }}>
@@ -1592,7 +1601,7 @@ export default function LaunchProfilesPanel({
                 </div>
 
                 <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  {EXTERNAL_SKILL_GROUPS.map((group) => {
+                  {visibleExternalSkillGroups.map((group) => {
                     const included = isExternalSourceIncluded(draft.skillPolicy, group.kind);
                     return (
                       <label
@@ -1614,13 +1623,13 @@ export default function LaunchProfilesPanel({
                 </div>
 
                 <div className="mt-3 space-y-2">
-                  {skillMarketLoading && externalSkills.length === 0 ? (
+                  {skillMarketLoading && visibleExternalSkills.length === 0 ? (
                     <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-xs" style={{ color: "var(--app-text-tertiary)" }}>
                       正在加载外部 Skill...
                     </div>
-                  ) : externalSkills.length === 0 ? (
+                  ) : visibleExternalSkills.length === 0 ? (
                     <div className="rounded-md border border-dashed border-border px-3 py-6 text-center text-xs" style={{ color: "var(--app-text-tertiary)" }}>
-                      未发现 Claude、Codex 或 plugin 外部 Skill。
+                      未发现 {visibleExternalSkillGroups.map((group) => group.label).join("、")} 外部 Skill。
                     </div>
                   ) : externalSkillGroups.map((group) => {
                     const included = isExternalSourceIncluded(draft.skillPolicy, group.kind);
@@ -1671,6 +1680,7 @@ export default function LaunchProfilesPanel({
                   })}
                 </div>
               </div>
+              )}
 
               <div className="mt-5 rounded-lg border border-border bg-background p-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
