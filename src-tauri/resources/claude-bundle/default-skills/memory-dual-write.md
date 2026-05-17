@@ -1,6 +1,6 @@
 ---
 name: ccpanes-memory-dual-write
-description: Mirror long-term memory writes into the {{app_name}} shared pool via `cc-memory` MCP so Claude and Codex see the same memory across instances. Use when the user says "记住"、"以后都这样"、"别忘了"、"remember that"、"don't forget"、corrects you (feedback), states a stable preference, or makes a design decision worth recalling next session. Skip if `CC_PANES_PROJECT_PATH` / `CC_PANES_WORKSPACE_NAME` / `CC_PANES_CLI_TOOL` env vars are missing — that means CLI is not under {{app_name}} control and writes would pollute the pool.
+description: Mirror long-term memory writes into the {{app_name}} shared pool via `cc-memory` MCP so Claude and Codex see the same memory across instances. Use when the user says "记住"、"以后都这样"、"别忘了"、"remember that"、"don't forget"、corrects you (feedback), states a stable preference, or makes a design decision worth recalling next session. Skip when all three env vars `CC_PANES_PROJECT_PATH` / `CC_PANES_WORKSPACE_NAME` / `CC_PANES_CLI_TOOL` are missing — that means the CLI is not under {{app_name}} control and writes would pollute the pool.
 ---
 
 # 双写记忆

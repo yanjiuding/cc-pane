@@ -25,8 +25,6 @@ description: Launch a new Claude or Codex CLI session in a {{app_name}}-managed 
 - 用户明确"在 Windows 本机"时传 `runtimeKind: "local"` 覆盖。
 - resume 历史会话时若不传 `runtimeKind`，优先使用历史的 runtimeKind，避免被 workspace 默认覆盖。
 
-详细环境分支与路径转换见 `launch-task.reference.md`（仅在出现非常规路径时阅读）。
-
 ## 示例
 
 ```
