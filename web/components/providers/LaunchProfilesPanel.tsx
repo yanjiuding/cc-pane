@@ -18,14 +18,8 @@ const WORKSPACE_FILTER_ALL = "__all_workspaces__";
 
 const BUILTIN_SKILLS = [
   "ccpanes-launch-task",
-  "ccpanes-fork-session",
-  "ccpanes-parallel-run",
-  "ccpanes-workspace",
-  "ccpanes-workspace-migrate",
-  "ccpanes-browse-sessions",
   "ccpanes-dispatch-todos",
-  "ccpanes-spec",
-  "ccpanes-plantocodex",
+  "ccpanes-browse-sessions",
   "ccpanes-memory-dual-write",
 ];
 

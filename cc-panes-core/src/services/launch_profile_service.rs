@@ -1158,16 +1158,12 @@ fn default_external_skill_registry() -> Arc<ExternalSkillRegistry> {
 }
 
 fn core_skill_ids() -> Vec<ResolvedSkill> {
+    // 默认 core 仅保留高频 4 个；其他 skill 仍会发布到磁盘，
+    // 用户可在 UI 切到 `mode=custom` 手动启用。
     [
         "ccpanes-launch-task",
-        "ccpanes-fork-session",
-        "ccpanes-parallel-run",
-        "ccpanes-workspace",
-        "ccpanes-workspace-migrate",
-        "ccpanes-browse-sessions",
         "ccpanes-dispatch-todos",
-        "ccpanes-spec",
-        "ccpanes-plantocodex",
+        "ccpanes-browse-sessions",
         "ccpanes-memory-dual-write",
     ]
     .into_iter()
@@ -1439,11 +1435,16 @@ mod tests {
         assert!(resolution
             .skills
             .iter()
-            .any(|skill| skill.id == "builtin:ccpanes-workspace"));
+            .any(|skill| skill.id == "builtin:ccpanes-launch-task"));
         assert!(resolution
             .skills
             .iter()
             .any(|skill| skill.id == "builtin:ccpanes-memory-dual-write"));
+        // 默认 core 已瘦身，不再包含 workspace
+        assert!(!resolution
+            .skills
+            .iter()
+            .any(|skill| skill.id == "builtin:ccpanes-workspace"));
         assert!(!resolution.skills.is_empty());
     }
 
@@ -1765,10 +1766,16 @@ mod tests {
             .skills
             .iter()
             .any(|skill| skill.id == "builtin:ccpanes-launch-task"));
-        assert!(resolution
+        // workspace 已移出默认 core，断言为不存在
+        assert!(!resolution
             .skills
             .iter()
             .any(|skill| skill.id == "builtin:ccpanes-workspace"));
+        // 其他默认 core skill 仍然存在
+        assert!(resolution
+            .skills
+            .iter()
+            .any(|skill| skill.id == "builtin:ccpanes-memory-dual-write"));
     }
 
     #[test]
