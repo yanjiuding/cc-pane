@@ -452,3 +452,19 @@
 .home-session-item:hover {
   background: var(--app-glass-bg-light, var(--app-hover)) !important;
 }
+
+/* 阶段 2.9：StatusIndicator 脉动动效（toolRunning / compacting / initializing 用） */
+@keyframes cc-status-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(1.18);
+  }
+}
+
+.cc-status-pulse {
+  animation: cc-status-pulse 1.4s ease-in-out infinite;
+}

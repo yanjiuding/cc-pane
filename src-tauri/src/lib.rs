@@ -279,17 +279,17 @@ use commands::{
     write_terminal,
 };
 use repository::{
-    Database, HistoryRepository, ProjectRepository, SpecRepository, TaskBindingRepository,
-    TodoRepository,
+    Database, HistoryRepository, PlanRepository, ProjectRepository, SpecRepository,
+    TaskBindingRepository, TodoRepository,
 };
 use services::{
     ExternalSkillRegistry, FileSystemService, HistoryService, JournalService, LaunchHistoryService,
     LaunchProfileService, McpConfigService, MemoryService, NotificationService,
-    OrchestratorService, PlanService, ProcessMonitorService, ProjectCliHooksService,
-    ProjectContextService, ProjectService, ProviderService, ScreenshotService,
-    SessionRestoreService, SettingsService, SharedMcpService, SkillMarketService, SkillService,
-    SpecService, SshCredentialService, SshMachineService, TaskBindingService, TerminalService,
-    TodoService, WorkspaceService, WorktreeService,
+    OrchestratorService, PlanArchiveService, PlanService, ProcessMonitorService,
+    ProjectCliHooksService, ProjectContextService, ProjectService, ProviderService,
+    ScreenshotService, SessionRestoreService, SettingsService, SharedMcpService,
+    SkillMarketService, SkillService, SpecService, SshCredentialService, SshMachineService,
+    TaskBindingService, TerminalService, TodoService, WorkspaceService, WorktreeService,
 };
 use std::sync::Arc;
 use utils::AppPaths;
@@ -869,9 +869,11 @@ pub fn run() {
     let todo_repo = Arc::new(TodoRepository::new(db.clone()));
     let spec_repo = Arc::new(SpecRepository::new(db.clone()));
     let task_binding_repo = Arc::new(TaskBindingRepository::new(db.clone()));
+    let plan_repo = Arc::new(PlanRepository::new(db.clone()));
     let launch_history_service = Arc::new(LaunchHistoryService::new(history_repo));
     let todo_service = Arc::new(TodoService::new(todo_repo));
     let task_binding_service = Arc::new(TaskBindingService::new(task_binding_repo));
+    let plan_archive_service = Arc::new(PlanArchiveService::new(plan_repo));
     let spec_service = Arc::new(SpecService::new(spec_repo, todo_service.clone()));
     let project_service = Arc::new(ProjectService::new(project_repo));
     let history_service = Arc::new(HistoryService::new());
@@ -994,6 +996,7 @@ pub fn run() {
         .manage(skill_market_service)
         .manage(external_skill_registry)
         .manage(plan_service)
+        .manage(plan_archive_service)
         .manage(filesystem_service)
         .manage(memory_service)
         .manage(ssh_machine_service)
@@ -1142,6 +1145,7 @@ pub fn run() {
                 let lh_svc = app.state::<Arc<LaunchHistoryService>>();
                 let notif_svc = app.state::<Arc<NotificationService>>();
                 let settings_svc = app.state::<Arc<SettingsService>>();
+                let plan_archive_svc = app.state::<Arc<PlanArchiveService>>();
                 let paths = app.state::<Arc<AppPaths>>();
                 if let Err(e) = orch_svc.start(
                     term_svc.inner().clone(),
@@ -1160,6 +1164,7 @@ pub fn run() {
                     lh_svc.inner().clone(),
                     notif_svc.inner().clone(),
                     settings_svc.inner().clone(),
+                    plan_archive_svc.inner().clone(),
                     app.handle().clone(),
                     paths.inner().clone(),
                 ) {
@@ -1169,6 +1174,8 @@ pub fn run() {
                 if let Some(port) = orch_svc.port() {
                     term_svc.set_orchestrator_info(port, orch_svc.token().to_string());
                 }
+                // 阶段 2.8：注入 SessionStateMachine 到 TerminalService（hook 主导时降级 PTY 推断）
+                term_svc.set_state_machine(orch_svc.session_state_machine());
             }
             info!(
                 "[boot] +{}ms: orchestrator started",

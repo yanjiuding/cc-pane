@@ -248,9 +248,14 @@
   "switchToDark": "切换到暗色模式",
 
   "statusActive": "运行中",
-  "statusWaitingInput": "等待输入",
+  "statusWaitingInput": "等待授权",
   "statusIdle": "空闲",
   "statusExited": "已退出",
+  "statusInitializing": "启动中",
+  "statusThinking": "思考中",
+  "statusToolRunning": "工具运行",
+  "statusCompacting": "压缩上下文",
+  "statusError": "错误",
 
   "notificationDesc": "窗口失焦时通过系统桌面通知提醒关键事件",
 

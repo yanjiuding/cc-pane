@@ -26,7 +26,7 @@ use crate::services::{
 use crate::utils::{validate_command, validate_mcp_name, validate_path, AppPaths};
 use anyhow::Result;
 use axum::{
-    extract::{DefaultBodyLimit, Json, Path as AxumPath, Request, State},
+    extract::{DefaultBodyLimit, Json, Path as AxumPath, Query, Request, State},
     http::{self, HeaderMap, Method, StatusCode},
     middleware,
     response::IntoResponse,
@@ -40,7 +40,7 @@ use cc_panes_core::services::mcp_config_service::McpServerConfig;
 use rmcp::{
     handler::server::router::tool::ToolRouter,
     handler::server::wrapper::Parameters,
-    model::{ServerCapabilities, ServerInfo},
+    model::{Extensions, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router, ServerHandler,
 };
 use serde::{Deserialize, Serialize};
@@ -140,6 +140,12 @@ pub struct OrchestratorLaunchEvent {
     pub notice: Option<String>,
     pub wsl: Option<WslLaunchInfo>,
     pub ssh: Option<SshConnectionInfo>,
+    /// 调用方（caller）所在 PTY 会话 id。
+    /// 仅当本次 launch_task 由某个已知 Claude 实例发起、且能解析出其 launchId
+    /// 时才会被设置；前端据此在已有 tab 中找到父 tab，给新建 tab 设置
+    /// `parentTabId`，从而渲染层级编号 `#N.M`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
 }
 
 /// 文件浏览器导航事件
@@ -297,6 +303,9 @@ pub struct AppState {
     pub launch_history_service: Arc<LaunchHistoryService>,
     pub notification_service: Arc<NotificationService>,
     pub settings_service: Arc<SettingsService>,
+    pub plan_archive_service: Arc<crate::services::PlanArchiveService>,
+    /// hook 驱动的会话状态机（阶段 2.2 引入）
+    pub session_state_machine: Arc<cc_panes_core::services::SessionStateMachine>,
     pub app_handle: AppHandle,
     pub app_paths: Arc<AppPaths>,
     pub tasks: Arc<Mutex<HashMap<String, TaskStatus>>>,
@@ -312,6 +321,8 @@ pub struct OrchestratorService {
     port: Mutex<Option<u16>>,
     token: String,
     pending_queries: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>,
+    /// hook 驱动状态机：进程级单例，所有 session 共享
+    session_state_machine: Arc<cc_panes_core::services::SessionStateMachine>,
 }
 
 impl OrchestratorService {
@@ -322,6 +333,7 @@ impl OrchestratorService {
             port: Mutex::new(None),
             token,
             pending_queries: Arc::new(Mutex::new(HashMap::new())),
+            session_state_machine: Arc::new(cc_panes_core::services::SessionStateMachine::new()),
         }
     }
 
@@ -333,6 +345,11 @@ impl OrchestratorService {
     /// 获取认证 token
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    /// 获取 SessionStateMachine 共享引用（terminal_service::set_state_machine 用）
+    pub fn session_state_machine(&self) -> Arc<cc_panes_core::services::SessionStateMachine> {
+        self.session_state_machine.clone()
     }
 
     /// 获取 pending_queries 引用（用于 respond command）
@@ -362,6 +379,7 @@ impl OrchestratorService {
         launch_history_service: Arc<LaunchHistoryService>,
         notification_service: Arc<NotificationService>,
         settings_service: Arc<SettingsService>,
+        plan_archive_service: Arc<crate::services::PlanArchiveService>,
         app_handle: AppHandle,
         app_paths: Arc<AppPaths>,
     ) -> Result<()> {
@@ -384,12 +402,120 @@ impl OrchestratorService {
             launch_history_service,
             notification_service,
             settings_service,
+            plan_archive_service,
+            session_state_machine: self.session_state_machine.clone(),
             app_handle,
             app_paths,
             tasks: Arc::new(Mutex::new(HashMap::new())),
             last_request_times: Arc::new(Mutex::new(Vec::new())),
             pending_queries: self.pending_queries.clone(),
         };
+
+        // ============ 阶段 2.6：把 SessionStateMachine 的状态跃迁桥接到 NotificationService ============
+        //
+        // 注册一个 listener：每次状态跃迁
+        //   (a) 写回 TerminalService::apply_hook_status → 让 status Mutex + emit
+        //       TERMINAL_STATUS 事件给前端看到新状态（这是端到端能通的关键，修 P0）
+        //   (b) 判断要不要发通知（NotificationService）
+        // listener 闭包持有 app_handle / notification_service / settings_service / terminal_service
+        // 的 Arc / clone。
+        {
+            let app_handle_for_listener = state.app_handle.clone();
+            let notif_svc = state.notification_service.clone();
+            let settings_svc = state.settings_service.clone();
+            let term_svc = state.terminal_service.clone();
+            let state_machine_for_timer = state.session_state_machine.clone();
+            state.session_state_machine.subscribe(Arc::new(
+                move |transition: &cc_panes_core::services::StateTransition| {
+                    use cc_panes_core::services::terminal_service::SessionStatus;
+
+                    // 第一步：写回 TerminalSession.status + emit TERMINAL_STATUS
+                    term_svc.apply_hook_status(&transition.pty_session_id, transition.to.clone());
+
+                    // 第二步：按状态决定通知 / 启动 timer
+                    match &transition.to {
+                        SessionStatus::Idle => {
+                            // TurnEnd → Idle："✅ 完成"
+                            notif_svc.notify_turn_end(
+                                &app_handle_for_listener,
+                                &settings_svc,
+                                &transition.pty_session_id,
+                                transition.turn_seq,
+                                None, // 摘要在未来阶段从 transcript 读取
+                            );
+                        }
+                        SessionStatus::WaitingInput => {
+                            // hook 上报 WaitingInput → "🟡 需授权"
+                            notif_svc.notify_waiting_input(
+                                &app_handle_for_listener,
+                                &settings_svc,
+                                &transition.pty_session_id,
+                            );
+                        }
+                        SessionStatus::Error => {
+                            notif_svc.notify_error(
+                                &app_handle_for_listener,
+                                &settings_svc,
+                                &transition.pty_session_id,
+                                transition.error_type.as_deref(),
+                            );
+                        }
+                        SessionStatus::Exited => {
+                            if transition.trigger_event == "pty-exit" {
+                                return;
+                            }
+                            // 通过 SessionEnd hook 进入 → 默认 exit_code = 0
+                            // PTY 自然退出由 terminal_service 单独负责（见现有 notify_session_exited）
+                            notif_svc.notify_session_exited(
+                                &app_handle_for_listener,
+                                &settings_svc,
+                                &transition.pty_session_id,
+                                0,
+                            );
+                        }
+                        // ============ 阶段 2.7：长工具 60s timer ============
+                        //
+                        // 进入 ToolRunning 时：spawn tokio task 等 60s；到时通过状态机 snapshot
+                        // 判断 (session, tool_use_id) 是否仍是同一个 ToolRunning。若是，发通知；
+                        // 否则该工具已结束，自然过期。不需要显式取消机制。
+                        SessionStatus::ToolRunning => {
+                            let session_id = transition.pty_session_id.clone();
+                            let tool_use_id = transition.tool_use_id.clone();
+                            let tool_name = transition
+                                .tool_name
+                                .clone()
+                                .unwrap_or_else(|| "tool".to_string());
+                            let app2 = app_handle_for_listener.clone();
+                            let notif2 = notif_svc.clone();
+                            let settings2 = settings_svc.clone();
+                            let sm = state_machine_for_timer.clone();
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+                                let Some(snap) = sm.snapshot(&session_id) else {
+                                    return;
+                                };
+                                // 仍在 ToolRunning 且 tool_use_id 未变
+                                let still_running =
+                                    matches!(snap.status, SessionStatus::ToolRunning)
+                                        && snap.current_tool_use_id == tool_use_id;
+                                if !still_running {
+                                    return;
+                                }
+                                notif2.notify_slow_tool(
+                                    &app2,
+                                    &settings2,
+                                    &session_id,
+                                    &tool_name,
+                                    tool_use_id.as_deref(),
+                                    60,
+                                );
+                            });
+                        }
+                        _ => {}
+                    }
+                },
+            ));
+        }
 
         let port_holder = *self.port.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(port) = port_holder {
@@ -560,6 +686,11 @@ fn build_router(state: AppState) -> Router {
             "/api/notifications/trigger",
             post(handle_trigger_notification),
         )
+        .route("/api/hook-event", post(handle_hook_event))
+        .route("/api/plan/tag", post(handle_plan_tag))
+        .route("/api/plan/recent", get(handle_plan_recent))
+        .route("/api/plan/search", post(handle_plan_search))
+        .route("/api/plan/archive", post(handle_plan_set_archived))
         .route("/api/health", get(handle_health))
         .nest_service("/mcp", mcp_service)
         .layer(middleware::from_fn(inject_mcp_accept_headers))
@@ -1115,6 +1246,43 @@ struct McpPlanCollaborationParams {
     plan_path: Option<String>,
     /// 是否返回 prompt/metadata/completionSummary
     verbose: Option<bool>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpListRecentPlansParams {
+    /// 项目路径（必填）
+    #[serde(rename = "projectPath")]
+    project_path: String,
+    /// 工作空间名（可选，若指定则按 workspace 召回；否则按 project）
+    #[serde(rename = "workspaceName")]
+    workspace_name: Option<String>,
+    /// 返回数量上限,默认 1
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpSearchPlansParams {
+    /// 项目路径（必填）
+    #[serde(rename = "projectPath")]
+    project_path: String,
+    /// 工作空间名（可选）
+    #[serde(rename = "workspaceName")]
+    workspace_name: Option<String>,
+    /// 关键词（在 intent/followups/tags 中模糊匹配）
+    keyword: String,
+    /// 返回数量上限,默认 3
+    limit: Option<i64>,
+    /// 当前会话 ID（用于热度统计的同 session 去重）
+    #[serde(rename = "sessionId")]
+    session_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpSetPlanArchivedParams {
+    /// Plan id
+    id: i64,
+    /// true=归档（不再召回），false=恢复
+    archived: bool,
 }
 
 // ============ MCP Config MCP 参数 ============
@@ -1952,10 +2120,28 @@ impl McpToolHandler {
     /// 新任务：传 prompt（必需），会在 CC-Panes 中创建新标签页并注入 prompt。
     /// 恢复会话：传 resumeId（必需），会以 `claude --resume <id>` 启动，不注入 prompt。
     #[tool]
-    async fn launch_task(&self, Parameters(params): Parameters<McpLaunchTaskParams>) -> String {
+    async fn launch_task(
+        &self,
+        Parameters(params): Parameters<McpLaunchTaskParams>,
+        extensions: Extensions,
+    ) -> String {
         let is_resume = params.resume_id.is_some();
         let prompt_len = params.prompt.as_ref().map(|p| p.len()).unwrap_or(0);
         info!(project = %params.project_path, prompt_len, is_resume, "mcp::launch_task");
+
+        // 从 HTTP 请求 URL 上的 `?launchId=...` 提取 caller launch_id（由 cli-adapters
+        // 在写 MCP URL 时附带）。读不到时调用方可能不是 cc-pane 启动的 Claude（外部
+        // claude code、REST、测试），此时父信息留空 → 顶层编号。
+        let caller_launch_id: Option<String> = extensions
+            .get::<http::request::Parts>()
+            .and_then(|p| p.uri.query())
+            .and_then(|q| {
+                q.split('&').find_map(|pair| {
+                    pair.strip_prefix("launchId=")
+                        .filter(|v| !v.is_empty())
+                        .map(|v| v.to_string())
+                })
+            });
 
         // 参数校验：prompt 和 resumeId 互斥，必须且只能提供其一
         if params.prompt.is_some() && params.resume_id.is_some() {
@@ -1994,7 +2180,16 @@ impl McpToolHandler {
         }
 
         let task_id = uuid::Uuid::new_v4().to_string();
-        let project_id = format!("orch-{}", uuid::Uuid::new_v4());
+        // launch_id 同时用作 history.project_id（`find_by_launch_id` 的查询键）。
+        // 必须在 create_session 之前生成，作为 `?launchId=` 注入子 Claude 的 MCP URL；
+        // 这样子 Claude 后续调 launch_task 时我们才能反查到它，串成 #N.M.K 的级联。
+        let child_launch_id = format!("orch-{}", uuid::Uuid::new_v4());
+        let project_id = child_launch_id.clone();
+        let project_name = std::path::Path::new(&params.project_path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(params.project_path.as_str())
+            .to_string();
 
         // 解析 CLI 工具类型
         let cli_tool = match parse_launch_cli_tool(params.cli_tool.as_deref()) {
@@ -2024,8 +2219,11 @@ impl McpToolHandler {
         };
 
         // 创建 PTY 会话（resume 时传 resume_id）
+        // 把 child_launch_id 传进去，TerminalService 会写入 CC_PANES_LAUNCH_ID
+        // 环境变量并把它附在 ccpanes MCP URL 的 `?launchId=` 上，让子 Claude
+        // 之后再调 launch_task 时能被识别为本会话的 caller。
         let session_id = match self.state.terminal_service.create_session(
-            None,
+            Some(&child_launch_id),
             &params.project_path,
             120,
             30,
@@ -2071,7 +2269,72 @@ impl McpToolHandler {
             );
         }
 
+        // 同步落 launch_history 行：project_id 就是 child_launch_id，pty_session_id
+        // 一并写入。这样如果子 Claude 启动后立即再调 launch_task，
+        // `find_by_launch_id(child_launch_id)` 能直接命中并拿到 pty_session_id，
+        // 从而把孙标签认成 #N.M.K。
+        // 这是后端 in-process 路径，不走 GUI 的 `historyService.add` 异步流。
+        //
+        // 极窄竞态（已知，不阻塞合并）：`create_session` 已经把 PTY spawn 起来；
+        // 子 Claude 进程理论上可以在我们 INSERT 之前就发出第一次 launch_task。
+        // 实测窗口 = "SQLite 同步 insert（亚毫秒）" vs "子进程冷启动到能发 MCP
+        // 请求（秒级）"，相差两个数量级。如果未来出现"孙标签偶发降级到顶层"
+        // 的现场，再考虑把 history 写入提前到 spawn 之前（需要 launch_id ↔
+        // pty_session_id 的内存映射，或把 insert 移进 TerminalService 内部）。
+        let provider_selection_str = params.provider_selection.as_deref();
+        let wsl_distro = runtime.wsl.as_ref().and_then(|wsl| wsl.distro.as_deref());
+        if let Err(error) = self.state.launch_history_service.add_with_pty_session(
+            &child_launch_id,
+            &project_name,
+            &params.project_path,
+            &session_id,
+            cli_tool.as_id(),
+            runtime.kind.as_str(),
+            wsl_distro,
+            ws_name.as_deref(),
+            ws_path.as_deref(),
+            Some(&params.project_path),
+            params.provider_id.as_deref(),
+            provider_selection_str,
+            None,
+            None,
+        ) {
+            warn!(
+                child_launch_id = %child_launch_id,
+                err = %error,
+                "mcp::launch_task: failed to insert launch_history; grandchild numbering may degrade"
+            );
+        }
+
         // 通知前端
+        // 推导 parent_session_id：当前 MCP 调用是否来自某个已知 Claude 实例。
+        // caller_launch_id 由 URL query 注入；外部 Claude Code 或 REST 直连时为
+        // None，结果落到顶层。
+        let parent_session_id = caller_launch_id.and_then(|caller_launch_id| {
+            match self
+                .state
+                .launch_history_service
+                .find_by_launch_id(&caller_launch_id)
+            {
+                Ok(Some(rec)) => rec.pty_session_id,
+                Ok(None) => {
+                    debug!(
+                        caller_launch_id = %caller_launch_id,
+                        "mcp::launch_task: caller launch_id has no matching history record yet"
+                    );
+                    None
+                }
+                Err(error) => {
+                    warn!(
+                        caller_launch_id = %caller_launch_id,
+                        err = %error,
+                        "mcp::launch_task: failed to look up caller launch record"
+                    );
+                    None
+                }
+            }
+        });
+
         let event = OrchestratorLaunchEvent {
             task_id: task_id.clone(),
             session_id: session_id.clone(),
@@ -2090,6 +2353,7 @@ impl McpToolHandler {
             notice: runtime.notice.clone(),
             wsl: runtime.wsl.clone(),
             ssh: runtime.ssh.clone(),
+            parent_session_id,
         };
         let _ = self
             .state
@@ -3488,6 +3752,63 @@ impl McpToolHandler {
             Err(e) => format!("错误: 校准 Plan 协作关系失败: {}", e),
         }
     }
+
+    /// 列出当前 workspace 或 project 最近的 plan 标签（按 created_at DESC）。
+    /// 不递增 recall_count；用于"我之前做过什么"的快速浏览。
+    #[tool]
+    async fn list_recent_plans(
+        &self,
+        Parameters(params): Parameters<McpListRecentPlansParams>,
+    ) -> String {
+        let limit = params.limit.unwrap_or(1).clamp(1, 20);
+        match self
+            .state
+            .plan_archive_service
+            .list_recent_for_session_start(
+                params.workspace_name.as_deref(),
+                &params.project_path,
+                limit,
+            ) {
+            Ok(items) => serde_json::to_string(&serde_json::json!({ "plans": items }))
+                .unwrap_or_else(|e| format!("错误: 序列化失败: {}", e)),
+            Err(e) => format!("错误: 查询最近 plan 失败: {}", e),
+        }
+    }
+
+    /// 关键词检索 plan 标签（按 recall_count DESC, created_at DESC）。
+    /// 命中后会递增 recall_count（同 plan + 同 session 去重）。
+    /// 用于 recall skill 实现"上次/之前/我们做过"等召回。
+    #[tool]
+    async fn search_plans(&self, Parameters(params): Parameters<McpSearchPlansParams>) -> String {
+        let limit = params.limit.unwrap_or(3).clamp(1, 20);
+        match self.state.plan_archive_service.search_for_recall(
+            &params.session_id,
+            params.workspace_name.as_deref(),
+            &params.project_path,
+            &params.keyword,
+            limit,
+        ) {
+            Ok(items) => serde_json::to_string(&serde_json::json!({ "plans": items }))
+                .unwrap_or_else(|e| format!("错误: 序列化失败: {}", e)),
+            Err(e) => format!("错误: 搜索 plan 失败: {}", e),
+        }
+    }
+
+    /// 归档（淘汰）或恢复一条 plan。归档后召回与列表都不再返回该 plan。
+    #[tool]
+    async fn set_plan_archived(
+        &self,
+        Parameters(params): Parameters<McpSetPlanArchivedParams>,
+    ) -> String {
+        match self
+            .state
+            .plan_archive_service
+            .set_archived(params.id, params.archived)
+        {
+            Ok(()) => serde_json::json!({ "success": true }).to_string(),
+            Err(e) => format!("错误: 更新 plan archived 失败: {}", e),
+        }
+    }
 }
 
 async fn collect_plan_live_sessions(
@@ -4213,6 +4534,9 @@ async fn handle_launch_task(
         notice: runtime.notice.clone(),
         wsl: runtime.wsl.clone(),
         ssh: runtime.ssh.clone(),
+        // REST `/api/launch-task` 没有 caller launchId 上下文（直接由 GUI/外部
+        // 客户端发起），父信息留空 → 顶层编号。
+        parent_session_id: None,
     };
     let _ = state.app_handle.emit("orchestrator-launch-task", &event);
 
@@ -4655,6 +4979,104 @@ async fn handle_trigger_notification(
     }
 }
 
+// ============ Hook 事件总线（阶段 2.3） ============
+//
+// 所有 cc-panes-cli-hook 子命令通过此端点上报 cc-pane 抽象事件。
+// 主进程的 SessionStateMachine 消费事件 → 更新状态点 → 触发通知。
+//
+// 鉴权：Bearer token（与其他 /api/* 一致）。
+// 频率限制：**不走** check_rate_limit。原因：hook 是可信高频调用方
+// （每个工具调用都会触发 ToolBefore/ToolAfter），rate_limit 会误伤。
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HookEventRequest {
+    /// cc-pane 事件名（与 cc-panes-cli-hook 子命令名一致）：
+    /// session-init / session-resume / session-end / prompt-before /
+    /// tool-before / tool-after / turn-end / before-compact /
+    /// waiting-input / error
+    cc_pane_event: String,
+    /// PTY 会话 ID（由 hook 进程的 CC_PANES_PTY_SESSION_ID env 注入）
+    pty_session_id: String,
+    /// 可选：TaskBinding ID（hook 上报 TurnEnd/SessionEnd 时用于回写 completionSummary）
+    #[serde(default)]
+    task_binding_id: Option<String>,
+    /// hook stdin 原文（不同事件字段不同，state machine 内部按需取）
+    #[serde(default)]
+    payload: serde_json::Value,
+}
+
+async fn handle_hook_event(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<HookEventRequest>,
+) -> impl IntoResponse {
+    if !verify_token(&headers, &state.token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!(ApiError {
+                error: "Invalid or missing Bearer token".to_string()
+            })),
+        );
+    }
+
+    // 把字符串事件名翻译为 CcPaneEvent 枚举
+    let event = match parse_cc_pane_event(&req.cc_pane_event) {
+        Some(e) => e,
+        None => {
+            warn!(event = %req.cc_pane_event, "REST::hook_event: unknown cc-pane event");
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!(ApiError {
+                    error: format!("unknown cc-pane event: {}", req.cc_pane_event)
+                })),
+            );
+        }
+    };
+
+    let (from, to) = state.session_state_machine.on_event(
+        &req.pty_session_id,
+        &event,
+        req.task_binding_id.clone(),
+        &req.payload,
+    );
+
+    debug!(
+        pty_session_id = %req.pty_session_id,
+        event = %req.cc_pane_event,
+        from = ?from,
+        to = ?to,
+        "REST::hook_event processed"
+    );
+
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "success": true,
+            "ptySessionId": req.pty_session_id,
+            "from": from,
+            "to": to,
+        })),
+    )
+}
+
+fn parse_cc_pane_event(name: &str) -> Option<cc_cli_adapters::CcPaneEvent> {
+    use cc_cli_adapters::{CcPaneEvent, ToolMatcher};
+    Some(match name {
+        "session-init" => CcPaneEvent::SessionInit,
+        "session-resume" => CcPaneEvent::SessionResume,
+        "session-end" => CcPaneEvent::SessionEnd,
+        "prompt-before" => CcPaneEvent::PromptBefore,
+        "tool-before" => CcPaneEvent::ToolBefore(ToolMatcher::any()),
+        "tool-after" => CcPaneEvent::ToolAfter(ToolMatcher::any()),
+        "turn-end" => CcPaneEvent::TurnEnd,
+        "before-compact" => CcPaneEvent::BeforeCompact,
+        "waiting-input" => CcPaneEvent::WaitingInput,
+        "error" => CcPaneEvent::Error,
+        _ => return None,
+    })
+}
+
 async fn handle_session_started(
     headers: HeaderMap,
     State(state): State<AppState>,
@@ -4718,6 +5140,214 @@ async fn handle_session_started(
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!(ApiError { error })),
+        ),
+    }
+}
+
+// ============ Plan-as-memory handlers ============
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanTagBody {
+    session_id: Option<String>,
+    workspace_name: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    workspace_path: Option<String>, // 兜底信息，目前不直接使用（通过 task_binding 反查更可信）
+    project_path: String,
+    plan_path: String,
+    archived_path: String,
+    tag: cc_panes_core::models::plan::PlanTag,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanRecentQuery {
+    workspace_name: Option<String>,
+    project_path: String,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanSearchBody {
+    session_id: String,
+    workspace_name: Option<String>,
+    project_path: String,
+    keyword: String,
+    #[serde(default)]
+    limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlanSetArchivedBody {
+    id: i64,
+    archived: bool,
+}
+
+async fn handle_plan_tag(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<PlanTagBody>,
+) -> impl IntoResponse {
+    if !verify_token(&headers, &state.token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!(ApiError {
+                error: "Invalid or missing Bearer token".to_string()
+            })),
+        );
+    }
+    if !check_rate_limit(&state.last_request_times) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!(ApiError {
+                error: "Rate limit exceeded".to_string()
+            })),
+        );
+    }
+
+    // 通过 session_id 反查 task_binding，可信地拿到 workspace_name + project_path
+    let (workspace_name, project_path, task_binding_id) =
+        if let Some(sid) = req.session_id.as_deref() {
+            match state.task_binding_service.find_by_session_id(sid) {
+                Ok(Some(tb)) => (
+                    tb.workspace_name.clone(),
+                    tb.project_path.clone(),
+                    Some(tb.id.clone()),
+                ),
+                _ => (req.workspace_name.clone(), req.project_path.clone(), None),
+            }
+        } else {
+            (req.workspace_name.clone(), req.project_path.clone(), None)
+        };
+
+    let upsert_req = cc_panes_core::models::plan::UpsertPlanRequest {
+        task_binding_id,
+        workspace_name,
+        project_path,
+        session_id: req.session_id.clone(),
+        plan_path: req.plan_path.clone(),
+        archived_path: req.archived_path.clone(),
+        tag: req.tag,
+    };
+
+    match state.plan_archive_service.upsert_plan(upsert_req) {
+        Ok(plan_id) => {
+            let _ = state.app_handle.emit(
+                "plan-recorded",
+                serde_json::json!({
+                    "planId": plan_id,
+                    "archivedPath": req.archived_path,
+                }),
+            );
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({ "success": true, "planId": plan_id })),
+            )
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!(ApiError {
+                error: e.to_string()
+            })),
+        ),
+    }
+}
+
+async fn handle_plan_recent(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Query(q): Query<PlanRecentQuery>,
+) -> impl IntoResponse {
+    if !verify_token(&headers, &state.token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!(ApiError {
+                error: "Invalid or missing Bearer token".to_string()
+            })),
+        );
+    }
+    let limit = q.limit.unwrap_or(1).clamp(1, 20);
+    match state.plan_archive_service.list_recent_for_session_start(
+        q.workspace_name.as_deref(),
+        &q.project_path,
+        limit,
+    ) {
+        Ok(items) => (StatusCode::OK, Json(serde_json::json!({ "plans": items }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!(ApiError {
+                error: e.to_string()
+            })),
+        ),
+    }
+}
+
+async fn handle_plan_search(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<PlanSearchBody>,
+) -> impl IntoResponse {
+    if !verify_token(&headers, &state.token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!(ApiError {
+                error: "Invalid or missing Bearer token".to_string()
+            })),
+        );
+    }
+    if !check_rate_limit(&state.last_request_times) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!(ApiError {
+                error: "Rate limit exceeded".to_string()
+            })),
+        );
+    }
+    let limit = req.limit.unwrap_or(3).clamp(1, 20);
+    match state.plan_archive_service.search_for_recall(
+        &req.session_id,
+        req.workspace_name.as_deref(),
+        &req.project_path,
+        &req.keyword,
+        limit,
+    ) {
+        Ok(items) => (StatusCode::OK, Json(serde_json::json!({ "plans": items }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!(ApiError {
+                error: e.to_string()
+            })),
+        ),
+    }
+}
+
+async fn handle_plan_set_archived(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<PlanSetArchivedBody>,
+) -> impl IntoResponse {
+    if !verify_token(&headers, &state.token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!(ApiError {
+                error: "Invalid or missing Bearer token".to_string()
+            })),
+        );
+    }
+    match state
+        .plan_archive_service
+        .set_archived(req.id, req.archived)
+    {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "success": true }))),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!(ApiError {
+                error: e.to_string()
+            })),
         ),
     }
 }

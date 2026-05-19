@@ -229,6 +229,132 @@ impl NotificationService {
         map.remove(&format!("session_waiting_input:{session_id}"));
     }
 
+    // ============ 阶段 2.6：hook 状态机驱动的新通知 ============
+    //
+    // 这三个方法被 SessionStateMachine 在状态跃迁时调用：
+    //   - notify_turn_end → TurnEnd（→ Idle）："✅ 完成"
+    //   - notify_error    → Error 跃迁："❗ <error_type>"
+    //   - notify_slow_tool→ ToolRunning ≥ 60s（由 2.7 长工具 timer 调用）
+    //
+    // 通用规则：尊重 settings.enabled / only_when_unfocused / dedupe。
+    // 复用相同的 `on_waiting_input` settings 开关（用户层面"等输入"和"完成"
+    // 都属于"agent 需要你的注意"），未来如需细分再拆。
+
+    pub fn notify_turn_end(
+        &self,
+        app: &AppHandle,
+        settings_svc: &Arc<SettingsService>,
+        session_id: &str,
+        turn_seq: u64,
+        summary: Option<&str>,
+    ) {
+        let settings = settings_svc.get_settings().notification;
+        if !settings.enabled || !settings.on_waiting_input {
+            return;
+        }
+        if settings.only_when_unfocused && self.is_window_focused(app) {
+            return;
+        }
+        let dedupe_key = format!("turn_end:{session_id}:{turn_seq}");
+        if !self.check_dedupe(&dedupe_key) {
+            return;
+        }
+        let body_owned = summary
+            .map(|s| s.chars().take(80).collect::<String>())
+            .unwrap_or_else(|| "Claude finished this turn".to_string());
+        if self
+            .send_notification(app, "✅ Completed", Some(&body_owned))
+            .is_ok()
+        {
+            self.emit_notification_sent(
+                app,
+                NotificationSentEvent {
+                    kind: "turn_end",
+                    title: "✅ Completed",
+                    body: Some(&body_owned),
+                    source: Some("hook"),
+                    scope: Some("session"),
+                    dedupe_key: Some(&dedupe_key),
+                },
+            );
+        }
+    }
+
+    pub fn notify_error(
+        &self,
+        app: &AppHandle,
+        settings_svc: &Arc<SettingsService>,
+        session_id: &str,
+        error_type: Option<&str>,
+    ) {
+        let settings = settings_svc.get_settings().notification;
+        if !settings.enabled || !settings.on_exit {
+            return;
+        }
+        if settings.only_when_unfocused && self.is_window_focused(app) {
+            return;
+        }
+        let etype = error_type.unwrap_or("unknown");
+        let dedupe_key = format!("error:{session_id}:{etype}");
+        if !self.check_dedupe(&dedupe_key) {
+            return;
+        }
+        let body = format!("Error: {}", etype);
+        if self.send_notification(app, "❗ Error", Some(&body)).is_ok() {
+            self.emit_notification_sent(
+                app,
+                NotificationSentEvent {
+                    kind: "error",
+                    title: "❗ Error",
+                    body: Some(&body),
+                    source: Some("hook"),
+                    scope: Some("session"),
+                    dedupe_key: Some(&dedupe_key),
+                },
+            );
+        }
+    }
+
+    pub fn notify_slow_tool(
+        &self,
+        app: &AppHandle,
+        settings_svc: &Arc<SettingsService>,
+        session_id: &str,
+        tool_name: &str,
+        tool_use_id: Option<&str>,
+        seconds: u64,
+    ) {
+        let settings = settings_svc.get_settings().notification;
+        if !settings.enabled || !settings.on_waiting_input {
+            return;
+        }
+        if settings.only_when_unfocused && self.is_window_focused(app) {
+            return;
+        }
+        let suffix = tool_use_id.unwrap_or("none");
+        let dedupe_key = format!("slow:{session_id}:{suffix}");
+        if !self.check_dedupe(&dedupe_key) {
+            return;
+        }
+        let body = format!("{} has been running for {}s", tool_name, seconds);
+        if self
+            .send_notification(app, "⏱ Tool Running", Some(&body))
+            .is_ok()
+        {
+            self.emit_notification_sent(
+                app,
+                NotificationSentEvent {
+                    kind: "slow_tool",
+                    title: "⏱ Tool Running",
+                    body: Some(&body),
+                    source: Some("hook"),
+                    scope: Some("session"),
+                    dedupe_key: Some(&dedupe_key),
+                },
+            );
+        }
+    }
+
     fn normalize_request(
         request: NotificationRequest,
     ) -> Result<PreparedNotificationRequest, String> {

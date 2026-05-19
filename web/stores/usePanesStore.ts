@@ -76,10 +76,12 @@ interface CreateTabOptions {
   ssh?: SshConnectionInfo;
   wsl?: WslLaunchInfo;
   machineName?: string;
+  /** Parent tab id for hierarchical numbering (#N.M). Top-level tabs omit it. */
+  parentTabId?: string;
 }
 
 function createTab(opts: CreateTabOptions): Tab {
-  const { projectId, projectPath, sessionId, resumeId, workspaceName, providerId, providerSelection, launchProfileId, workspacePath, workspaceSnapshotId, cliTool, customTitle, ssh, wsl, machineName } = opts;
+  const { projectId, projectPath, sessionId, resumeId, workspaceName, providerId, providerSelection, launchProfileId, workspacePath, workspaceSnapshotId, cliTool, customTitle, ssh, wsl, machineName, parentTabId } = opts;
   let title: string;
   if (customTitle) {
     title = customTitle;
@@ -141,6 +143,7 @@ function createTab(opts: CreateTabOptions): Tab {
     machineName: terminalLeaf.machineName,
     terminalRootPane: terminalLeaf,
     activeTerminalPaneId: terminalLeaf.id,
+    parentTabId,
   };
 }
 

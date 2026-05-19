@@ -41,6 +41,12 @@ interface OrchestratorLaunchPayload {
   notice?: string;
   wsl?: WslLaunchInfo;
   ssh?: SshConnectionInfo;
+  /**
+   * Caller's pty_session_id when this launch was triggered by another
+   * cc-panes-managed Claude via MCP `launch_task`. Used by the frontend to
+   * resolve a `parentTabId` for hierarchical numbering (#N.M).
+   */
+  parentSessionId?: string;
 }
 
 export function useOrchestratorListener() {
@@ -82,18 +88,39 @@ export function useOrchestratorListener() {
           const panesStore = usePanesStore.getState();
           const activePane = panesStore.activePane();
 
-          // 如果指定了 paneId 且有效，使用它；否则 fallback 到 activePane
+          // 解析父 tab（按 sessionId 在所有面板里搜）。一旦找到，记下它所在的
+          // panel.id —— 这是决定子 tab 落到哪个 panel 的关键，不能等到目标
+          // pane 已经确定。否则在 split-pane 下子 tab 会落到 active pane，
+          // 与父分家，computeTabNumbers 会把它当成孤儿 → 层级编号失效。
+          const parentSessionId = event.payload.parentSessionId;
+          let parentTabId: string | undefined;
+          let parentPaneId: string | undefined;
+          if (parentSessionId) {
+            for (const panel of panesStore.allPanels()) {
+              const parentTab = panel.tabs.find((t) => t.sessionId === parentSessionId);
+              if (parentTab) {
+                parentTabId = parentTab.id;
+                parentPaneId = panel.id;
+                break;
+              }
+            }
+          }
+
+          // paneId 优先级：显式 paneId（MCP 调用方传入） > 父所在 panel > active pane。
+          // 父优先于 active 是为了让 launch_task 拉起的子 tab 始终落在父所在的 panel，
+          // 这样无论父在不在 active pane，前缀都能渲染成 #N.M。
           let paneId: string;
           if (targetPaneId) {
             const targetPane = panesStore.findPaneById(targetPaneId);
             paneId = targetPane?.type === "panel"
               ? targetPane.id
-              : (activePane?.id ?? panesStore.rootPane.id);
+              : (parentPaneId ?? activePane?.id ?? panesStore.rootPane.id);
           } else {
-            paneId = activePane?.id ?? panesStore.rootPane.id;
+            paneId = parentPaneId ?? activePane?.id ?? panesStore.rootPane.id;
           }
 
           const resolvedCliTool = (rawCliTool || "claude") as CliTool;
+
           panesStore.addTab(paneId, {
             projectId,
             projectPath,
@@ -107,6 +134,7 @@ export function useOrchestratorListener() {
             wsl,
             ssh,
             customTitle: title,
+            parentTabId,
           });
           if (event.payload.notice) {
             toast.info(event.payload.notice);

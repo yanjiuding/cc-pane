@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Terminal, Circle } from "lucide-react";
 import { usePanesStore, useTerminalStatusStore } from "@/stores";
-import type { PaneNode, Tab, TerminalStatusType } from "@/types";
+import { isBusyStatus, type PaneNode, type Tab, type TerminalStatusType } from "@/types";
 
 function getAllTabs(pane: PaneNode): Tab[] {
   if (pane.type === "panel") return pane.tabs;
@@ -12,9 +12,15 @@ function getAllTabs(pane: PaneNode): Tab[] {
 function statusColor(status: TerminalStatusType | null): string {
   switch (status) {
     case "active":
+    case "thinking":
+    case "toolRunning":
       return "#22c55e";
+    case "compacting":
+      return "#0a84ff";
     case "waitingInput":
       return "var(--app-warning)";
+    case "error":
+      return "#ef4444";
     case "idle":
       return "var(--app-text-tertiary)";
     default:
@@ -32,16 +38,9 @@ export default function HomeActiveSessions() {
   }, [rootPane]);
 
   const getStatusLabel = (status: TerminalStatusType | null): string => {
-    switch (status) {
-      case "active":
-        return t("running");
-      case "waitingInput":
-        return t("waiting");
-      case "idle":
-        return t("idle");
-      default:
-        return t("idle");
-    }
+    if (isBusyStatus(status)) return t("running");
+    if (status === "waitingInput") return t("waiting");
+    return t("idle");
   };
 
   if (activeTabs.length === 0) {
@@ -101,7 +100,7 @@ export default function HomeActiveSessions() {
               style={{ borderColor: "var(--app-border)" }}
             >
               <Circle
-                className={`w-2.5 h-2.5 shrink-0 ${status === "active" ? "animate-pulse" : ""}`}
+                className={`w-2.5 h-2.5 shrink-0 ${isBusyStatus(status) ? "animate-pulse" : ""}`}
                 fill={statusColor(status)}
                 stroke="none"
               />

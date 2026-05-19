@@ -88,6 +88,66 @@ impl HistoryRepository {
         Ok(conn.last_insert_rowid())
     }
 
+    /// 添加启动记录并立刻填上 `pty_session_id`。
+    ///
+    /// 用于 MCP `launch_task` 这种"由后端在 in-process 创建 PTY 后立即落 history"
+    /// 的场景：先有 pty_session_id，再有 hook 上报的 resume_session_id。和
+    /// [`Self::add`] 相比唯一区别是写入时就把 pty_session_id 设上，避免后续
+    /// `find_by_launch_id` 在 hook 未到达前返回 `pty_session_id = NULL`。
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_with_pty_session(
+        &self,
+        project_id: &str,
+        project_name: &str,
+        project_path: &str,
+        pty_session_id: &str,
+        cli_tool: &str,
+        runtime_kind: &str,
+        wsl_distro: Option<&str>,
+        workspace_name: Option<&str>,
+        workspace_path: Option<&str>,
+        launch_cwd: Option<&str>,
+        provider_id: Option<&str>,
+        provider_selection: Option<&str>,
+        launch_profile_id: Option<&str>,
+        workspace_snapshot_id: Option<&str>,
+    ) -> Result<i64, String> {
+        let conn = self.db.connection().map_err(|e| e.to_string())?;
+        let now = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "INSERT INTO launch_history (
+                project_id, project_name, project_path, launched_at,
+                pty_session_id,
+                cli_tool, runtime_kind, wsl_distro, workspace_name, workspace_path, launch_cwd, provider_id, provider_selection, launch_profile_id, workspace_session_id, workspace_snapshot_id
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            rusqlite::params![
+                project_id,
+                project_name,
+                project_path,
+                &now,
+                pty_session_id,
+                cli_tool,
+                runtime_kind,
+                wsl_distro,
+                workspace_name,
+                workspace_path,
+                launch_cwd,
+                provider_id,
+                provider_selection,
+                launch_profile_id,
+                workspace_snapshot_id,
+                workspace_snapshot_id
+            ],
+        )
+        .map_err(|e| {
+            error!(table = "launch_history", project_id = %project_id, err = %e, "SQL insert (with pty_session_id) failed");
+            e.to_string()
+        })?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
     /// 获取最近的启动记录
     pub fn list(&self, limit: usize) -> Result<Vec<LaunchRecord>, String> {
         let conn = self.db.connection().map_err(|e| e.to_string())?;
@@ -593,5 +653,108 @@ impl HistoryRepository {
                 e.to_string()
             })?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn repo() -> HistoryRepository {
+        let db = Arc::new(Database::new_in_memory().expect("in-memory db"));
+        HistoryRepository::new(db)
+    }
+
+    #[test]
+    fn add_with_pty_session_round_trip_via_find_by_launch_id() {
+        // Critical regression test: covers the MCP `launch_task` path that
+        // synchronously inserts a row keyed by `project_id = child_launch_id`
+        // with `pty_session_id` already filled. A grandchild call must then
+        // be able to look up its caller via `find_by_launch_id` and pull the
+        // pty_session_id back out for `parent_session_id` propagation.
+        let r = repo();
+        let launch_id = "orch-child-1";
+        let pty_session = "pty-session-abc";
+
+        let id = r
+            .add_with_pty_session(
+                launch_id,
+                "my-project",
+                "/tmp/my-project",
+                pty_session,
+                "claude",
+                "local",
+                None,
+                None,
+                None,
+                Some("/tmp/my-project"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("insert");
+        assert!(id > 0);
+
+        let found = r
+            .find_by_launch_id(launch_id)
+            .expect("find ok")
+            .expect("row exists");
+
+        assert_eq!(found.project_id, launch_id);
+        assert_eq!(found.pty_session_id.as_deref(), Some(pty_session));
+        assert_eq!(found.cli_tool, "claude");
+        assert_eq!(found.runtime_kind, "local");
+        // resume_session_id is filled later by `update_session_started`.
+        assert!(found.resume_session_id.is_none());
+    }
+
+    #[test]
+    fn add_with_pty_session_then_update_session_started_fills_resume_id() {
+        // After hook callback arrives, update_session_started must still
+        // succeed against the pre-inserted row (otherwise the cli-hook path
+        // would no-op and downstream listings would miss the resume id).
+        let r = repo();
+        let launch_id = "orch-child-2";
+        let pty_session = "pty-xyz";
+
+        r.add_with_pty_session(
+            launch_id,
+            "proj",
+            "/tmp/proj",
+            pty_session,
+            "claude",
+            "local",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("insert");
+
+        let row_id = r
+            .update_session_started(
+                launch_id,
+                pty_session,
+                "resume-uuid",
+                "claude",
+                "local",
+                None,
+                None,
+            )
+            .expect("update ok")
+            .expect("row matched");
+        assert!(row_id > 0);
+
+        let found = r
+            .find_by_launch_id(launch_id)
+            .expect("find ok")
+            .expect("row exists");
+        assert_eq!(found.pty_session_id.as_deref(), Some(pty_session));
+        assert_eq!(found.resume_session_id.as_deref(), Some("resume-uuid"));
     }
 }

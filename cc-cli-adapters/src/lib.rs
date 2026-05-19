@@ -135,6 +135,26 @@ pub trait CliToolAdapter: Send + Sync {
         Ok(())
     }
 
+    /// 把 cc-pane 抽象事件映射为该 CLI 的原生 hook 绑定。
+    ///
+    /// 默认返回 `None`，表示该 CLI 不支持此事件（adapter 可按需 override）。
+    /// 同步层在写配置时会跳过返回 `None` 的事件，并把 `unsupported_reason` 暴露给前端展示。
+    fn map_cc_pane_event(&self, _event: &CcPaneEvent) -> Option<NativeHookBinding> {
+        None
+    }
+
+    /// 当某个 cc-pane 事件不被支持时，给出原因（前端展示）。
+    /// 默认 `None`，表示该 CLI 完全不支持 cc-pane 事件层。
+    fn unsupported_cc_pane_event_reason(&self, _event: &CcPaneEvent) -> Option<&'static str> {
+        None
+    }
+
+    /// 把 cc-pane ToolMatcher 翻译成该 CLI 原生 matcher 字符串。
+    /// 默认 `None`（不支持工具 matcher 的细粒度翻译）。
+    fn render_cc_pane_tool_matcher(&self, _matcher: &ToolMatcher) -> Option<String> {
+        None
+    }
+
     /// 环境检测（默认实现: which + --version，带 5s 超时）
     fn detect(&self) -> CliToolInfo {
         let mut info = self.info().clone();
@@ -227,6 +247,9 @@ pub struct CliAdapterContext {
     pub orchestrator_port: Option<u16>,
     /// Orchestrator Bearer Token
     pub orchestrator_token: Option<String>,
+    /// 本次启动的 launch_id（用于在 MCP URL 上附带 caller 身份，
+    /// 让 Orchestrator 自动识别"是哪个 Claude 在调用 launch_task"）。
+    pub launch_id: Option<String>,
     /// 数据目录（用于写入 MCP 配置文件等）
     pub data_dir: PathBuf,
     /// 共享 MCP Server URL 映射（name → http url）
@@ -356,5 +379,116 @@ impl CliToolRegistry {
 impl Default for CliToolRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ============ cc-pane 抽象事件层 ============
+//
+// cc-pane 自己定义一套生命周期事件，CLI 通过 `CliToolAdapter::map_cc_pane_event`
+// 把它翻译为各自的原生 hook 绑定（Claude / Codex / 未来 CLI）。
+//
+// 设计原则：
+//   - 业务侧（cc-panes-cli-hook 子命令、状态机）只面向 CcPaneEvent，不关心底层 CLI
+//   - 不支持的事件由 adapter 返回 None + unsupported_reason，同步层跳过
+//   - 类型刻意放在 cc-cli-adapters crate（而非 cc-panes-core），以避免循环依赖
+
+/// cc-pane 抽象事件（10 个），按会话生命周期排列。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum CcPaneEvent {
+    /// 首次启动会话
+    SessionInit,
+    /// 恢复已有会话（含 resume / clear / compact）
+    SessionResume,
+    /// 会话终止
+    SessionEnd,
+    /// 用户提交 prompt 后、Claude 处理前
+    PromptBefore,
+    /// 工具调用前（带 matcher 决定关注哪些工具）
+    ToolBefore(ToolMatcher),
+    /// 工具调用后（带 matcher）
+    ToolAfter(ToolMatcher),
+    /// 一轮响应结束（Claude 真正空闲）
+    TurnEnd,
+    /// 上下文压缩前
+    BeforeCompact,
+    /// 等待用户输入（权限提示 / MCP elicitation）
+    WaitingInput,
+    /// 出错（API 失败、限流等）
+    Error,
+}
+
+/// cc-pane DSL 工具匹配器。
+///
+/// 比 CLI 原生 matcher 更高层，adapter 负责翻译为各 CLI 的原生 matcher 字符串。
+/// 典型用法：
+///   - `ToolMatcher::any()` — 匹配所有工具
+///   - `ToolMatcher { tool: ToolKind::Write, path_glob: Some(".claude/**".into()), .. }`
+///   - `ToolMatcher { tool: ToolKind::Bash, bash_cmd_prefix: Some("rm -rf".into()), .. }`
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolMatcher {
+    /// 关注的工具种类
+    pub tool: ToolKind,
+    /// 可选：文件路径 glob（仅对 Write/Edit/Read 类工具有意义）
+    pub path_glob: Option<String>,
+    /// 可选：bash 命令前缀（仅对 Bash 工具有意义）
+    pub bash_cmd_prefix: Option<String>,
+}
+
+impl ToolMatcher {
+    /// 匹配所有工具的快捷构造
+    pub fn any() -> Self {
+        Self {
+            tool: ToolKind::Any,
+            path_glob: None,
+            bash_cmd_prefix: None,
+        }
+    }
+}
+
+/// 工具种类。`Any` 表示通配。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ToolKind {
+    #[default]
+    Any,
+    Bash,
+    Write,
+    Edit,
+    Read,
+    /// 留给未来扩展（cc-pane 自定义工具或 MCP 工具）
+    Custom,
+}
+
+/// CLI 原生 hook 绑定，由 `CliToolAdapter::map_cc_pane_event` 返回。
+///
+/// 同步层据此把 cc-pane 启用的事件写入 CLI 的配置文件（如 `.claude/settings.local.json`）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeHookBinding {
+    /// CLI 原生事件名，如 Claude 的 `"SessionStart"` / `"PreToolUse"`
+    pub event: String,
+    /// CLI 原生 matcher（由 adapter 翻译生成），None 表示不需要 matcher
+    pub matcher: Option<String>,
+    /// hook 超时（秒）
+    pub timeout_secs: u32,
+    /// 是否 async 执行
+    pub async_mode: bool,
+    /// 留给各 CLI 特有字段的扩展点（例如 Codex 的 `statusMessage`）
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub extra: serde_json::Value,
+}
+
+impl NativeHookBinding {
+    /// 构造一个最常见的同步 hook 绑定
+    pub fn new(event: impl Into<String>, matcher: Option<&str>, timeout_secs: u32) -> Self {
+        Self {
+            event: event.into(),
+            matcher: matcher.map(|s| s.to_string()),
+            timeout_secs,
+            async_mode: false,
+            extra: serde_json::Value::Null,
+        }
     }
 }

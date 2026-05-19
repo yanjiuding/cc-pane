@@ -1,8 +1,9 @@
 //! Claude Code CLI 适配器
 
 use crate::{
-    CliAdapterContext, CliCommandResult, CliToolAdapter, CliToolCapabilities, CliToolInfo,
-    ProjectHookDefinition, ProjectHookStatus,
+    CcPaneEvent, CliAdapterContext, CliCommandResult, CliToolAdapter, CliToolCapabilities,
+    CliToolInfo, NativeHookBinding, ProjectHookDefinition, ProjectHookStatus, ToolKind,
+    ToolMatcher,
 };
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
@@ -25,21 +26,90 @@ struct HookDef {
 }
 
 const HOOK_DEFS: &[HookDef] = &[
+    // 阶段 2.5：subcommand 改用 cc-pane 事件名。
+    // 旧二进制（不识别 cc-pane 事件子命令）会因 clap 报错而 exit 1，
+    // 但 hook 配置里的 timeout 兜底；新二进制走 dispatch_with_business
+    // → 上报状态机 + 调旧业务逻辑（context 注入 / plan 归档）。
     HookDef {
         name: "session-inject",
-        subcommand: "session-start",
+        subcommand: "session-init",
         event: "SessionStart",
         matcher: "startup",
         timeout: 10,
-        label: "Context Inject",
+        label: "Context Inject (Init)",
+    },
+    HookDef {
+        name: "session-resume-inject",
+        subcommand: "session-resume",
+        event: "SessionStart",
+        matcher: "resume|compact",
+        timeout: 10,
+        label: "Context Inject (Resume)",
     },
     HookDef {
         name: "plan-archive",
-        subcommand: "plan-archive",
+        subcommand: "tool-after",
         event: "PostToolUse",
         matcher: "",
         timeout: 5,
         label: "Plan Archive",
+    },
+    // ============ 阶段 2 状态机驱动 hook ============
+    HookDef {
+        name: "state-prompt-before",
+        subcommand: "prompt-before",
+        event: "UserPromptSubmit",
+        matcher: "",
+        timeout: 10,
+        label: "State: prompt before",
+    },
+    HookDef {
+        name: "state-tool-before",
+        subcommand: "tool-before",
+        event: "PreToolUse",
+        matcher: "",
+        timeout: 60,
+        label: "State: tool before",
+    },
+    HookDef {
+        name: "state-turn-end",
+        subcommand: "turn-end",
+        event: "Stop",
+        matcher: "",
+        timeout: 10,
+        label: "State: turn end",
+    },
+    HookDef {
+        name: "state-before-compact",
+        subcommand: "before-compact",
+        event: "PreCompact",
+        matcher: "manual|auto",
+        timeout: 15,
+        label: "State: before compact",
+    },
+    HookDef {
+        name: "state-waiting-input",
+        subcommand: "waiting-input",
+        event: "Notification",
+        matcher: "permission_prompt|elicitation_dialog|elicitation_complete|elicitation_response|idle_prompt",
+        timeout: 5,
+        label: "State: waiting input",
+    },
+    HookDef {
+        name: "state-error",
+        subcommand: "error",
+        event: "StopFailure",
+        matcher: "",
+        timeout: 5,
+        label: "State: error",
+    },
+    HookDef {
+        name: "state-session-end",
+        subcommand: "session-end",
+        event: "SessionEnd",
+        matcher: "",
+        timeout: 5,
+        label: "State: session end",
     },
 ];
 
@@ -122,9 +192,16 @@ impl ClaudeAdapter {
 
         // token 同时通过 headers 和 URL query 传递（后者为后备方案，
         // 因为 Claude Code 某些版本可能忽略 headers 配置 — Issue #7290）
+        // launchId 用于让 Orchestrator 在 launch_task 时识别 caller，
+        // 自动推导 parent_tab_id。
+        let mut mcp_url = format!("http://127.0.0.1:{}/mcp?token={}", port, token);
+        if let Some(launch_id) = ctx.launch_id.as_deref() {
+            mcp_url.push_str("&launchId=");
+            mcp_url.push_str(launch_id);
+        }
         let ccpanes_server = serde_json::json!({
             "type": "http",
-            "url": format!("http://127.0.0.1:{}/mcp?token={}", port, token),
+            "url": mcp_url,
             "headers": {
                 "Authorization": format!("Bearer {}", token)
             }
@@ -262,19 +339,64 @@ impl ClaudeAdapter {
 
     fn merge_ccpanes_hook_entry(
         hooks_obj: &mut serde_json::Map<String, serde_json::Value>,
-        event: &str,
+        def: &HookDef,
         entry: serde_json::Value,
     ) {
+        // 提取本次 entry 的 (matcher, subcommand) 作为去重 key。
+        // 同一 event 下允许多个 ccpanes hook 共存（matcher 或 subcommand 不同）；
+        // 仅当 matcher 与 subcommand 都匹配时才视为重复，覆盖之。
         if let Some(entries) = hooks_obj
-            .entry(event.to_string())
+            .entry(def.event.to_string())
             .or_insert_with(|| serde_json::json!([]))
             .as_array_mut()
         {
-            entries.retain(|existing| !Self::is_ccpanes_hook_entry(existing));
+            entries.retain(|existing| !Self::ccpanes_hook_entry_matches_def(existing, def));
             entries.push(entry);
         }
     }
 
+    fn ccpanes_hook_entry_matches_def(entry: &serde_json::Value, def: &HookDef) -> bool {
+        if !Self::is_ccpanes_hook_entry(entry) {
+            return false;
+        }
+        let matcher = entry.get("matcher").and_then(|v| v.as_str()).unwrap_or("");
+        if matcher != def.matcher {
+            return false;
+        }
+        let command = entry
+            .get("hooks")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|h| h.get("command"))
+            .and_then(|c| c.as_str())
+            .unwrap_or("");
+        std::iter::once(def.subcommand)
+            .chain(Self::legacy_subcommands_for_def(def).iter().copied())
+            .any(|subcommand| command.contains(subcommand))
+    }
+
+    fn legacy_subcommands_for_def(def: &HookDef) -> &'static [&'static str] {
+        match def.name {
+            "session-inject" => &["session-start"],
+            "plan-archive" => &["plan-archive"],
+            _ => &[],
+        }
+    }
+
+    fn unregister_ccpanes_hook_entries_for_def(
+        hooks_obj: &mut serde_json::Map<String, serde_json::Value>,
+        def: &HookDef,
+    ) {
+        // 仅剔除与该 def 完全对应的 ccpanes hook entry（matcher + subcommand 都匹配）。
+        if let Some(entries) = hooks_obj
+            .get_mut(def.event)
+            .and_then(|value| value.as_array_mut())
+        {
+            entries.retain(|entry| !Self::ccpanes_hook_entry_matches_def(entry, def));
+        }
+    }
+
+    #[allow(dead_code)]
     fn unregister_ccpanes_hook_entries(
         hooks_obj: &mut serde_json::Map<String, serde_json::Value>,
         event: &str,
@@ -617,9 +739,10 @@ impl CliToolAdapter for ClaudeAdapter {
                         "async": true
                     }]
                 });
-                Self::merge_ccpanes_hook_entry(hooks_obj, def.event, entry);
+                Self::merge_ccpanes_hook_entry(hooks_obj, def, entry);
             } else {
-                Self::unregister_ccpanes_hook_entries(hooks_obj, def.event);
+                // 仅精确剔除该 def 对应的 ccpanes hook entry，保留同 event 其他 ccpanes hook
+                Self::unregister_ccpanes_hook_entries_for_def(hooks_obj, def);
             }
         }
 
@@ -704,6 +827,66 @@ impl CliToolAdapter for ClaudeAdapter {
             env_inject: HashMap::new(),
         })
     }
+
+    // ============ cc-pane 抽象事件映射 ============
+    //
+    // Claude Code 几乎覆盖所有 cc-pane 事件（约 100% 继承），只 InstructionsLoaded /
+    // PostToolBatch 等少数无对应。这里只声明 cc-pane 关心的 10 个事件。
+
+    fn map_cc_pane_event(&self, event: &CcPaneEvent) -> Option<NativeHookBinding> {
+        match event {
+            CcPaneEvent::SessionInit => Some(NativeHookBinding::new("SessionStart", Some("startup"), 10)),
+            CcPaneEvent::SessionResume => Some(NativeHookBinding::new(
+                "SessionStart",
+                Some("resume|compact"),
+                10,
+            )),
+            CcPaneEvent::SessionEnd => Some(NativeHookBinding::new("SessionEnd", None, 5)),
+            CcPaneEvent::PromptBefore => {
+                Some(NativeHookBinding::new("UserPromptSubmit", None, 10))
+            }
+            CcPaneEvent::ToolBefore(matcher) => Some(NativeHookBinding::new(
+                "PreToolUse",
+                self.render_cc_pane_tool_matcher(matcher).as_deref(),
+                60,
+            )),
+            CcPaneEvent::ToolAfter(matcher) => Some(NativeHookBinding::new(
+                "PostToolUse",
+                self.render_cc_pane_tool_matcher(matcher).as_deref(),
+                5,
+            )),
+            CcPaneEvent::TurnEnd => Some(NativeHookBinding::new("Stop", None, 10)),
+            CcPaneEvent::BeforeCompact => Some(NativeHookBinding::new(
+                "PreCompact",
+                Some("manual|auto"),
+                15,
+            )),
+            CcPaneEvent::WaitingInput => Some(NativeHookBinding::new(
+                "Notification",
+                Some("permission_prompt|elicitation_dialog|elicitation_complete|elicitation_response|idle_prompt"),
+                5,
+            )),
+            CcPaneEvent::Error => Some(NativeHookBinding::new("StopFailure", None, 5)),
+        }
+    }
+
+    fn render_cc_pane_tool_matcher(&self, matcher: &ToolMatcher) -> Option<String> {
+        // Claude Code 的 matcher 语义：
+        //   - 仅含字母数字/_/| 的字符串走精确匹配（如 "Bash" 或 "Edit|Write"）
+        //   - 其他字符当 JS 正则
+        //   - hook handler 的 `if` 字段支持 permission 规则语法（如 "Bash(rm -rf*)"），
+        //     但 hook 配置里的 matcher 不支持。这里只渲染 tool_name 维度，
+        //     path_glob / bash_cmd_prefix 留给 hook 子命令在 stdin 解析时自己判断。
+        let tool_str = match matcher.tool {
+            ToolKind::Any => return None, // None = 匹配全部
+            ToolKind::Bash => "Bash",
+            ToolKind::Write => "Write",
+            ToolKind::Edit => "Edit",
+            ToolKind::Read => "Read",
+            ToolKind::Custom => return None,
+        };
+        Some(tool_str.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -723,6 +906,16 @@ mod tests {
         let desired = HashMap::from([
             ("session-inject".to_string(), true),
             ("plan-archive".to_string(), false),
+            // 阶段 2 新 hook 默认在 sync 中视为 enabled（HOOK_DEFS::iter 默认 true）；
+            // 这里显式列出仅为可读性
+            ("session-resume-inject".to_string(), true),
+            ("state-prompt-before".to_string(), false),
+            ("state-tool-before".to_string(), false),
+            ("state-turn-end".to_string(), false),
+            ("state-before-compact".to_string(), false),
+            ("state-waiting-input".to_string(), false),
+            ("state-error".to_string(), false),
+            ("state-session-end".to_string(), false),
         ]);
 
         adapter
@@ -731,8 +924,11 @@ mod tests {
 
         let settings_path = project_path.join(".claude").join("settings.local.json");
         let content = fs::read_to_string(settings_path).unwrap();
-        assert!(content.contains("session-start"));
-        assert!(!content.contains("plan-archive"));
+        // session-init / session-resume 子命令出现
+        assert!(content.contains("session-init"));
+        assert!(content.contains("session-resume"));
+        // tool-after（旧 plan-archive 重命名）不出现，因为被 desired 关闭
+        assert!(!content.contains("tool-after"));
 
         let statuses = adapter.get_project_hook_statuses(project_path).unwrap();
         let session = statuses
@@ -833,5 +1029,62 @@ mod tests {
 
         assert_eq!(resolved_command, command.to_string_lossy());
         assert_eq!(args, vec!["--version".to_string()]);
+    }
+
+    // ============ cc-pane 抽象事件映射测试 ============
+
+    #[test]
+    fn map_cc_pane_event_covers_all_10_events() {
+        let a = ClaudeAdapter::new();
+        // 10 个 cc-pane 事件，Claude 应当全部支持（≈100% 继承）
+        assert!(a.map_cc_pane_event(&CcPaneEvent::SessionInit).is_some());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::SessionResume).is_some());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::SessionEnd).is_some());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::PromptBefore).is_some());
+        assert!(a
+            .map_cc_pane_event(&CcPaneEvent::ToolBefore(ToolMatcher::any()))
+            .is_some());
+        assert!(a
+            .map_cc_pane_event(&CcPaneEvent::ToolAfter(ToolMatcher::any()))
+            .is_some());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::TurnEnd).is_some());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::BeforeCompact).is_some());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::WaitingInput).is_some());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::Error).is_some());
+    }
+
+    #[test]
+    fn map_cc_pane_event_matchers_match_expectations() {
+        let a = ClaudeAdapter::new();
+        let b = a.map_cc_pane_event(&CcPaneEvent::SessionResume).unwrap();
+        assert_eq!(b.event, "SessionStart");
+        assert_eq!(b.matcher.as_deref(), Some("resume|compact"));
+
+        let b = a.map_cc_pane_event(&CcPaneEvent::BeforeCompact).unwrap();
+        assert_eq!(b.event, "PreCompact");
+        assert_eq!(b.matcher.as_deref(), Some("manual|auto"));
+
+        let b = a.map_cc_pane_event(&CcPaneEvent::WaitingInput).unwrap();
+        assert_eq!(b.event, "Notification");
+        // WaitingInput 匹配多种通知类型
+        assert!(b.matcher.as_deref().unwrap().contains("permission_prompt"));
+    }
+
+    #[test]
+    fn render_cc_pane_tool_matcher_translates_tool_kinds() {
+        let a = ClaudeAdapter::new();
+        assert_eq!(a.render_cc_pane_tool_matcher(&ToolMatcher::any()), None);
+        let m = ToolMatcher {
+            tool: ToolKind::Bash,
+            path_glob: None,
+            bash_cmd_prefix: Some("rm -rf".into()),
+        };
+        assert_eq!(a.render_cc_pane_tool_matcher(&m).as_deref(), Some("Bash"));
+        let m = ToolMatcher {
+            tool: ToolKind::Write,
+            path_glob: Some(".claude/**".into()),
+            bash_cmd_prefix: None,
+        };
+        assert_eq!(a.render_cc_pane_tool_matcher(&m).as_deref(), Some("Write"));
     }
 }

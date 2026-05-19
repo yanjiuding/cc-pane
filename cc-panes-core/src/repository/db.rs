@@ -25,6 +25,7 @@ struct Migration {
 /// V14 = LaunchProfile identity on launch/restore records
 /// V15 = Provider selection mode on launch/restore records
 /// V16 = task_bindings plan collaboration leader/worker fields
+/// V17 = plans + plan_recall_dedup (plan-as-memory with recall stats)
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -275,6 +276,43 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX IF NOT EXISTS idx_task_bindings_plan_path ON task_bindings(normalized_plan_path);
             CREATE INDEX IF NOT EXISTS idx_task_bindings_resume ON task_bindings(resume_id);
             CREATE INDEX IF NOT EXISTS idx_task_bindings_pane ON task_bindings(pane_id);
+        ",
+    },
+    Migration {
+        version: 17,
+        description: "plans: plan-as-memory table with workspace/project scope and recall stats",
+        up_sql: "
+            CREATE TABLE IF NOT EXISTS plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_binding_id TEXT REFERENCES task_bindings(id) ON DELETE SET NULL,
+                workspace_name TEXT,
+                project_path TEXT NOT NULL,
+                session_id TEXT,
+                plan_path TEXT NOT NULL,
+                archived_path TEXT NOT NULL,
+                intent TEXT,
+                tags_json TEXT,
+                scope_json TEXT,
+                risk TEXT,
+                followups TEXT,
+                recall_count INTEGER NOT NULL DEFAULT 0,
+                last_recalled_at INTEGER,
+                archived INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                UNIQUE(archived_path)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_plans_workspace_created ON plans(workspace_name, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_plans_project_created ON plans(project_path, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_plans_recall ON plans(recall_count DESC, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_plans_session ON plans(session_id);
+
+            CREATE TABLE IF NOT EXISTS plan_recall_dedup (
+                session_id TEXT NOT NULL,
+                plan_id INTEGER NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+                first_recalled_at INTEGER NOT NULL,
+                PRIMARY KEY (session_id, plan_id)
+            );
         ",
     },
 ];

@@ -109,6 +109,12 @@ export interface Tab {
   savedSessionId?: string;
   terminalRootPane?: TerminalPaneNode;
   activeTerminalPaneId?: string;
+  /**
+   * Parent tab id when this tab was created by `launch_task` from another
+   * cc-panes-managed Claude instance. Drives hierarchical numbering
+   * (`#N.M`, `#N.M.K`). Top-level tabs leave it unset.
+   */
+  parentTabId?: string;
 }
 
 /** 终端会话状态 */

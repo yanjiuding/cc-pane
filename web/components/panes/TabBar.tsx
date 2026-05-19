@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, memo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
 import { X, Plus, PanelRight, PanelBottom, Pin, Pencil, FolderTree, ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/context-menu";
 import { useTerminalStatusStore } from "@/stores";
 import StatusIndicator from "@/components/StatusIndicator";
+import { computeTabNumbers } from "@/lib/tabNumbering";
 import type { Tab, TerminalStatusType } from "@/types";
 import type { TFunction } from "i18next";
 
@@ -112,6 +113,7 @@ function SortableTab({
   activeTabFg,
   getStatus,
   registerTabNode,
+  displayNumber,
   t,
 }: {
   tab: Tab;
@@ -147,6 +149,7 @@ function SortableTab({
   activeTabFg?: string;
   getStatus: (sessionId: string | null) => TerminalStatusType | null;
   registerTabNode: (tabId: string, node: HTMLDivElement | null) => void;
+  displayNumber?: string;
   t: TFunction<"panes">;
 }) {
   const {
@@ -258,6 +261,12 @@ function SortableTab({
                   startRename(tab);
                 }}
               >
+                {displayNumber ? (
+                  <span
+                    className="opacity-60 mr-1"
+                    aria-hidden="true"
+                  >{`#${displayNumber}`}</span>
+                ) : null}
                 {tab.title}
               </span>
             )}
@@ -441,6 +450,10 @@ export default memo(function TabBar({
   const density: Density = tabs.length <= 3 ? 'normal' : tabs.length <= 6 ? 'compact' : 'dense';
   const d = DENSITY[density];
 
+  // 计算层级编号 (#1, #1.1, #2.1.1, …)。
+  // 纯函数，随 tabs 数组的顺序与 parentTabId 变化而重算 —— 无须持久化。
+  const tabNumbers = useMemo(() => computeTabNumbers(tabs), [tabs]);
+
   const registerTabNode = useCallback((tabId: string, node: HTMLDivElement | null) => {
     if (node) {
       tabNodeRefs.current.set(tabId, node);
@@ -505,6 +518,7 @@ export default memo(function TabBar({
               activeTabFg={activeTabFg}
               getStatus={getStatus}
               registerTabNode={registerTabNode}
+              displayNumber={tabNumbers.get(tab.id)}
               t={t}
             />
           ))}

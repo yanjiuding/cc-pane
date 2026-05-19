@@ -248,9 +248,14 @@
   "switchToDark": "Switch to Dark Mode",
 
   "statusActive": "Running",
-  "statusWaitingInput": "Waiting for Input",
+  "statusWaitingInput": "Awaiting approval",
   "statusIdle": "Idle",
   "statusExited": "Exited",
+  "statusInitializing": "Starting",
+  "statusThinking": "Thinking",
+  "statusToolRunning": "Running tool",
+  "statusCompacting": "Compacting",
+  "statusError": "Error",
 
   "notificationDesc": "Receive system desktop notifications for key events when the window is unfocused",
 

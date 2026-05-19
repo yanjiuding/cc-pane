@@ -304,13 +304,54 @@ fn resolve_shell(shell_id: Option<&str>) -> (String, Vec<String>) {
 }
 
 /// 终端状态
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+///
+/// **阶段 2 扩充**：从原 4 状态扩到 8 状态，承载 hook 驱动的细粒度生命周期。
+/// 注意：所有变体均为单元变体，序列化为 camelCase 字符串（`"thinking"` / `"toolRunning"` ...），
+/// 保持与前端 IPC 协议兼容（前端 `TerminalStatusType` 是字符串字面量并集）。
+///
+/// **工具名不放在枚举里**：序列化为对象会破坏前端协议。工具名由 `SessionStateMachine`
+/// 单独维护在 `SessionStateEntry::current_tool_name`，前端通过 SessionStatusInfo 的扩展字段
+/// （如果需要）单独获取。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SessionStatus {
-    Active,
+    /// 启动中（hook 还没上报第一个事件）
+    Initializing,
+    /// 真·空闲（TurnEnd hook 上报；或 PTY 输出超时的兜底降级）
     Idle,
+    /// 思考中（PromptBefore 后、ToolBefore 前 / Stop 前）
+    Thinking,
+    /// 工具调用中（ToolBefore 上报；工具名见 SessionStateEntry）
+    ToolRunning,
+    /// 上下文压缩中（BeforeCompact 上报）
+    Compacting,
+    /// 等待用户输入（Notification permission_prompt / elicitation_*）
     WaitingInput,
+    /// 出错（StopFailure 上报；error_type 由通知层附带）
+    Error,
+    /// 会话退出
     Exited,
+    /// **已弃用**：留作 PTY ANSI 推断的退化值，新代码应使用具体细分状态
+    #[serde(rename = "active")]
+    Active,
+}
+
+impl SessionStatus {
+    /// 是否处于"正在干活"语义（前端显示绿色家族 / 脉动动效）
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self,
+            SessionStatus::Thinking
+                | SessionStatus::ToolRunning
+                | SessionStatus::Compacting
+                | SessionStatus::Active
+        )
+    }
+
+    /// 是否终止
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, SessionStatus::Exited)
+    }
 }
 
 /// 终端会话状态信息
@@ -658,6 +699,8 @@ pub struct TerminalService {
     app_paths: Arc<AppPaths>,
     /// Orchestrator 连接信息，setup 阶段设置
     orchestrator_info: Mutex<Option<OrchestratorInfo>>,
+    /// hook 驱动的会话状态机（阶段 2.8 setter 注入；用于 ANSI 推断降级判定）
+    state_machine: Mutex<Option<Arc<crate::services::SessionStateMachine>>>,
     /// Spec 服务（终端启动时自动注入 active spec prompt）
     spec_service: Mutex<Option<Arc<SpecService>>>,
     /// CLI 工具适配器注册表
@@ -961,6 +1004,7 @@ impl TerminalService {
             emitter: parking_lot::RwLock::new(None),
             app_paths,
             orchestrator_info: Mutex::new(None),
+            state_machine: Mutex::new(None),
             spec_service: Mutex::new(None),
             cli_registry,
             project_cli_hooks_service,
@@ -1208,6 +1252,14 @@ impl TerminalService {
                 env_vars.insert("CC_PANES_WORKSPACE_NAME".to_string(), name.to_string());
             }
         }
+        // workspace 根路径（用于 plan-as-memory 钩子的分级归档）
+        if let Some(ws_path) = resolved_workspace
+            .as_ref()
+            .and_then(|w| w.path.as_deref())
+            .filter(|p| !p.trim().is_empty())
+        {
+            env_vars.insert("CC_PANES_WORKSPACE_PATH".to_string(), ws_path.to_string());
+        }
 
         // 注入 Orchestrator API 信息到所有 PTY 会话（仅本地模式）
         if !is_ssh {
@@ -1233,6 +1285,9 @@ impl TerminalService {
                 "CC_PANES_RUNTIME_KIND",
                 "CC_PANES_WORKSPACE_NAME",
             ];
+            if env_vars.contains_key("CC_PANES_WORKSPACE_PATH") {
+                wsl_keys.push("CC_PANES_WORKSPACE_PATH");
+            }
             if env_vars.contains_key("CC_PANES_API_TOKEN") {
                 wsl_keys.extend([
                     "CC_PANES_API_BASE_URL",
@@ -1466,6 +1521,7 @@ impl TerminalService {
                     initial_prompt: initial_prompt.map(|s| s.to_string()),
                     orchestrator_port: orch_info.as_ref().map(|i| i.port),
                     orchestrator_token: orch_info.as_ref().map(|i| i.token.clone()),
+                    launch_id: launch_id.map(|s| s.to_string()),
                     data_dir: self.app_paths.data_dir().to_path_buf(),
                     shared_mcp_urls: effective_shared_mcp_urls,
                     allowed_mcp_server_ids,
@@ -1657,6 +1713,12 @@ impl TerminalService {
         let read_replay_buffer = replay_buffer.clone();
         let reader_pid = session_pid;
         let read_ssh_auth_runtime = ssh_auth_runtime.clone();
+        // 阶段 2.8：把状态机引用 clone 进 read 线程，用于"ANSI 推断降级"判定
+        let read_state_machine = self
+            .state_machine
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().cloned());
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let prev_status = Mutex::new(SessionStatus::Active);
@@ -1751,17 +1813,33 @@ impl TerminalService {
                         }
 
                         // 推断状态
-                        let new_status = infer_status(&data);
-                        {
+                        let inferred = infer_status(&data);
+                        // 阶段 2.8：hook 在 30s 内活跃时，ANSI 推断仅作"无变更"兜底，
+                        // 不覆盖 SessionStateMachine 维护的细分 status（Thinking / ToolRunning /
+                        // Compacting / WaitingInput / Error / Idle）。
+                        let hook_active = read_state_machine
+                            .as_ref()
+                            .and_then(|sm| sm.seconds_since_last_hook(&sid))
+                            .map(|secs| secs < 30)
+                            .unwrap_or(false);
+                        let new_status = {
                             let mut s = read_status.lock().unwrap_or_else(|e| {
                                 warn!("read_status lock poisoned, using fallback value");
                                 e.into_inner()
                             });
-                            *s = new_status;
-                        }
+                            if !hook_active
+                                && matches!(*s, SessionStatus::Active | SessionStatus::Initializing)
+                            {
+                                // ANSI 兜底只覆盖 legacy/启动态，避免 30s 后把 hook 主导的
+                                // ToolRunning/Thinking/WaitingInput 等细分状态打回 active/idle。
+                                *s = inferred;
+                            }
+                            *s
+                        };
 
                         // 检测状态变更并触发通知
-                        {
+                        // 阶段 2.8：hook 主导时不再由 PTY 触发 WaitingInput 通知（hook 自己上报更准）。
+                        if !hook_active {
                             let mut prev = prev_status.lock().unwrap_or_else(|e| {
                                 warn!("prev_status lock poisoned, using fallback value");
                                 e.into_inner()
@@ -1771,7 +1849,7 @@ impl TerminalService {
                             {
                                 read_notifier.notify_waiting_input(&sid);
                             }
-                            *prev = new_status;
+                            *prev = new_status.clone();
                         }
 
                         let normalized_prompt = normalize_prompt_text(&data);
@@ -1827,12 +1905,13 @@ impl TerminalService {
                             >= std::time::Duration::from_secs(2);
 
                         if status_changed || time_elapsed {
+                            let status_for_emit = new_status.clone();
                             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 let _ = read_emitter.emit(
                                     EV::TERMINAL_STATUS,
                                     serde_json::to_value(&SessionStatusInfo {
                                         session_id: sid.clone(),
-                                        status: new_status,
+                                        status: status_for_emit,
                                         last_output_at: std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
                                             .unwrap_or_default()
@@ -1843,7 +1922,7 @@ impl TerminalService {
                                     .unwrap_or_default(),
                                 );
                             }));
-                            last_emitted_status = new_status;
+                            last_emitted_status = new_status.clone();
                             last_status_emit_time = now_instant;
                         }
                     }
@@ -1870,6 +1949,11 @@ impl TerminalService {
         let sessions_for_wait = Arc::clone(&self.sessions);
         let dead_buffers_for_wait = Arc::clone(&self.dead_buffers);
         let wait_pid = session_pid;
+        let wait_state_machine = self
+            .state_machine
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().cloned());
         thread::spawn(move || {
             let exit_code = match process_for_wait.wait() {
                 Ok(status) => {
@@ -1890,6 +1974,9 @@ impl TerminalService {
                     e.into_inner()
                 });
                 *s = SessionStatus::Exited;
+            }
+            if let Some(sm) = wait_state_machine.as_ref() {
+                sm.force_exited(&sid);
             }
 
             // 发送退出通知
@@ -1971,7 +2058,11 @@ impl TerminalService {
         Ok(sessions
             .iter()
             .map(|(id, session)| {
-                let status = *session.status.lock().unwrap_or_else(|e| e.into_inner());
+                let status = session
+                    .status
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
                 let elapsed = session
                     .last_output_at
                     .lock()
@@ -1979,6 +2070,9 @@ impl TerminalService {
                     .elapsed();
 
                 // 基于时间的状态修正
+                // 阶段 2.8：8s 超时降级仅作用于 PTY 推断出的 legacy Active，
+                // 不覆盖 ToolRunning/Compacting/WaitingInput/Error/Idle/Exited
+                // （这些状态由 hook 主导，由状态机定夺）。
                 let adjusted_status = match status {
                     SessionStatus::Active if elapsed.as_secs() > 8 => SessionStatus::Idle,
                     other => other,
@@ -2007,7 +2101,11 @@ impl TerminalService {
         sessions
             .values()
             .filter_map(|session| {
-                let status = *session.status.lock().unwrap_or_else(|e| e.into_inner());
+                let status = session
+                    .status
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone();
                 if status != SessionStatus::Exited {
                     Some(session.process.pid())
                 } else {
@@ -2342,6 +2440,57 @@ impl TerminalService {
         if let Ok(mut info) = self.orchestrator_info.lock() {
             *info = Some(OrchestratorInfo { port, token });
             info!("[terminal] Orchestrator info set: port={}", port);
+        }
+    }
+
+    /// 注入 SessionStateMachine 引用（setup 阶段调用）。
+    ///
+    /// 阶段 2.8：用于 ANSI 推断降级判定 —— hook 在 30s 内有上报时，
+    /// PTY 输出 ANSI 推断不再覆盖状态机维护的细分 status（Thinking/ToolRunning 等）。
+    pub fn set_state_machine(&self, sm: Arc<crate::services::SessionStateMachine>) {
+        if let Ok(mut guard) = self.state_machine.lock() {
+            *guard = Some(sm);
+            info!("[terminal] SessionStateMachine reference injected");
+        }
+    }
+
+    /// 由 SessionStateMachine listener 调用，把 hook 决定的新 status 写回
+    /// 该 session 的 status Mutex 并通过 `TERMINAL_STATUS` 事件推给前端。
+    ///
+    /// 这是端到端能通的关键：状态机内部更新后必须落到 session 上，前端才能看到。
+    /// 找不到 session（已退出 / 不存在）静默忽略。
+    pub fn apply_hook_status(&self, session_id: &str, new_status: SessionStatus) {
+        let pid = {
+            let Ok(sessions) = self.sessions.lock() else {
+                return;
+            };
+            let Some(session) = sessions.get(session_id) else {
+                return;
+            };
+            // 写入 status Mutex（沿用 PTY read 线程的 lock 模式）
+            if let Ok(mut s) = session.status.lock() {
+                *s = new_status.clone();
+            }
+            session.process.pid()
+        };
+
+        // 推给前端（仿 PTY read 线程的 emit 节流块，但这里不节流，hook 事件本身就是节点）
+        if let Some(emitter) = self.emitter.read().as_ref() {
+            let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = emitter.emit(
+                    EV::TERMINAL_STATUS,
+                    serde_json::to_value(&SessionStatusInfo {
+                        session_id: session_id.to_string(),
+                        status: new_status,
+                        last_output_at: std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis() as u64,
+                        pid: Some(pid),
+                    })
+                    .unwrap_or_default(),
+                );
+            }));
         }
     }
 

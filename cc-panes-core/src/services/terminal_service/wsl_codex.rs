@@ -866,11 +866,19 @@ impl TerminalService {
             )
         })?;
 
+        let mcp_url_with_launch = {
+            let mut url = build_wsl_mcp_url(windows_host, port, token);
+            if let Some(launch_id) = env_vars.get("CC_PANES_LAUNCH_ID") {
+                url.push_str("&launchId=");
+                url.push_str(launch_id);
+            }
+            url
+        };
         let config = serde_json::json!({
             "mcpServers": {
                 "ccpanes": {
                     "type": "http",
-                    "url": build_wsl_mcp_url(windows_host, port, token),
+                    "url": mcp_url_with_launch,
                     "headers": {
                         "Authorization": format!("Bearer {}", token)
                     }
@@ -938,7 +946,11 @@ impl TerminalService {
                 env_vars.get("CC_PANES_API_TOKEN"),
                 wsl.windows_host.as_deref(),
             ) {
-                let mcp_url = build_wsl_mcp_url(windows_host, port, token);
+                let mut mcp_url = build_wsl_mcp_url(windows_host, port, token);
+                if let Some(launch_id) = env_vars.get("CC_PANES_LAUNCH_ID") {
+                    mcp_url.push_str("&launchId=");
+                    mcp_url.push_str(launch_id);
+                }
                 codex_args.push("-c".to_string());
                 codex_args.push(format!(
                     "mcp_servers.ccpanes.url={}",

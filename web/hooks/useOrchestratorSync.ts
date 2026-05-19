@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useOrchestratorStore, useTerminalStatusStore } from "@/stores";
+import { isBusyStatus } from "@/types";
 
 /**
  * 编排同步 Hook — 桥接终端状态与 TaskBinding
@@ -77,7 +78,7 @@ export default function useOrchestratorSync() {
       prev.set(sessionId, info.status);
 
       // 状态映射
-      if (info.status === "active") {
+      if (isBusyStatus(info.status)) {
         updateBySessionId(sessionId, { status: "running", progress: 50 }).catch(() => {});
       } else if (info.status === "waitingInput") {
         updateBySessionId(sessionId, { status: "waiting", progress: 30 }).catch(() => {});

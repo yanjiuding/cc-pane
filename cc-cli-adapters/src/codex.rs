@@ -1,8 +1,9 @@
 //! Codex CLI 适配器
 
 use crate::{
-    CliAdapterContext, CliCommandResult, CliToolAdapter, CliToolCapabilities, CliToolInfo,
-    ProjectHookDefinition, ProjectHookStatus,
+    CcPaneEvent, CliAdapterContext, CliCommandResult, CliToolAdapter, CliToolCapabilities,
+    CliToolInfo, NativeHookBinding, ProjectHookDefinition, ProjectHookStatus, ToolKind,
+    ToolMatcher,
 };
 use anyhow::{anyhow, Result};
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -17,6 +18,8 @@ const DOT_CODEX_FILE_CONFLICT: &str =
     "Project root contains a file named .codex, so Codex project hooks cannot be configured.";
 const PLAN_ARCHIVE_UNSUPPORTED: &str =
     "Codex does not support CC-Panes plan archive yet; only session-start is available.";
+const CC_PANE_EVENT_UNSUPPORTED: &str =
+    "Codex CLI does not expose this hook event yet. Only SessionStart and PostToolUse are usable.";
 
 struct HookDef {
     name: &'static str,
@@ -32,7 +35,7 @@ struct HookDef {
 const HOOK_DEFS: &[HookDef] = &[
     HookDef {
         name: "session-inject",
-        subcommand: "session-start",
+        subcommand: "session-init",
         event: "SessionStart",
         matcher: "startup|resume",
         timeout: 10,
@@ -42,7 +45,7 @@ const HOOK_DEFS: &[HookDef] = &[
     },
     HookDef {
         name: "plan-archive",
-        subcommand: "plan-archive",
+        subcommand: "tool-after",
         event: "PostToolUse",
         matcher: "Bash",
         timeout: 5,
@@ -145,7 +148,11 @@ impl CodexAdapter {
     fn push_mcp_overrides(&self, args: &mut Vec<String>, ctx: &CliAdapterContext) {
         if let (Some(port), Some(token)) = (ctx.orchestrator_port, ctx.orchestrator_token.as_ref())
         {
-            let url = format!("http://127.0.0.1:{}/mcp?token={}", port, token);
+            let mut url = format!("http://127.0.0.1:{}/mcp?token={}", port, token);
+            if let Some(launch_id) = ctx.launch_id.as_deref() {
+                url.push_str("&launchId=");
+                url.push_str(launch_id);
+            }
             Self::push_mcp_url_override(args, "ccpanes", &url);
             Self::push_mcp_bearer_env_override(args, "ccpanes", "CC_PANES_API_TOKEN");
             Self::push_mcp_enabled_override(args, "ccpanes", true);
@@ -538,6 +545,51 @@ impl CliToolAdapter for CodexAdapter {
             env_inject: HashMap::new(),
         })
     }
+
+    // ============ cc-pane 抽象事件映射 ============
+    //
+    // Codex 目前只暴露 SessionStart / PostToolUse 两个事件，其余 cc-pane 事件
+    // 一律返回 None，由前端展示 unsupported_reason。
+
+    fn map_cc_pane_event(&self, event: &CcPaneEvent) -> Option<NativeHookBinding> {
+        match event {
+            CcPaneEvent::SessionInit => {
+                Some(NativeHookBinding::new("SessionStart", Some("startup"), 10))
+            }
+            CcPaneEvent::SessionResume => {
+                Some(NativeHookBinding::new("SessionStart", Some("resume"), 10))
+            }
+            CcPaneEvent::ToolAfter(matcher) => Some(NativeHookBinding::new(
+                "PostToolUse",
+                self.render_cc_pane_tool_matcher(matcher).as_deref(),
+                5,
+            )),
+            _ => None,
+        }
+    }
+
+    fn unsupported_cc_pane_event_reason(&self, event: &CcPaneEvent) -> Option<&'static str> {
+        match event {
+            CcPaneEvent::SessionInit | CcPaneEvent::SessionResume | CcPaneEvent::ToolAfter(_) => {
+                None
+            }
+            _ => Some(CC_PANE_EVENT_UNSUPPORTED),
+        }
+    }
+
+    fn render_cc_pane_tool_matcher(&self, matcher: &ToolMatcher) -> Option<String> {
+        // Codex matcher 与 Claude 类似（精确匹配 / `|` 分隔），细粒度 path_glob /
+        // bash_cmd_prefix 留给 hook 子命令在 stdin 解析阶段判断。
+        let tool_str = match matcher.tool {
+            ToolKind::Any => return None,
+            ToolKind::Bash => "Bash",
+            ToolKind::Write => "Write",
+            ToolKind::Edit => "Edit",
+            ToolKind::Read => "Read",
+            ToolKind::Custom => return None,
+        };
+        Some(tool_str.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -565,7 +617,7 @@ mod tests {
 
         assert!(config.contains("codex_hooks = true"));
         assert!(hooks.contains("SessionStart"));
-        assert!(hooks.contains("session-start"));
+        assert!(hooks.contains("session-init"));
 
         let statuses = adapter.get_project_hook_statuses(project_path).unwrap();
         let session = statuses
@@ -686,5 +738,41 @@ mod tests {
                 "mcp_servers.chrome-devtools-windows.enabled=false",
             ]
         );
+    }
+
+    // ============ cc-pane 抽象事件映射测试 ============
+
+    #[test]
+    fn map_cc_pane_event_only_supports_session_and_tool_after() {
+        let a = CodexAdapter::new();
+        // 支持的事件
+        assert!(a.map_cc_pane_event(&CcPaneEvent::SessionInit).is_some());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::SessionResume).is_some());
+        assert!(a
+            .map_cc_pane_event(&CcPaneEvent::ToolAfter(ToolMatcher::any()))
+            .is_some());
+
+        // 不支持的事件应返回 None
+        assert!(a.map_cc_pane_event(&CcPaneEvent::SessionEnd).is_none());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::PromptBefore).is_none());
+        assert!(a
+            .map_cc_pane_event(&CcPaneEvent::ToolBefore(ToolMatcher::any()))
+            .is_none());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::TurnEnd).is_none());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::BeforeCompact).is_none());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::WaitingInput).is_none());
+        assert!(a.map_cc_pane_event(&CcPaneEvent::Error).is_none());
+    }
+
+    #[test]
+    fn unsupported_cc_pane_event_reason_nonempty_for_unsupported() {
+        let a = CodexAdapter::new();
+        // 支持的事件 reason 应为 None
+        assert!(a
+            .unsupported_cc_pane_event_reason(&CcPaneEvent::SessionInit)
+            .is_none());
+        // 不支持的事件 reason 应非空
+        let reason = a.unsupported_cc_pane_event_reason(&CcPaneEvent::TurnEnd);
+        assert!(reason.is_some() && !reason.unwrap().is_empty());
     }
 }

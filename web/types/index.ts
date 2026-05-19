@@ -80,6 +80,7 @@ export type {
   VoiceSettings,
   EnvironmentInfo,
 } from "./settings";
+export { BUSY_STATUSES, isBusyStatus } from "./settings";
 export type {
   TodoStatus,
   TodoPriority,

@@ -4,6 +4,7 @@ import { useTerminalStatusStore, usePanesStore } from "@/stores";
 import { historyService, type LaunchRecord } from "@/services";
 import RecentLaunches from "@/components/sidebar/RecentLaunches";
 import { handleErrorSilent } from "@/utils";
+import { isBusyStatus } from "@/types";
 
 import type { PaneNode, Panel as PanelType, OpenTerminalOptions } from "@/types";
 
@@ -103,7 +104,7 @@ export default function SessionsView({ onOpenTerminal }: SessionsViewProps) {
                   <div className="relative shrink-0">
                     <Terminal className="w-3.5 h-3.5" />
                     <div className={`absolute -bottom-0.5 -right-0.5 w-1.5 h-1.5 rounded-full ${
-                      s.status === "active" ? "bg-emerald-500" : "bg-slate-400"
+                      isBusyStatus(s.status) ? "bg-emerald-500" : "bg-slate-400"
                     }`} />
                   </div>
                   <span className="text-[12px] truncate">{s.title || "Terminal"}</span>

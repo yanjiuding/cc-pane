@@ -498,11 +498,8 @@ mod tests {
     #[test]
     fn test_build_codex_skill_markdown_passes_through_existing_frontmatter() {
         let raw = "---\nname: ccpanes-launch-task\ndescription: Launch a new Claude session.\n---\n\n# 启动任务\n\nBody";
-        let markdown = DefaultSkillService::build_codex_skill_markdown(
-            "ccpanes",
-            "launch-task",
-            raw,
-        );
+        let markdown =
+            DefaultSkillService::build_codex_skill_markdown("ccpanes", "launch-task", raw);
 
         // 已有 frontmatter 时直接透传，不再追加第二层
         assert!(markdown.starts_with("---\nname: ccpanes-launch-task\n"));

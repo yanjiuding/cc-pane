@@ -14,6 +14,7 @@
     { "name": "dispatch-todos", "file": "dispatch-todos.md" },
     { "name": "spec", "file": "spec.md" },
     { "name": "plantocodex", "file": "plantocodex.md" },
-    { "name": "memory-dual-write", "file": "memory-dual-write.md" }
+    { "name": "memory-dual-write", "file": "memory-dual-write.md" },
+    { "name": "recall", "file": "recall.md" }
   ]
 }

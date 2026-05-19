@@ -9,6 +9,20 @@ description: Orchestrate the Plan-to-Codex handoff — Claude plans (EnterPlanMo
 
 `EnterPlanMode` → 探索/设计 → 写 plan 到 `.claude/plans/*.md` → `ExitPlanMode`。记住 plan 路径作为后续所有调用的 `planPath`。
 
+**写完 plan 后，在 plan 文件顶部加 `ccpanes-plan` 标签**（≤ 5 字段，缺字段没事，最多 5 行）：
+
+```html
+<!-- ccpanes-plan
+intent: <一句话目的，≤ 200 字>
+tags: [<≤ 8 个关键词，如 hook, plan, db, migration>]
+scope: [<受影响 crate/路径，≤ 8 个>]
+risk: low | med | high
+followups: <下次会话要接的事，可空，≤ 300 字>
+-->
+```
+
+钩子会自动把它落到 cc-pane db。下次会话同项目/workspace 时会自动召回 `intent + followups`；也可以通过 `ccpanes-recall` skill 主动检索。
+
 ## Phase 1.5: 登记 Leader
 
 ```

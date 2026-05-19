@@ -17,6 +17,7 @@ import {
 } from "@/stores";
 import { triggerUpdate } from "@/services";
 import { useWindowControl } from "@/hooks/useWindowControl";
+import { isBusyStatus } from "@/types";
 
 export default function StatusBar() {
   const { t, i18n } = useTranslation();
@@ -32,7 +33,7 @@ export default function StatusBar() {
 
   const activeWorkspace = selectedWorkspace();
   let activeCount = 0;
-  statusMap.forEach((info) => { if (info.status === "active") activeCount++; });
+  statusMap.forEach((info) => { if (isBusyStatus(info.status)) activeCount++; });
 
   const handleUpdate = async () => {
     setUpdating(true);

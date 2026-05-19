@@ -2,6 +2,7 @@ pub mod external_skill;
 pub mod filesystem;
 mod history;
 pub mod launch_profile;
+pub mod plan;
 pub mod process_info;
 mod project;
 pub mod provider;

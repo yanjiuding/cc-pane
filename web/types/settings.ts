@@ -130,8 +130,42 @@ export interface DataDirInfo {
   sizeBytes: number;
 }
 
-/** 终端状态 */
-export type TerminalStatusType = "active" | "idle" | "waitingInput" | "exited";
+/** 终端状态
+ *
+ * 阶段 2 扩充：与 Rust 端 SessionStatus 对齐（详见 cc-panes-core/src/services/terminal_service.rs:309）。
+ * 8 个细分状态 + 1 个 legacy `active`（PTY ANSI 推断回退值）。
+ */
+export type TerminalStatusType =
+  | "initializing"
+  | "idle"
+  | "thinking"
+  | "toolRunning"
+  | "compacting"
+  | "waitingInput"
+  | "error"
+  | "exited"
+  | "active";
+
+/**
+ * "正在干活" 状态集合。
+ *
+ * 用于前端判断 session 是否处于忙碌态（显示脉动 / 不让关 tab / 计入 active 数等）。
+ * 包含 legacy `active`（hook 未启用时 PTY 推断的回退值）。
+ *
+ * **不要直接写 `status === "active"`** —— 阶段 2 之后状态多了 thinking/toolRunning/compacting，
+ * 直接判等会漏掉这些 hook 主导的细分状态。统一用 `BUSY_STATUSES.has(status)`。
+ */
+export const BUSY_STATUSES: ReadonlySet<TerminalStatusType> = new Set([
+  "active",
+  "thinking",
+  "toolRunning",
+  "compacting",
+]);
+
+/** session 是否处于忙碌态（与 BUSY_STATUSES 对应的便捷函数） */
+export function isBusyStatus(status: TerminalStatusType | null | undefined): boolean {
+  return status != null && BUSY_STATUSES.has(status);
+}
 
 /** 终端状态信息 */
 export interface TerminalStatusInfo {

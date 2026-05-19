@@ -51,6 +51,45 @@ impl LaunchHistoryService {
         self.repo.list(limit)
     }
 
+    /// 同 `add`，但在写入时就把 `pty_session_id` 设上。
+    /// 用于 MCP `launch_task` 由后端直接创建 PTY 的路径，避免 hook 上报前
+    /// `find_by_launch_id` 拿到 `pty_session_id = NULL` 的竞态。
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_with_pty_session(
+        &self,
+        project_id: &str,
+        project_name: &str,
+        project_path: &str,
+        pty_session_id: &str,
+        cli_tool: &str,
+        runtime_kind: &str,
+        wsl_distro: Option<&str>,
+        workspace_name: Option<&str>,
+        workspace_path: Option<&str>,
+        launch_cwd: Option<&str>,
+        provider_id: Option<&str>,
+        provider_selection: Option<&str>,
+        launch_profile_id: Option<&str>,
+        workspace_snapshot_id: Option<&str>,
+    ) -> Result<i64, String> {
+        self.repo.add_with_pty_session(
+            project_id,
+            project_name,
+            project_path,
+            pty_session_id,
+            cli_tool,
+            runtime_kind,
+            wsl_distro,
+            workspace_name,
+            workspace_path,
+            launch_cwd,
+            provider_id,
+            provider_selection,
+            launch_profile_id,
+            workspace_snapshot_id,
+        )
+    }
+
     /// 按项目路径获取启动记录（SQL 层路径规范化过滤）
     pub fn list_by_project(
         &self,
