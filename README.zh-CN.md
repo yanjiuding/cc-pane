@@ -212,12 +212,17 @@ cc-pane/
 - GitHub Issues: <https://github.com/wuxiran/cc-pane/issues>
 - GitHub Discussions: <https://github.com/wuxiran/cc-pane/discussions>
 
-微信群：
+微信交流群：
+
+添加微信 `yemaofeng66`，备注 `CC-Panes 交流群`。
+
+Bug 反馈群：
 
 <p>
-  <img src="docs/assets/images/wechat-group-nightcat-dev.jpg" alt="NightCat Dev 微信群" width="220" />
-  <img src="docs/assets/images/wechat-group-cc-pane.jpg" alt="CC-Panes 微信群" width="220" />
+  <img src="docs/assets/images/wechat-bug-feedback.png" alt="CC-Panes Bug 反馈微信" width="220" />
 </p>
+
+添加微信 `yemaofeng66`，备注 `CC-Panes Bug 反馈`。
 
 ## 参与贡献
 

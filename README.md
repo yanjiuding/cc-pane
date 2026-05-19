@@ -204,12 +204,17 @@ When behavior depends on the Windows desktop host, validate on Windows. WSL or L
 - GitHub Issues: <https://github.com/wuxiran/cc-pane/issues>
 - GitHub Discussions: <https://github.com/wuxiran/cc-pane/discussions>
 
-WeChat groups:
+WeChat chat group:
+
+Add WeChat `yemaofeng66` and mention `CC-Panes chat`.
+
+Bug feedback group:
 
 <p>
-  <img src="docs/assets/images/wechat-group-nightcat-dev.jpg" alt="NightCat Dev WeChat Group" width="220" />
-  <img src="docs/assets/images/wechat-group-cc-pane.jpg" alt="CC-Panes WeChat Group" width="220" />
+  <img src="docs/assets/images/wechat-bug-feedback.png" alt="CC-Panes Bug Feedback WeChat" width="220" />
 </p>
+
+Add WeChat `yemaofeng66` and mention `CC-Panes bug feedback`.
 
 ## Contributing
 
