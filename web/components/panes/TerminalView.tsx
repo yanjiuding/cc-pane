@@ -71,7 +71,7 @@ const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(n
 const DEFAULT_TERMINAL_FONT_SIZE = 15;
 const MIN_TERMINAL_FONT_SIZE = 10;
 const MAX_TERMINAL_FONT_SIZE = 32;
-const DEFAULT_TERMINAL_FONT_FAMILY = 'Consolas, "Courier New", "Microsoft YaHei Mono", "Noto Sans Mono CJK SC", "PingFang SC", monospace';
+const DEFAULT_TERMINAL_FONT_FAMILY = '"Maple Mono NF CN", "Maple Mono", "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, "Sarasa Mono SC", "Microsoft YaHei UI", "PingFang SC", monospace';
 const DEFAULT_TERMINAL_SCROLLBACK = 20_000;
 
 type TerminalCursorStyle = "block" | "underline" | "bar";
@@ -1416,7 +1416,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           paddingTop: 'var(--notch-bar-height, 0px)',
         } as CSSProperties}
       >
-        <div ref={terminalRef} className="cc-terminal-host flex-1 overflow-hidden p-1 [&_.xterm]:h-full" />
+        <div ref={terminalRef} className="cc-terminal-host flex-1 overflow-hidden [&_.xterm]:h-full" />
       </div>
     );
   }

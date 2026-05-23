@@ -12,7 +12,7 @@ export default function ExplorerView({ onOpenTerminal }: ExplorerViewProps) {
       <div className="shrink-0 px-4 py-2">
         <span
           className="text-[11px] font-bold tracking-wider"
-          style={{ color: "var(--app-text-secondary)" }}
+          style={{ color: "var(--app-text-primary)" }}
         >
           EXPLORER
         </span>

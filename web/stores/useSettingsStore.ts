@@ -4,6 +4,13 @@ import type { AppSettings } from "@/types";
 import { handleErrorSilent } from "@/utils";
 import { getDefaultSidebarFavoriteLaunchActionIds } from "@/components/sidebar/launchMenu";
 
+const defaultCloseToTray = () => {
+  if (typeof navigator === "undefined") {
+    return true;
+  }
+  return !/Linux/i.test(navigator.userAgent);
+};
+
 interface SettingsState {
   settings: AppSettings | null;
   loading: boolean;
@@ -53,7 +60,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
     },
     terminal: {
       fontSize: 15,
-      fontFamily: 'Consolas, "Courier New", "Microsoft YaHei Mono", "Noto Sans Mono CJK SC", "PingFang SC", monospace',
+      fontFamily: '"Maple Mono NF CN", "Maple Mono", "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, "Sarasa Mono SC", "Microsoft YaHei UI", "PingFang SC", monospace',
       cursorStyle: "block",
       cursorBlink: true,
       scrollback: 20000,
@@ -91,7 +98,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       },
     },
     general: {
-      closeToTray: true,
+      closeToTray: defaultCloseToTray(),
       autoStart: false,
       language: "zh-CN",
       dataDir: null,

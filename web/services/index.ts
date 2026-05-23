@@ -1,5 +1,6 @@
 export { projectService } from "./projectService";
 export { terminalService } from "./terminalService";
+export { usageStatsService } from "./usageStatsService";
 export { historyService } from "./historyService";
 export { claudeService } from "./claudeService";
 export { localHistoryService } from "./localHistoryService";

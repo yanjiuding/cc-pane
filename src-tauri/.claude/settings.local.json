@@ -1,11 +1,63 @@
 {
   "hooks": {
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "\"D:\\\\04_workspace_rust\\\\cc-book\\\\target\\\\debug\\\\binaries\\\\cc-panes-cli-hook.exe\" waiting-input",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "permission_prompt|elicitation_dialog|elicitation_complete|elicitation_response|idle_prompt"
+      }
+    ],
     "PostToolUse": [
       {
         "hooks": [
           {
             "async": true,
-            "command": "\"D:\\\\04_workspace_rust\\\\cc-book\\\\target\\\\debug\\\\binaries\\\\cc-panes-cli-hook.exe\" plan-archive",
+            "command": "\"D:\\\\04_workspace_rust\\\\cc-book\\\\target\\\\debug\\\\binaries\\\\cc-panes-cli-hook.exe\" tool-after",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "\"D:\\\\04_workspace_rust\\\\cc-book\\\\target\\\\debug\\\\binaries\\\\cc-panes-cli-hook.exe\" before-compact",
+            "timeout": 15,
+            "type": "command"
+          }
+        ],
+        "matcher": "manual|auto"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "\"D:\\\\04_workspace_rust\\\\cc-book\\\\target\\\\debug\\\\binaries\\\\cc-panes-cli-hook.exe\" tool-before",
+            "timeout": 60,
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "\"D:\\\\04_workspace_rust\\\\cc-book\\\\target\\\\debug\\\\binaries\\\\cc-panes-cli-hook.exe\" session-end",
             "timeout": 5,
             "type": "command"
           }
@@ -18,12 +70,62 @@
         "hooks": [
           {
             "async": true,
-            "command": "\"D:\\\\04_workspace_rust\\\\cc-book\\\\target\\\\debug\\\\binaries\\\\cc-panes-cli-hook.exe\" session-start",
+            "command": "\"D:\\\\04_workspace_rust\\\\cc-book\\\\target\\\\debug\\\\binaries\\\\cc-panes-cli-hook.exe\" session-init",
             "timeout": 10,
             "type": "command"
           }
         ],
         "matcher": "startup"
+      },
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "\"D:\\\\04_workspace_rust\\\\cc-book\\\\target\\\\debug\\\\binaries\\\\cc-panes-cli-hook.exe\" session-resume",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": "resume|compact"
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "\"D:\\\\04_workspace_rust\\\\cc-book\\\\target\\\\debug\\\\binaries\\\\cc-panes-cli-hook.exe\" turn-end",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "\"D:\\\\04_workspace_rust\\\\cc-book\\\\target\\\\debug\\\\binaries\\\\cc-panes-cli-hook.exe\" error",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": ""
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "async": true,
+            "command": "\"D:\\\\04_workspace_rust\\\\cc-book\\\\target\\\\debug\\\\binaries\\\\cc-panes-cli-hook.exe\" prompt-before",
+            "timeout": 10,
+            "type": "command"
+          }
+        ],
+        "matcher": ""
       }
     ]
   }

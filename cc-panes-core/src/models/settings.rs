@@ -147,6 +147,7 @@ pub enum SearchScope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GeneralSettings {
+    #[serde(default = "default_close_to_tray")]
     pub close_to_tray: bool,
     pub auto_start: bool,
     pub language: String,
@@ -173,6 +174,10 @@ pub struct GeneralSettings {
 
 fn default_cli_tool() -> String {
     "claude".to_string()
+}
+
+fn default_close_to_tray() -> bool {
+    !cfg!(target_os = "linux")
 }
 
 fn default_launch_favorites() -> Vec<String> {
@@ -389,7 +394,7 @@ impl Default for VoiceSettings {
 impl Default for GeneralSettings {
     fn default() -> Self {
         Self {
-            close_to_tray: true,
+            close_to_tray: default_close_to_tray(),
             auto_start: false,
             language: "zh-CN".to_string(),
             data_dir: None,

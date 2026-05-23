@@ -11,7 +11,7 @@ describe("buildOscColorReply", () => {
 
   it("replies to background color queries", () => {
     expect(buildOscColorReply(11, "?", DARK_TERMINAL_THEME)).toBe(
-      "\x1b]11;rgb:1a1a/1a1a/1a1a\x1b\\"
+      "\x1b]11;rgb:0c0c/0c0c/0c0c\x1b\\"
     );
   });
 

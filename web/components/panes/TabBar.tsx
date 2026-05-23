@@ -109,7 +109,6 @@ function SortableTab({
   onCloseOtherTabs,
   onRevealInExplorer,
   onPopOutTab,
-  activeTabBg,
   activeTabFg,
   getStatus,
   registerTabNode,
@@ -213,11 +212,10 @@ function SortableTab({
                 : `${d.inactiveRadius} ${d.inactiveMargin} hover:bg-[var(--notch-tab-hover-bg)] hover:text-[var(--notch-tab-hover-fg)]`
               }`}
             style={active ? {
-              background: activeTabBg ?? 'var(--notch-tab-active-bg)',
-              color: activeTabFg ?? 'var(--notch-tab-active-fg)',
-              borderLeft: '1px solid var(--notch-tab-border)',
-              borderRight: '1px solid var(--notch-tab-border)',
-              borderTop: '1px solid var(--notch-tab-border)',
+              background: 'transparent',
+              color: activeTabFg ?? 'var(--app-text-primary)',
+              borderTop: '2px solid var(--app-accent)',
+              fontWeight: 600,
             } : {
               color: 'var(--notch-tab-inactive-fg)',
             }}

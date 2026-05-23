@@ -354,10 +354,10 @@ export default function WorkspaceItem({
             role="button"
             tabIndex={0}
             aria-expanded={expanded}
-            className={`w-full group flex items-center justify-between px-3 py-2.5 mb-1 rounded-xl transition-all duration-300 ${
+            className={`w-full group flex items-center justify-between px-3 py-1.5 rounded-lg transition-colors duration-150 ${
               expanded
                 ? "border border-[var(--app-border)] text-[var(--app-accent)]"
-                : "border border-transparent text-[var(--app-text-secondary)] hover:bg-[var(--app-hover)] hover:text-[var(--app-text-primary)]"
+                : "border border-transparent text-[var(--app-text-primary)] hover:bg-[var(--app-hover)]"
             }`}
             style={expanded ? { background: "var(--app-hover)" } : undefined}
             onClick={() => onExpand(ws.id)}
@@ -369,18 +369,18 @@ export default function WorkspaceItem({
               }
             }}
           >
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
               {dragHandleProps ? (
                 <button
                   type="button"
                   aria-label={t("workspaceReorderHandle", {
                     defaultValue: "拖动排序工作空间",
                   })}
-                  className="flex h-5 w-5 items-center justify-center rounded-sm text-[var(--app-text-tertiary)] opacity-0 transition-opacity cursor-grab group-hover:opacity-70 hover:text-[var(--app-text-secondary)]"
+                  className="flex h-4 w-3 -ml-1 items-center justify-center rounded text-[var(--app-text-tertiary)] opacity-0 transition-opacity duration-150 cursor-grab group-hover:opacity-50 hover:!opacity-90 hover:text-[var(--app-text-secondary)] active:cursor-grabbing"
                   onClick={(event) => event.stopPropagation()}
                   {...dragHandleProps}
                 >
-                  <GripVertical className="h-3.5 w-3.5" />
+                  <GripVertical className="h-3 w-3" />
                 </button>
               ) : null}
               <ChevronRight className={`w-3.5 h-3.5 transition-transform ${expanded ? "rotate-90" : ""}`} />
@@ -402,8 +402,8 @@ export default function WorkspaceItem({
               ) : null}
             </div>
             <span
-              className="text-xs px-2 py-0.5 rounded-full text-[var(--app-text-secondary)]"
-              style={{ background: "var(--app-hover)" }}
+              className="text-[11px] font-medium tabular-nums leading-none min-w-[22px] text-center px-2 py-1 rounded-full text-[var(--app-text-tertiary)] group-hover:text-[var(--app-text-secondary)] transition-colors"
+              style={{ background: "color-mix(in srgb, var(--app-text-primary) 8%, transparent)" }}
             >
               {ws.projects.length}
             </span>

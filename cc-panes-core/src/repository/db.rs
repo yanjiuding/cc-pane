@@ -26,6 +26,7 @@ struct Migration {
 /// V15 = Provider selection mode on launch/restore records
 /// V16 = task_bindings plan collaboration leader/worker fields
 /// V17 = plans + plan_recall_dedup (plan-as-memory with recall stats)
+/// V18 = usage_stats + usage_scan_state
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -315,6 +316,35 @@ const MIGRATIONS: &[Migration] = &[
             );
         ",
     },
+    Migration {
+        version: 18,
+        description: "usage stats daily aggregates and jsonl scan state",
+        up_sql: "
+            CREATE TABLE IF NOT EXISTS usage_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                cli_tool TEXT NOT NULL,
+                workspace_name TEXT NOT NULL,
+                char_count INTEGER NOT NULL DEFAULT 0,
+                token_input INTEGER NOT NULL DEFAULT 0,
+                token_output INTEGER NOT NULL DEFAULT 0,
+                token_cache_read INTEGER NOT NULL DEFAULT 0,
+                token_cache_creation INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                UNIQUE(date, cli_tool, workspace_name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_usage_stats_date ON usage_stats(date);
+            CREATE INDEX IF NOT EXISTS idx_usage_stats_workspace_date
+                ON usage_stats(workspace_name, date);
+
+            CREATE TABLE IF NOT EXISTS usage_scan_state (
+                jsonl_path TEXT PRIMARY KEY,
+                last_byte_offset INTEGER NOT NULL,
+                last_mtime_ms INTEGER NOT NULL,
+                scanned_at TEXT NOT NULL
+            );
+        ",
+    },
 ];
 
 /// 数据库连接管理
@@ -551,6 +581,8 @@ mod tests {
             "specs",
             "terminal_sessions",
             "task_bindings",
+            "usage_stats",
+            "usage_scan_state",
             "schema_migrations",
         ];
         for table in &tables {

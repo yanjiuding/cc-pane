@@ -35,6 +35,7 @@ export { useSshMachinesStore } from "./useSshMachinesStore";
 export { useEnvironmentStore } from "./useEnvironmentStore";
 export { useProcessMonitorStore } from "./useProcessMonitorStore";
 export { useResourceStatsStore } from "./useResourceStatsStore";
+export { useUsageStatsStore } from "./useUsageStatsStore";
 export { useSharedMcpStore } from "./useSharedMcpStore";
 export { useOrchestratorStore } from "./useOrchestratorStore";
 export { useVoiceInputStore } from "./useVoiceInputStore";

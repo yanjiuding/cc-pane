@@ -2,7 +2,7 @@
 
 ## 状态
 - **优先级**: P1
-- **状态**: Open
+- **状态**: Closed（已修复，见 `web/components/panes/terminalWriteFlowControl.ts`）
 - **发现日期**: 2026-03-26
 - **影响平台**: Windows / macOS
 

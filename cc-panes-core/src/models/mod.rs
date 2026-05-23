@@ -15,6 +15,7 @@ pub mod ssh_machine;
 pub mod task_binding;
 mod terminal;
 pub mod todo;
+pub mod usage_stats;
 mod workspace;
 pub mod workspace_snapshot;
 pub mod wsl;
@@ -53,6 +54,10 @@ pub use ssh_machine::{AuthMethod, SshMachine, SshMachineConfig, SshMachineUpsert
 pub use terminal::{
     CliTool, CreateSessionRequest, ResizeRequest, TerminalBufferMode, TerminalExit, TerminalOutput,
     TerminalReplaySnapshot, WslLaunchInfo,
+};
+pub use usage_stats::{
+    UsageDayPoint, UsageEntry, UsageQueryResult, UsageScanState, UsageStatsDelta, UsageStatsRow,
+    UsageTotals,
 };
 pub use workspace::{
     ProjectMigrationPlan, ProjectMigrationRequest, ProjectMigrationResult,

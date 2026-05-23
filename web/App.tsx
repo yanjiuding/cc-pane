@@ -783,7 +783,7 @@ function MainApp() {
                       onOpenTerminal={handleOpenTerminal}
                     />
                   )}
-                  <div className="flex-1 overflow-hidden p-1.5" style={{ background: "var(--app-panel-bg)" }}>
+                  <div className="flex-1 overflow-hidden" style={{ background: "var(--app-panel-bg)" }}>
                     <FileEditorPanel />
                   </div>
                 </>
@@ -797,7 +797,7 @@ function MainApp() {
                     />
                   )}
                   {/* 面板区域 */}
-                  <div className="flex-1 overflow-hidden p-1.5" style={{ background: "var(--app-panel-bg)" }}>
+                  <div className="flex-1 overflow-hidden" style={{ background: "var(--app-panel-bg)" }}>
                     <DndPaneProvider>
                       <PaneContainer pane={rootPane} />
                     </DndPaneProvider>

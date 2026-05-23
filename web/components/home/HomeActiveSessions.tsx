@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { CSSProperties } from "react";
 import { useTranslation } from "react-i18next";
 import { Terminal, Circle } from "lucide-react";
 import { usePanesStore, useTerminalStatusStore } from "@/stores";
@@ -14,13 +15,13 @@ function statusColor(status: TerminalStatusType | null): string {
     case "active":
     case "thinking":
     case "toolRunning":
-      return "#22c55e";
+      return "var(--chart-2)";
     case "compacting":
-      return "#0a84ff";
+      return "var(--chart-1)";
     case "waitingInput":
       return "var(--app-warning)";
     case "error":
-      return "#ef4444";
+      return "var(--destructive)";
     case "idle":
       return "var(--app-text-tertiary)";
     default:
@@ -53,18 +54,18 @@ export default function HomeActiveSessions() {
           {t("activeSessions")}
         </h3>
         <div
-          className="flex flex-col items-center justify-center py-8 rounded-xl"
-          style={{
-            background: "var(--app-glass-bg)",
-            border: "1px solid var(--app-border)",
-          }}
+          className="group relative flex h-[280px] flex-col items-center justify-center overflow-hidden rounded-2xl border border-[var(--app-home-border)] bg-[var(--app-home-surface)] transition-colors duration-200 hover:bg-[var(--app-home-surface-hover)]"
         >
+          <div
+            className="absolute inset-0 bg-gradient-to-b from-transparent to-[color-mix(in_srgb,var(--primary-foreground)_1%,transparent)]"
+            aria-hidden="true"
+          />
           <Terminal
-            className="w-7 h-7 mb-2"
+            className="relative w-8 h-8 mb-2 opacity-40 transition-opacity duration-200 group-hover:opacity-60"
             style={{ color: "var(--app-text-tertiary)" }}
           />
           <p
-            className="text-xs"
+            className="relative text-xs"
             style={{ color: "var(--app-text-tertiary)" }}
           >
             {t("noActiveSessions")}
@@ -83,13 +84,13 @@ export default function HomeActiveSessions() {
         {t("activeSessions")}
       </h3>
       <div
-        className="rounded-xl overflow-hidden divide-y"
+        className="rounded-2xl overflow-hidden divide-y"
         style={{
-          background: "var(--app-glass-bg)",
-          border: "1px solid var(--app-border)",
+          background: "var(--app-home-surface)",
+          border: "1px solid var(--app-home-border)",
           "--tw-divide-opacity": "1",
-          borderColor: "var(--app-border)",
-        } as React.CSSProperties}
+          borderColor: "var(--app-home-row-border)",
+        } as CSSProperties}
       >
         {activeTabs.slice(0, 5).map((tab) => {
           const status = statusMap.get(tab.sessionId!)?.status ?? null;
@@ -97,7 +98,7 @@ export default function HomeActiveSessions() {
             <div
               key={tab.id}
               className="home-session-item flex items-center gap-2 px-3 py-2.5 transition-colors duration-150"
-              style={{ borderColor: "var(--app-border)" }}
+              style={{ borderColor: "var(--app-home-row-border)" }}
             >
               <Circle
                 className={`w-2.5 h-2.5 shrink-0 ${isBusyStatus(status) ? "animate-pulse" : ""}`}
@@ -123,8 +124,8 @@ export default function HomeActiveSessions() {
           className="px-3 py-2 text-xs"
           style={{
             color: "var(--app-text-tertiary)",
-            background: "var(--app-glass-bg-light, var(--app-glass-bg))",
-            borderColor: "var(--app-border)",
+            background: "var(--app-home-surface-light, var(--app-home-surface))",
+            borderColor: "var(--app-home-row-border)",
           }}
         >
           {t("totalSessions", { count: activeTabs.length })}

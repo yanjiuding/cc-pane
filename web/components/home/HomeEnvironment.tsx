@@ -8,13 +8,6 @@ import type { EnvironmentInfo } from "@/types";
 /** 模块级缓存，跨组件挂载周期复用 */
 let cachedEnvInfo: EnvironmentInfo | null = null;
 
-/** 各工具的主题色（按工具 ID 或名称匹配） */
-const TOOL_COLORS: Record<string, string> = {
-  "Node.js": "#22c55e",
-  "claude": "var(--app-accent)",
-  "codex": "#a855f7",
-};
-
 export default function HomeEnvironment() {
   const { t } = useTranslation("home");
   const [envInfo, setEnvInfo] = useState<EnvironmentInfo | null>(cachedEnvInfo);
@@ -61,11 +54,7 @@ export default function HomeEnvironment() {
         {t("environment")}
       </h3>
       <div
-        className="rounded-xl overflow-hidden"
-        style={{
-          background: "var(--app-glass-bg)",
-          border: "1px solid var(--app-border)",
-        }}
+        className="rounded-2xl overflow-hidden border border-[var(--app-home-border)] bg-[var(--app-home-surface)]"
       >
         {loading ? (
           /* 骨架屏 */
@@ -73,8 +62,7 @@ export default function HomeEnvironment() {
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
-                className="flex items-center gap-3 px-3 py-2.5"
-                style={{ borderBottom: i < 2 ? "1px solid var(--app-border)" : undefined }}
+                className="flex items-center gap-3 px-5 py-3.5 border-b border-[var(--app-home-row-border)] last:border-b-0"
               >
                 <div
                   className="w-7 h-7 rounded-lg animate-pulse"
@@ -94,30 +82,29 @@ export default function HomeEnvironment() {
             ))}
           </div>
         ) : (
-          tools.map((tool, i) => {
-            const color = TOOL_COLORS[tool.id] ?? TOOL_COLORS[tool.name] ?? "var(--app-text-tertiary)";
+          tools.map((tool) => {
+            const stateColor = tool.installed ? "var(--chart-2)" : "var(--destructive)";
             return (
               <div
                 key={tool.name}
-                className="flex items-center gap-3 px-3 py-2.5"
-                style={{ borderBottom: i < tools.length - 1 ? "1px solid var(--app-border)" : undefined }}
+                className="flex items-center gap-3 px-5 py-3.5 border-b border-[var(--app-home-row-border)] transition-colors duration-150 hover:bg-[var(--app-home-surface-hover)] last:border-b-0"
               >
                 {/* 图标容器 */}
                 <div
-                  className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+                  className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
                   style={{
-                    background: `color-mix(in srgb, ${color} 12%, transparent)`,
+                    background: `color-mix(in srgb, ${stateColor} 12%, transparent)`,
                   }}
                 >
                   {tool.installed ? (
                     <CheckCircle2
-                      className="w-3.5 h-3.5"
-                      style={{ color }}
+                      className="w-4 h-4"
+                      style={{ color: "var(--chart-2)" }}
                     />
                   ) : (
                     <XCircle
-                      className="w-3.5 h-3.5"
-                      style={{ color: "#ef4444" }}
+                      className="w-4 h-4"
+                      style={{ color: "var(--destructive)" }}
                     />
                   )}
                 </div>
@@ -130,20 +117,22 @@ export default function HomeEnvironment() {
                 {/* Pill badge */}
                 {tool.installed ? (
                   <span
-                    className="px-2 py-0.5 rounded-full text-xs font-mono"
+                    className="px-2.5 py-1 rounded-full border text-xs font-mono"
                     style={{
-                      background: "color-mix(in srgb, #22c55e 10%, transparent)",
-                      color: "#22c55e",
+                      background: "color-mix(in srgb, var(--chart-2) 10%, transparent)",
+                      borderColor: "color-mix(in srgb, var(--chart-2) 16%, transparent)",
+                      color: "var(--chart-2)",
                     }}
                   >
                     {tool.version ?? t("installed")}
                   </span>
                 ) : (
                   <span
-                    className="px-2 py-0.5 rounded-full text-xs"
+                    className="px-2.5 py-1 rounded-full border text-xs"
                     style={{
-                      background: "color-mix(in srgb, #ef4444 10%, transparent)",
-                      color: "#ef4444",
+                      background: "color-mix(in srgb, var(--destructive) 10%, transparent)",
+                      borderColor: "color-mix(in srgb, var(--destructive) 16%, transparent)",
+                      color: "var(--destructive)",
                     }}
                   >
                     {t("notInstalled")}

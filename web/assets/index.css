@@ -85,6 +85,8 @@
   --app-sidebar: #F8F9FA;
   --app-tabbar: #F3F4F6;
   --app-content: #FFFFFF;
+  --app-bg-deep: #F8F9FA;
+  --app-bg-sidebar-deep: #F8F9FA;
   --app-overlay: #ffffff;
   --app-accent: #0969DA;
   --app-text-primary: #24292F;
@@ -107,6 +109,19 @@
   --app-orb-1: transparent;
   --app-orb-2: transparent;
   --app-orb-3: transparent;
+  --app-orb-blur-lg: 0px;
+  --app-orb-blur-md: 0px;
+  --app-home-surface: var(--app-glass-bg);
+  --app-home-surface-light: var(--app-glass-bg-light);
+  --app-home-surface-hover: var(--app-hover);
+  --app-home-border: var(--app-border);
+  --app-home-border-hover: var(--app-border);
+  --app-home-row-border: var(--app-border);
+  --app-home-kbd-bg: var(--app-hover);
+  --app-activity-border: var(--app-border);
+  --app-activity-item-hover: var(--app-hover);
+  --app-activity-item-active: var(--app-active-bg);
+  --app-activity-item-active-shadow: none;
   --app-active-gradient-from: #DBEAFE;
   --app-active-gradient-to: #EFF6FF;
   --app-tab-highlight: #FFFFFF;
@@ -199,12 +214,14 @@
   --app-sidebar: rgba(22, 27, 34, 0.40);
   --app-tabbar: rgba(37, 37, 37, 0.40);
   --app-content: rgba(26, 26, 26, 0.30);
+  --app-bg-deep: #0a0a0f;
+  --app-bg-sidebar-deep: #0f0f16;
   --app-overlay: #1C2128;
   --app-accent: #2F81F7;
   --app-text-primary: #E6EDF3;
   --app-text-secondary: #8B949E;
   --app-text-tertiary: #6E7681;
-  --app-border: rgba(255, 255, 255, 0.08);
+  --app-border: rgba(255, 255, 255, 0.05);
   --app-hover: rgba(255, 255, 255, 0.06);
   --app-active-bg: rgba(47, 129, 247, 0.15);
 
@@ -218,9 +235,22 @@
   --app-glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   --app-glass-blur: 12px;
   --app-glass-blur-sm: 8px;
-  --app-orb-1: rgba(59, 130, 246, 0.25);
-  --app-orb-2: rgba(139, 92, 246, 0.20);
+  --app-orb-1: rgba(37, 99, 235, 0.20);
+  --app-orb-2: rgba(168, 85, 247, 0.18);
   --app-orb-3: rgba(6, 182, 212, 0.15);
+  --app-orb-blur-lg: 120px;
+  --app-orb-blur-md: 100px;
+  --app-home-surface: rgba(255, 255, 255, 0.02);
+  --app-home-surface-light: rgba(255, 255, 255, 0.03);
+  --app-home-surface-hover: rgba(255, 255, 255, 0.04);
+  --app-home-border: rgba(255, 255, 255, 0.055);
+  --app-home-border-hover: rgba(255, 255, 255, 0.12);
+  --app-home-row-border: rgba(255, 255, 255, 0.03);
+  --app-home-kbd-bg: rgba(0, 0, 0, 0.40);
+  --app-activity-border: rgba(255, 255, 255, 0.05);
+  --app-activity-item-hover: rgba(255, 255, 255, 0.05);
+  --app-activity-item-active: rgba(47, 129, 247, 0.12);
+  --app-activity-item-active-shadow: inset 2px 0 0 var(--app-accent);
   --app-active-gradient-from: rgba(47, 129, 247, 0.20);
   --app-active-gradient-to: rgba(47, 129, 247, 0.05);
   --app-tab-highlight: rgba(255, 255, 255, 0.15);
@@ -250,16 +280,16 @@
   --app-titlebar-highlight: linear-gradient(90deg, transparent, rgba(255,255,255,0.08) 20%, rgba(255,255,255,0.12) 50%, rgba(255,255,255,0.08) 80%, transparent);
 
   /* 新增：组件级变量 */
-  --app-activity-bar-bg: rgba(15, 23, 42, 0.30);
-  --app-sidebar-bg: rgba(22, 27, 34, 0.40);
+  --app-activity-bar-bg: var(--app-bg-sidebar-deep);
+  --app-sidebar-bg: var(--app-bg-sidebar-deep);
   --app-panel-bg: #1a1a1a;
   --app-icon-active: #E6EDF3;
-  --app-icon-inactive: #6E7681;
-  --app-icon-hover: #8B949E;
+  --app-icon-inactive: #B0B8C1;
+  --app-icon-hover: #E6EDF3;
   --app-close-btn-hover-bg: #F85149;
   --app-close-btn-hover-fg: #FFFFFF;
   --app-tab-active-border: #2F81F7;
-  --app-terminal-bg: #1a1a1a;
+  --app-terminal-bg: #0C0C0C;
   --app-terminal-fg: #f5f5f7;
 
   /* Notch Tab 变量 — 始终浮在深色终端上，统一毛玻璃风格 */
@@ -304,28 +334,96 @@
   color: var(--cc-terminal-fg);
 }
 
-/* 全局滚动条 — Light */
+/* ============================================
+   滚动条 — 浮动隐藏式（macOS / Linear 风格）
+   默认完全透明 → 容器 hover 淡入 → slider hover 增强 → 拖拽最强
+   ============================================ */
+
+/* --- 全局 webkit scrollbar --- */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
 ::-webkit-scrollbar-thumb {
-  background: #D1D5DB;
-  border-radius: 4px;
+  background-color: transparent;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.2s ease;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #9CA3AF;
+  background-color: rgba(0, 0, 0, 0.32);
+  background-clip: padding-box;
 }
 
-/* 全局滚动条 — Dark */
-.dark ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+/* Light 模式：容器 hover 才淡入 */
+:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.16);
 }
-.dark ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+:hover::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.32);
+}
+
+/* Dark 模式 */
+.dark :hover::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+.dark :hover::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.30);
+}
+
+/* --- xterm.js viewport 滚动条 --- */
+.cc-terminal-host .xterm .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.cc-terminal-host .xterm .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cc-terminal-host .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background-color: transparent;
+  border-radius: 3px;
+  transition: background-color 0.2s ease;
+}
+.cc-terminal-host:hover .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+  background-color: rgba(255, 255, 255, 0.14);
+}
+.cc-terminal-host .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(255, 255, 255, 0.30) !important;
+}
+/* Firefox 兜底 */
+.cc-terminal-host .xterm .xterm-viewport {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.cc-terminal-host:hover .xterm .xterm-viewport {
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+
+/* --- xterm.js 内置 DOM 滚动条（slider 是真 DOM 元素，必须 !important 压 inline style） --- */
+.cc-terminal-host .xterm .xterm-scrollable-element > .scrollbar {
+  width: 6px !important;
+}
+.cc-terminal-host .xterm .xterm-scrollable-element > .scrollbar > .slider {
+  width: 6px !important;
+  background: transparent !important;
+  border-radius: 3px;
+  transition: background 0.2s ease;
+}
+.cc-terminal-host:hover .xterm .xterm-scrollable-element > .scrollbar > .slider {
+  background: rgba(255, 255, 255, 0.14) !important;
+}
+.cc-terminal-host .xterm .xterm-scrollable-element > .scrollbar > .slider:hover {
+  background: rgba(255, 255, 255, 0.30) !important;
+}
+.cc-terminal-host .xterm .xterm-scrollable-element > .scrollbar > .slider.active {
+  background: rgba(255, 255, 255, 0.45) !important;
 }
 
 /* 空状态脉冲动画 */
@@ -349,7 +447,7 @@
 }
 
 .splitview-sash:hover {
-  background: color-mix(in srgb, var(--app-accent) 8%, transparent);
+  background: color-mix(in srgb, var(--app-accent) 12%, transparent);
 }
 
 /* 伪元素扩展拖拽热区 */
@@ -364,9 +462,9 @@
   content: '';
   position: absolute;
   z-index: 0;
-  background: color-mix(in srgb, var(--app-text-tertiary) 72%, transparent);
+  background: color-mix(in srgb, var(--app-text-tertiary) 30%, transparent);
   border-radius: 999px;
-  opacity: 0.8;
+  opacity: 0.4;
   transition: background 0.15s ease, opacity 0.15s ease;
 }
 
@@ -382,8 +480,8 @@
 }
 
 .splitview-sash.vertical::before {
-  left: -4px;
-  right: -4px;
+  left: -6px;
+  right: -6px;
 }
 
 .splitview-sash.vertical::after {
@@ -401,8 +499,8 @@
 }
 
 .splitview-sash.horizontal::before {
-  top: -4px;
-  bottom: -4px;
+  top: -6px;
+  bottom: -6px;
 }
 
 .splitview-sash.horizontal::after {

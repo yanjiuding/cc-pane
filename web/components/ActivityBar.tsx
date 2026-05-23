@@ -23,23 +23,17 @@ function ActivityBarIcon({ icon, label, active, onClick, badge }: ActivityBarIco
     <Tooltip>
       <TooltipTrigger asChild>
         <button
-          className={`relative w-full h-[40px] flex items-center justify-center transition-colors duration-150 ${
+          className={`relative mx-auto h-10 w-10 rounded-xl flex items-center justify-center transition-all duration-200 ${
             active
-              ? "text-[var(--app-icon-active)]"
-              : "text-[var(--app-icon-inactive)] hover:text-[var(--app-icon-hover)]"
+              ? "text-[var(--app-accent)]"
+              : "text-[var(--app-icon-inactive)] hover:text-[var(--app-icon-hover)] hover:bg-[var(--app-activity-item-hover)]"
           }`}
           style={{
-            background: active ? "var(--app-hover)" : undefined,
+            background: active ? "var(--app-activity-item-active)" : undefined,
+            boxShadow: active ? "var(--app-activity-item-active-shadow)" : undefined,
           }}
           onClick={onClick}
         >
-          {/* 左侧高亮条 */}
-          {active && (
-            <div
-              className="absolute left-0 top-[25%] bottom-[25%] w-[3px] rounded-r"
-              style={{ background: "var(--app-accent)" }}
-            />
-          )}
           {icon}
           {/* Badge */}
           {badge != null && badge > 0 && (
@@ -90,11 +84,12 @@ export default function ActivityBar() {
 
   return (
     <div
-      className="activity-bar shrink-0 flex flex-col items-center select-none"
+      className="activity-bar shrink-0 flex flex-col items-center select-none py-2"
       style={{
-        width: 48,
+        width: 56,
         height: "100%",
         background: "var(--app-activity-bar-bg)",
+        borderRight: "1px solid var(--app-activity-border)",
         backdropFilter: `blur(var(--app-glass-blur))`,
         WebkitBackdropFilter: `blur(var(--app-glass-blur))`,
         WebkitAppRegion: "no-drag",
@@ -103,21 +98,21 @@ export default function ActivityBar() {
       {/* Logo — 点击切换首页 */}
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="pt-1 pb-1 flex items-center justify-center">
+          <div className="pt-0.5 pb-2 flex items-center justify-center">
             <button
-              className="w-[28px] h-[28px] rounded-[7px] flex items-center justify-center transition-transform hover:scale-105 cursor-pointer"
+              className="w-8 h-8 rounded-xl flex items-center justify-center transition-all duration-200 hover:scale-105 hover:bg-[var(--app-activity-item-hover)] cursor-pointer"
               style={{
                 background: isHomeActive ? "var(--app-accent)" : "var(--app-activity-bar-bg)",
-                border: `1px solid ${isHomeActive ? "var(--app-accent)" : "var(--app-border)"}`,
+                border: `1px solid ${isHomeActive ? "var(--app-accent)" : "var(--app-activity-border)"}`,
                 boxShadow: isHomeActive
                   ? "0 2px 8px color-mix(in srgb, var(--app-accent) 40%, transparent)"
-                  : "var(--app-glass-shadow)",
+                  : "none",
               }}
               onClick={toggleHomeMode}
             >
               <Command
                 className="w-[14px] h-[14px]"
-                style={{ color: isHomeActive ? "white" : "var(--app-accent)" }}
+                style={{ color: isHomeActive ? "var(--primary-foreground)" : "var(--app-accent)" }}
               />
             </button>
           </div>
@@ -129,12 +124,12 @@ export default function ActivityBar() {
 
       {/* Separator */}
       <div
-        className="w-6 h-px mx-auto my-1"
-        style={{ background: "var(--app-border)" }}
+        className="w-6 h-px mx-auto mb-2"
+        style={{ background: "var(--app-activity-border)" }}
       />
 
       {/* 视图图标 */}
-      <div className="flex flex-col w-full gap-0.5">
+      <div className="flex flex-col w-full gap-1.5">
         {/* Self-Chat (AI 助手 — 置顶) */}
         <ActivityBarIcon
           icon={<Bot className="w-[22px] h-[22px]" strokeWidth={1.5} />}
@@ -172,7 +167,7 @@ export default function ActivityBar() {
       </div>
 
       {/* 底部设置 */}
-      <div className="mt-auto pb-3 w-full">
+      <div className="mt-auto pb-2 w-full">
         <ActivityBarIcon
           icon={<Settings className="w-[22px] h-[22px]" strokeWidth={1.5} />}
           label={t("settings", { ns: "common", defaultValue: "Settings" })}

@@ -7,6 +7,7 @@ mod session_restore_repo;
 pub mod spec_repo;
 mod task_binding_repo;
 mod todo_repo;
+mod usage_stats_repo;
 
 pub use db::Database;
 pub use history_file_repo::HistoryFileRepository;
@@ -17,3 +18,4 @@ pub use session_restore_repo::SessionRestoreRepository;
 pub use spec_repo::SpecRepository;
 pub use task_binding_repo::TaskBindingRepository;
 pub use todo_repo::TodoRepository;
+pub use usage_stats_repo::UsageStatsRepository;

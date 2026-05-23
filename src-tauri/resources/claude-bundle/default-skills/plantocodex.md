@@ -61,7 +61,7 @@ register_plan_worker(leaderId, sessionId, cliTool: "codex", projectPath,
 
 `worker_report` 模式补一条上下文给 worker：
 
-> 你的 workerId = `<workerId>`。完成时 `update_task_binding(id, status: "completed", progress: 100, completionSummary)`；失败 `status="failed"`。可选给 leader `submit_to_session` 发短摘要。
+> 你的 workerId = `<workerId>`。完成时 `update_task_binding(id, status: "completed", progress: 100, completionSummary)`；失败 `status="failed"`。后端会在 leader 空闲时自动通知；leader busy 时会跳过，必要时显式调用 `report_to_leader(workerId)` 兜底。
 
 ## Phase 4: 监控
 

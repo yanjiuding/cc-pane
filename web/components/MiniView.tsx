@@ -44,7 +44,7 @@ export default function MiniView() {
 
   function startDrag() {
     if (!isTauriReady()) return;
-    getCurrentWindow().startDragging();
+    getCurrentWindow().startDragging().catch((e) => handleErrorSilent(e, "start mini drag"));
   }
 
   return (
@@ -72,6 +72,7 @@ export default function MiniView() {
               background: "transparent",
               color: isPinned ? "var(--app-accent)" : "var(--app-text-secondary)",
             }}
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); togglePin(); }}
             title={isPinned ? t("miniUnpin") : t("miniPin")}
           >
@@ -80,6 +81,7 @@ export default function MiniView() {
           <button
             className="flex items-center justify-center w-[18px] h-[18px] rounded-[3px] border-none cursor-pointer transition-all hover:bg-[var(--app-hover)]"
             style={{ background: "transparent", color: "var(--app-text-secondary)" }}
+            onMouseDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); handleRestore(); }}
             title={t("miniRestore")}
           >

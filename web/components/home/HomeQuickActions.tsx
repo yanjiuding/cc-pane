@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Terminal, FolderTree, Bot, Settings } from "lucide-react";
 import { useActivityBarStore } from "@/stores/useActivityBarStore";
@@ -8,8 +9,9 @@ interface HomeQuickActionsProps {
 }
 
 interface QuickAction {
-  icon: React.ReactNode;
+  icon: ReactNode;
   labelKey: string;
+  color: string;
   onClick: () => void;
 }
 
@@ -24,11 +26,13 @@ export default function HomeQuickActions({ onNewTerminal }: HomeQuickActionsProp
     {
       icon: <Terminal className="w-5 h-5" />,
       labelKey: "newTerminal",
+      color: "var(--chart-1)",
       onClick: onNewTerminal,
     },
     {
       icon: <FolderTree className="w-5 h-5" />,
       labelKey: "workspaceManager",
+      color: "var(--chart-4)",
       onClick: () => {
         setAppViewMode("panes");
         toggleView("explorer");
@@ -37,11 +41,13 @@ export default function HomeQuickActions({ onNewTerminal }: HomeQuickActionsProp
     {
       icon: <Bot className="w-5 h-5" />,
       labelKey: "aiAssistant",
+      color: "var(--chart-2)",
       onClick: toggleSelfChatMode,
     },
     {
       icon: <Settings className="w-5 h-5" />,
       labelKey: "settings",
+      color: "var(--app-text-tertiary)",
       onClick: openSettings,
     },
   ];
@@ -51,24 +57,21 @@ export default function HomeQuickActions({ onNewTerminal }: HomeQuickActionsProp
       {actions.map((action) => (
         <button
           key={action.labelKey}
-          className="home-quick-action flex flex-col items-center gap-2.5 p-5 rounded-xl transition-all duration-200 cursor-pointer hover:-translate-y-[1px] hover:shadow-md"
-          style={{
-            background: "var(--app-glass-bg)",
-            border: "1px solid var(--app-border)",
-          }}
+          className="home-quick-action group relative overflow-hidden flex flex-col items-center gap-3 p-5 rounded-2xl border border-[var(--app-home-border)] bg-[var(--app-home-surface)] transition-all duration-300 cursor-pointer hover:-translate-y-0.5 hover:border-[var(--app-home-border-hover)] hover:bg-[var(--app-home-surface-hover)] hover:shadow-lg hover:shadow-[0_16px_32px_color-mix(in_srgb,var(--app-bg-deep)_45%,transparent)]"
           onClick={action.onClick}
         >
+          <span className="absolute inset-0 bg-gradient-to-b from-[var(--app-home-surface-light)] to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
           <span
-            className="w-10 h-10 rounded-xl flex items-center justify-center"
+            className="relative w-11 h-11 rounded-xl flex items-center justify-center transition-transform duration-300 group-hover:scale-110"
             style={{
-              background: "color-mix(in srgb, var(--app-accent) 12%, transparent)",
-              color: "var(--app-accent)",
+              background: "var(--app-home-surface-light)",
+              color: action.color,
             }}
           >
             {action.icon}
           </span>
           <span
-            className="text-xs font-medium"
+            className="relative text-xs font-medium transition-colors duration-200 group-hover:text-[var(--app-text-primary)]"
             style={{ color: "var(--app-text-primary)" }}
           >
             {t(action.labelKey as never)}

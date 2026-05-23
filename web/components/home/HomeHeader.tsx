@@ -22,54 +22,52 @@ export default function HomeHeader({ version }: HomeHeaderProps) {
   const greetingKey = useMemo(getGreetingKey, []);
 
   return (
-    <div
-      className="flex items-center gap-5 rounded-2xl p-6"
-      style={{
-        background: "var(--app-glass-bg)",
-        border: "1px solid var(--app-glass-border)",
-        boxShadow: "var(--app-glass-shadow)",
-        backdropFilter: "blur(var(--app-glass-blur, 0px))",
-      }}
-    >
-      {/* Logo 图标 */}
-      <div
-        className="w-14 h-14 rounded-2xl flex items-center justify-center shrink-0 relative"
-        style={{
-          background: "var(--app-accent)",
-          boxShadow: "0 6px 20px color-mix(in srgb, var(--app-accent) 35%, transparent)",
-        }}
-      >
-        <Command className="w-7 h-7 text-white" />
-        {/* 光晕 */}
+    <div className="flex items-center justify-between gap-5 px-1">
+      <div className="flex items-center gap-5 min-w-0">
+        {/* Logo 图标 */}
         <div
-          className="absolute inset-0 rounded-2xl opacity-50"
+          className="w-16 h-16 rounded-2xl flex items-center justify-center shrink-0 relative ring-1 ring-[color-mix(in_srgb,var(--primary-foreground)_10%,transparent)] shadow-lg"
           style={{
-            background: "radial-gradient(circle at 30% 30%, rgba(255,255,255,0.2), transparent 60%)",
+            background: "linear-gradient(135deg, var(--app-accent), color-mix(in srgb, var(--app-accent) 60%, black))",
+            boxShadow: "0 10px 28px color-mix(in srgb, var(--app-accent) 20%, transparent)",
           }}
-        />
-      </div>
+        >
+          <Command className="w-8 h-8" style={{ color: "var(--primary-foreground)" }} />
+          {/* 光晕 */}
+          <div
+            className="absolute inset-0 rounded-2xl opacity-50"
+            style={{
+              background: "radial-gradient(circle at 30% 30%, color-mix(in srgb, var(--primary-foreground) 20%, transparent), transparent 60%)",
+            }}
+          />
+        </div>
 
-      {/* 文字区域 */}
-      <div className="flex-1 min-w-0">
-        <h1
-          className="text-2xl font-bold"
-          style={{ color: "var(--app-text-primary)" }}
-        >
-          {t(greetingKey)}
-        </h1>
-        <p
-          className="text-sm mt-0.5"
-          style={{ color: "var(--app-text-secondary)" }}
-        >
-          {t("welcomeBack")} — CC-Panes
-        </p>
+        {/* 文字区域 */}
+        <div className="min-w-0">
+          <h1
+            className="text-2xl font-bold tracking-wide"
+            style={{ color: "var(--app-text-primary)" }}
+          >
+            {t(greetingKey)}
+          </h1>
+          <p
+            className="text-sm mt-0.5"
+            style={{ color: "var(--app-text-secondary)" }}
+          >
+            {t("welcomeBack")} — CC-Panes
+          </p>
+        </div>
       </div>
 
       {/* 右侧：版本 + 更新状态 */}
       <div className="flex flex-col items-end gap-1 shrink-0">
         <span
-          className="text-xs font-mono"
-          style={{ color: "var(--app-text-tertiary)" }}
+          className="text-xs font-mono px-2.5 py-1 rounded-full border"
+          style={{
+            background: "color-mix(in srgb, var(--chart-2) 10%, transparent)",
+            borderColor: "color-mix(in srgb, var(--chart-2) 20%, transparent)",
+            color: "var(--chart-2)",
+          }}
         >
           v{version}
         </span>
@@ -89,7 +87,7 @@ export default function HomeHeader({ version }: HomeHeaderProps) {
         ) : (
           <span
             className="inline-flex items-center gap-1 text-xs"
-            style={{ color: "var(--app-text-tertiary)" }}
+            style={{ color: "var(--chart-2)" }}
           >
             <CheckCircle2 className="w-3 h-3" />
             {t("upToDate")}

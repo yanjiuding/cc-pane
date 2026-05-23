@@ -24,6 +24,7 @@ export default function StatusBar() {
   const isDark = useThemeStore((s) => s.isDark);
   const toggleTheme = useThemeStore((s) => s.toggleTheme);
   const enterMiniMode = useMiniModeStore((s) => s.enterMiniMode);
+  const miniModeTransitioning = useMiniModeStore((s) => s.isTransitioning);
   const selectedWorkspace = useWorkspacesStore((s) => s.selectedWorkspace);
   const statusMap = useTerminalStatusStore((s) => s.statusMap);
   const updateAvailable = useUpdateStore((s) => s.available);
@@ -152,6 +153,7 @@ export default function StatusBar() {
           <TooltipTrigger asChild>
             <button
               className="p-0.5 rounded transition-colors hover:bg-[var(--app-hover)]"
+              disabled={miniModeTransitioning}
               onClick={() => enterMiniMode()}
             >
               <Minimize2 className="w-3 h-3" />

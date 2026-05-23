@@ -197,6 +197,7 @@ use commands::{
     put_label,
     query_task_bindings,
     query_todos,
+    query_usage_stats,
     read_clipboard_file_paths,
     read_config_dir_info,
     read_session_state,
@@ -221,6 +222,7 @@ use commands::{
     restart_shared_mcp_server,
     restore_file_version,
     restore_to_label,
+    refresh_usage_stats,
     rollback_project_migration,
     rollback_workspace_migration,
     save_skill,
@@ -276,11 +278,12 @@ use commands::{
     update_workspace_provider,
     upsert_mcp_server,
     upsert_shared_mcp_server,
+    record_terminal_input,
     write_terminal,
 };
 use repository::{
     Database, HistoryRepository, PlanRepository, ProjectRepository, SpecRepository,
-    TaskBindingRepository, TodoRepository,
+    TaskBindingRepository, TodoRepository, UsageStatsRepository,
 };
 use services::{
     ExternalSkillRegistry, FileSystemService, HistoryService, JournalService, LaunchHistoryService,
@@ -289,7 +292,8 @@ use services::{
     ProjectCliHooksService, ProjectContextService, ProjectService, ProviderService,
     ScreenshotService, SessionRestoreService, SettingsService, SharedMcpService,
     SkillMarketService, SkillService, SpecService, SshCredentialService, SshMachineService,
-    TaskBindingService, TerminalService, TodoService, WorkspaceService, WorktreeService,
+    TaskBindingService, TerminalService, TodoService, UsageStatsService, WorkspaceService,
+    WorktreeService,
 };
 use std::sync::Arc;
 use utils::AppPaths;
@@ -335,6 +339,18 @@ fn force_webview_focus(window: &tauri::WebviewWindow) {
 
 /// 截图进行中标志（模块级），托盘/菜单 show 守卫会检查此标志
 static CAPTURING: AtomicBool = AtomicBool::new(false);
+
+fn should_close_main_window_to_tray(window: &tauri::Window) -> bool {
+    if cfg!(target_os = "linux") {
+        return false;
+    }
+
+    window
+        .app_handle()
+        .try_state::<Arc<SettingsService>>()
+        .map(|settings| settings.get_settings().general.close_to_tray)
+        .unwrap_or(false)
+}
 
 /// 触发截图流程：SetWindowDisplayAffinity 方案
 /// Windows: 设置 WDA_EXCLUDEFROMCAPTURE → xcap 截屏 → 选区 → 裁剪保存 → 恢复 WDA_NONE
@@ -870,10 +886,15 @@ pub fn run() {
     let spec_repo = Arc::new(SpecRepository::new(db.clone()));
     let task_binding_repo = Arc::new(TaskBindingRepository::new(db.clone()));
     let plan_repo = Arc::new(PlanRepository::new(db.clone()));
+    let usage_stats_repo = Arc::new(UsageStatsRepository::new(db.clone()));
     let launch_history_service = Arc::new(LaunchHistoryService::new(history_repo));
     let todo_service = Arc::new(TodoService::new(todo_repo));
     let task_binding_service = Arc::new(TaskBindingService::new(task_binding_repo));
     let plan_archive_service = Arc::new(PlanArchiveService::new(plan_repo));
+    let usage_stats_service = Arc::new(UsageStatsService::new(
+        usage_stats_repo,
+        launch_history_service.clone(),
+    ));
     let spec_service = Arc::new(SpecService::new(spec_repo, todo_service.clone()));
     let project_service = Arc::new(ProjectService::new(project_repo));
     let history_service = Arc::new(HistoryService::new());
@@ -951,6 +972,7 @@ pub fn run() {
     let workspace_cleanup = workspace_service.clone();
     let shared_mcp_cleanup = shared_mcp_service.clone();
     let session_restore_cleanup = session_restore_service.clone();
+    let usage_stats_cleanup = usage_stats_service.clone();
 
     boot_mark!("building tauri app...");
     tauri::Builder::default()
@@ -978,6 +1000,7 @@ pub fn run() {
         .manage(project_service)
         .manage(terminal_service)
         .manage(launch_history_service)
+        .manage(usage_stats_service)
         .manage(history_service)
         .manage(project_cli_hooks_service)
         .manage(project_context_service)
@@ -1057,6 +1080,13 @@ pub fn run() {
                 "[boot] +{}ms: bundled config extracted",
                 boot_t0.elapsed().as_millis()
             );
+
+            // ---- 强制关闭原生窗口装饰（兜底：防 tauri.dev.conf.json 配置合并丢失 decorations: false）----
+            // macOS 用 traffic light 原生装饰，不强制；只对 Windows / Linux 兜底。
+            #[cfg(any(target_os = "windows", target_os = "linux"))]
+            if let Some(main_window) = app.get_webview_window("main") {
+                let _ = main_window.set_decorations(false);
+            }
 
             // ---- 注册 updater 插件（需在 setup 中注册以访问 app handle）----
             #[cfg(desktop)]
@@ -1252,6 +1282,16 @@ pub fn run() {
 
             info!("[boot] resource monitor DISABLED (macOS perf test)");
 
+            // ---- Usage stats background jobs ----
+            {
+                let svc = app.state::<Arc<UsageStatsService>>().inner().clone();
+                svc.start_background_tasks();
+            }
+            info!(
+                "[boot] +{}ms: usage stats background jobs started",
+                boot_t0.elapsed().as_millis()
+            );
+
             // ---- 系统托盘 ----
             let show = MenuItem::with_id(app, "show", "Show Window", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -1346,9 +1386,20 @@ pub fn run() {
             match event {
                 WindowEvent::CloseRequested { api, .. } => {
                     if window.label() == "main" {
-                        // 主窗口关闭 → 隐藏到托盘（不退出）
-                        let _ = window.hide();
-                        api.prevent_close();
+                        if should_close_main_window_to_tray(window) {
+                            // 主窗口关闭 → 隐藏到托盘（不退出）
+                            match window.hide() {
+                                Ok(()) => api.prevent_close(),
+                                Err(e) => {
+                                    error!("failed to hide main window to tray: {e}");
+                                    api.prevent_close();
+                                    window.app_handle().exit(0);
+                                }
+                            }
+                        } else {
+                            api.prevent_close();
+                            window.app_handle().exit(0);
+                        }
                     } else if window.label().starts_with("popup-") {
                         // 弹出窗口关闭 → 通知主窗口回收标签（不阻止关闭）
                         let label = window.label().to_string();
@@ -1386,6 +1437,9 @@ pub fn run() {
             list_cli_tools,
             get_terminal_output,
             get_terminal_replay_snapshot,
+            record_terminal_input,
+            query_usage_stats,
+            refresh_usage_stats,
             // 窗口命令
             close_window,
             minimize_window,
@@ -1669,6 +1723,9 @@ pub fn run() {
 
                 shared_mcp_cleanup.stop_health_check();
                 shared_mcp_cleanup.stop_all();
+                if let Err(e) = usage_stats_cleanup.flush_pending() {
+                    error!("[cleanup] Failed to flush usage stats: {}", e);
+                }
                 terminal_cleanup.cleanup_all();
                 history_cleanup.stop_all_watching();
                 workspace_cleanup.stop_watcher();

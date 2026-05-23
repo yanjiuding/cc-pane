@@ -11,6 +11,7 @@ import HomeQuickActions from "./HomeQuickActions";
 import HomeRecentProjects from "./HomeRecentProjects";
 import HomeActiveSessions from "./HomeActiveSessions";
 import HomeEnvironment from "./HomeEnvironment";
+import HomeUsageStats from "./HomeUsageStats";
 import HomeShortcuts from "./HomeShortcuts";
 import type { OpenTerminalOptions } from "@/types";
 
@@ -61,31 +62,42 @@ export default function HomeDashboard({ onOpenTerminal }: HomeDashboardProps) {
   }, [setAppViewMode]);
 
   return (
-    <div className="h-full overflow-y-auto relative">
+    <div
+      className="h-full overflow-y-auto relative"
+      style={{ background: "var(--app-bg-deep)" }}
+    >
       {/* 背景装饰 — 暗色模式渐变光球 */}
       <div
         className="pointer-events-none absolute inset-0 overflow-hidden opacity-30 dark:opacity-20"
         aria-hidden="true"
       >
         <div
-          className="absolute -top-32 -right-32 w-96 h-96 rounded-full blur-[120px]"
-          style={{ background: "var(--app-orb-1, transparent)" }}
+          className="absolute top-[-10%] left-[20%] w-[500px] h-[500px] rounded-full"
+          style={{
+            background: "var(--app-orb-1, transparent)",
+            filter: "blur(var(--app-orb-blur-lg, 120px))",
+          }}
         />
         <div
-          className="absolute top-1/3 -left-24 w-72 h-72 rounded-full blur-[100px]"
-          style={{ background: "var(--app-orb-2, transparent)" }}
+          className="absolute top-[30%] right-[-10%] w-[400px] h-[400px] rounded-full"
+          style={{
+            background: "var(--app-orb-2, transparent)",
+            filter: "blur(var(--app-orb-blur-md, 100px))",
+          }}
         />
       </div>
 
-      <div className="relative max-w-4xl mx-auto px-6 pt-8 pb-12 space-y-6">
+      <div className="relative w-full max-w-[1320px] mx-auto px-6 2xl:px-8 pt-8 pb-12 space-y-6">
         <HomeHeader version={version} />
         <HomeQuickActions onNewTerminal={handleNewTerminal} />
         <HomeRecentProjects records={records} onOpenTerminal={onOpenTerminal} />
 
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.15fr)_minmax(380px,0.85fr)] gap-4">
           <HomeActiveSessions />
           <HomeEnvironment />
         </div>
+
+        <HomeUsageStats />
 
         <HomeShortcuts />
 
@@ -94,8 +106,8 @@ export default function HomeDashboard({ onOpenTerminal }: HomeDashboardProps) {
           <button
             className="inline-flex items-center gap-2 px-8 py-3 rounded-xl text-sm font-semibold cursor-pointer transition-all duration-200 hover:-translate-y-[1px] hover:shadow-lg active:translate-y-0"
             style={{
-              background: "var(--app-accent)",
-              color: "white",
+              background: "linear-gradient(135deg, var(--app-accent), color-mix(in srgb, var(--app-accent) 60%, black))",
+              color: "var(--primary-foreground)",
               boxShadow: "0 4px 14px color-mix(in srgb, var(--app-accent) 35%, transparent)",
             }}
             onClick={() => setAppViewMode("panes")}

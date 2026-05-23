@@ -11,11 +11,18 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { CreateSessionRequest, ResizeRequest, EnvironmentInfo } from "@/types";
 import type { EnvironmentInfoRaw } from "@/types/settings";
+import { usageStatsService } from "./usageStatsService";
 import { devDebugLog } from "@/utils/devLogger";
 
 export interface TerminalReplaySnapshot {
   data: string;
   bufferMode: "normal" | "alternate";
+}
+
+export type TerminalWriteSource = "user-keyboard" | "mcp" | "system";
+
+export interface TerminalWriteOptions {
+  source?: TerminalWriteSource;
 }
 
 /** 将 Rust 返回的 cliTools 数组规范化为含向后兼容字段的 EnvironmentInfo */
@@ -40,6 +47,18 @@ const TERMINAL_SERVICE_DEBUG = import.meta.env.DEV;
 function debugTerminalService(event: string, payload: Record<string, unknown>): void {
   if (!TERMINAL_SERVICE_DEBUG) return;
   devDebugLog("terminal-service-debug", event, payload);
+}
+
+function countTerminalInputChars(data: string): number {
+  const withoutAnsi = data.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+  let count = 0;
+  for (const char of withoutAnsi) {
+    const code = char.codePointAt(0) ?? 0;
+    if (char === "\t" || (code >= 0x20 && code !== 0x7f)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 // ── 模块级状态：单例监听器 ──────────────────────────────────
@@ -157,8 +176,18 @@ export const terminalService = {
   },
 
   /** 向终端写入数据 */
-  async write(sessionId: string, data: string): Promise<void> {
-    return invoke("write_terminal", { sessionId, data });
+  async write(
+    sessionId: string,
+    data: string,
+    options: TerminalWriteOptions = { source: "user-keyboard" },
+  ): Promise<void> {
+    await invoke("write_terminal", { sessionId, data });
+    if (options.source === "user-keyboard") {
+      const charCount = countTerminalInputChars(data);
+      void usageStatsService.recordInputChars(sessionId, charCount).catch((error) => {
+        console.warn("Failed to record terminal input chars:", error);
+      });
+    }
   },
 
   /** 调整终端大小 */

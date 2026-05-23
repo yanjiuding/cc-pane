@@ -9,6 +9,7 @@
 //! - 项目路径白名单校验
 //! - 请求频率限制
 
+use crate::models::task_binding::{TaskBinding, TaskBindingStatus};
 use crate::models::todo::{
     CreateTodoRequest, TodoPriority, TodoQuery, TodoScope, TodoStatus, UpdateTodoRequest,
 };
@@ -37,6 +38,7 @@ use cc_panes_core::models::shared_mcp::{
     BridgeMode, SharedMcpConfig, SharedMcpServerConfig, SharedMcpServerStatus,
 };
 use cc_panes_core::services::mcp_config_service::McpServerConfig;
+use cc_panes_core::services::terminal_service::SessionStatus;
 use rmcp::{
     handler::server::router::tool::ToolRouter,
     handler::server::wrapper::Parameters,
@@ -430,7 +432,7 @@ impl OrchestratorService {
                     use cc_panes_core::services::terminal_service::SessionStatus;
 
                     // 第一步：写回 TerminalSession.status + emit TERMINAL_STATUS
-                    term_svc.apply_hook_status(&transition.pty_session_id, transition.to.clone());
+                    term_svc.apply_hook_status(&transition.pty_session_id, transition.to);
 
                     // 第二步：按状态决定通知 / 启动 timer
                     match &transition.to {
@@ -1128,6 +1130,17 @@ struct McpUpdateTaskBindingParams {
     #[serde(default)]
     #[schemars(schema_with = "notification_metadata_schema")]
     metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct McpReportToLeaderParams {
+    /// worker TaskBinding ID
+    worker_id: String,
+    /// 可覆盖上报状态；默认使用 worker 当前状态
+    status: Option<String>,
+    /// 可覆盖上报摘要；默认使用 worker.completion_summary
+    summary: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -3545,6 +3558,14 @@ impl McpToolHandler {
             TaskBindingRole, TaskBindingStatus, UpdateTaskBindingRequest,
         };
         info!(id = %params.id, "mcp::update_task_binding");
+        let task_id = params.id.clone();
+        let old_status = match self.state.task_binding_service.get(&task_id) {
+            Ok(binding) => binding.map(|binding| binding.status),
+            Err(e) => {
+                warn!(id = %task_id, err = %e, "mcp::update_task_binding failed to load previous status");
+                None
+            }
+        };
 
         let req = UpdateTaskBindingRequest {
             title: params.title,
@@ -3567,11 +3588,61 @@ impl McpToolHandler {
             metadata: params.metadata,
         };
 
-        match self.state.task_binding_service.update(&params.id, req) {
-            Ok(binding) => serde_json::to_string(&binding)
-                .unwrap_or_else(|e| format!("错误: 序列化失败: {}", e)),
+        match self.state.task_binding_service.update(&task_id, req) {
+            Ok(binding) => {
+                notify_leader_on_terminal_status(self.state.clone(), old_status, binding.clone());
+                serde_json::to_string(&binding)
+                    .unwrap_or_else(|e| format!("错误: 序列化失败: {}", e))
+            }
             Err(e) => format!("错误: 更新 TaskBinding 失败: {}", e),
         }
+    }
+
+    /// Manually report a worker's terminal status to its leader via PTY. Bypasses automatic dedup. Use when the auto-notify did not fire (e.g. worker.status was already completed before this call).
+    #[tool]
+    async fn report_to_leader(
+        &self,
+        Parameters(params): Parameters<McpReportToLeaderParams>,
+    ) -> String {
+        info!(worker_id = %params.worker_id, "mcp::report_to_leader");
+        let mut worker = match self.state.task_binding_service.get(&params.worker_id) {
+            Ok(Some(binding)) => binding,
+            Ok(None) => {
+                return serde_json::json!({
+                    "sent": false,
+                    "skipReason": "worker not found",
+                })
+                .to_string()
+            }
+            Err(e) => {
+                warn!(worker_id = %params.worker_id, err = %e, "mcp::report_to_leader failed to load worker");
+                return serde_json::json!({
+                    "sent": false,
+                    "skipReason": format!("failed to load worker: {}", e),
+                })
+                .to_string();
+            }
+        };
+
+        if let Some(status) = params.status {
+            match status.parse::<TaskBindingStatus>() {
+                Ok(status) => worker.status = status,
+                Err(e) => {
+                    return serde_json::json!({
+                        "sent": false,
+                        "skipReason": format!("invalid status: {}", e),
+                    })
+                    .to_string()
+                }
+            }
+        }
+
+        if let Some(summary) = params.summary {
+            worker.completion_summary = Some(summary);
+        }
+
+        serde_json::to_string(&send_worker_report_to_leader(self.state.clone(), worker).await)
+            .unwrap_or_else(|e| format!("错误: 序列化失败: {}", e))
     }
 
     /// 查询编排任务列表（按状态、项目路径过滤）
@@ -5443,6 +5514,217 @@ async fn submit_text_to_session(
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LeaderReportResult {
+    sent: bool,
+    skip_reason: Option<String>,
+}
+
+impl LeaderReportResult {
+    fn sent() -> Self {
+        Self {
+            sent: true,
+            skip_reason: None,
+        }
+    }
+
+    fn skipped(reason: impl Into<String>) -> Self {
+        Self {
+            sent: false,
+            skip_reason: Some(reason.into()),
+        }
+    }
+}
+
+fn should_notify_terminal_transition(
+    old: Option<TaskBindingStatus>,
+    new: TaskBindingStatus,
+) -> bool {
+    fn is_terminal(status: &TaskBindingStatus) -> bool {
+        matches!(
+            status,
+            TaskBindingStatus::Completed | TaskBindingStatus::Failed
+        )
+    }
+
+    is_terminal(&new) && !old.as_ref().is_some_and(is_terminal)
+}
+
+fn sanitize_pty_line(input: &str, max_len: usize) -> String {
+    let normalized = input.replace(['\r', '\n'], " | ");
+    normalized
+        .chars()
+        .filter(|ch| *ch == '\t' || *ch >= ' ')
+        .take(max_len)
+        .collect()
+}
+
+fn notify_leader_on_terminal_status(
+    state: AppState,
+    old_status: Option<TaskBindingStatus>,
+    worker: TaskBinding,
+) {
+    if !should_notify_terminal_transition(old_status.clone(), worker.status.clone()) {
+        debug!(
+            worker_id = %worker.id,
+            old_status = ?old_status,
+            new_status = %worker.status,
+            "worker report auto-notify skipped: status transition is not terminal"
+        );
+        return;
+    }
+
+    tokio::spawn(async move {
+        let _ = send_worker_report_to_leader(state, worker).await;
+    });
+}
+
+async fn send_worker_report_to_leader(state: AppState, worker: TaskBinding) -> LeaderReportResult {
+    let Some(parent_id) = worker.parent_id.clone() else {
+        debug!(
+            worker_id = %worker.id,
+            "worker report skipped: worker has no parent binding"
+        );
+        return LeaderReportResult::skipped("worker has no parent");
+    };
+
+    let leader = match state.task_binding_service.get(&parent_id) {
+        Ok(Some(leader)) => leader,
+        Ok(None) => {
+            warn!(
+                worker_id = %worker.id,
+                leader_id = %parent_id,
+                "worker report skipped: leader binding not found"
+            );
+            return LeaderReportResult::skipped("leader not found");
+        }
+        Err(e) => {
+            warn!(
+                worker_id = %worker.id,
+                leader_id = %parent_id,
+                err = %e,
+                "worker report skipped: failed to load leader binding"
+            );
+            return LeaderReportResult::skipped(format!("failed to load leader: {}", e));
+        }
+    };
+
+    let Some(leader_session_id) = leader.session_id.clone() else {
+        warn!(
+            worker_id = %worker.id,
+            leader_id = %leader.id,
+            "worker report skipped: leader has no session id"
+        );
+        return LeaderReportResult::skipped("leader session missing");
+    };
+
+    let leader_status = match state.terminal_service.get_all_status() {
+        Ok(statuses) => statuses
+            .into_iter()
+            .find(|status| status.session_id == leader_session_id)
+            .map(|status| status.status),
+        Err(e) => {
+            warn!(
+                worker_id = %worker.id,
+                leader_id = %leader.id,
+                session_id = %leader_session_id,
+                err = %e,
+                "worker report skipped: failed to read leader session status"
+            );
+            return LeaderReportResult::skipped(format!("failed to read leader status: {}", e));
+        }
+    };
+
+    let Some(leader_status) = leader_status else {
+        warn!(
+            worker_id = %worker.id,
+            leader_id = %leader.id,
+            session_id = %leader_session_id,
+            "worker report skipped: leader session not found"
+        );
+        return LeaderReportResult::skipped("leader session not found");
+    };
+
+    match leader_status {
+        SessionStatus::Idle | SessionStatus::WaitingInput => {}
+        status @ (SessionStatus::Thinking
+        | SessionStatus::ToolRunning
+        | SessionStatus::Compacting
+        | SessionStatus::Active) => {
+            debug_assert!(status.is_busy());
+            debug!(
+                worker_id = %worker.id,
+                leader_id = %leader.id,
+                session_id = %leader_session_id,
+                status = ?status,
+                "worker report skipped: leader is busy"
+            );
+            return LeaderReportResult::skipped("leader busy");
+        }
+        SessionStatus::Initializing => {
+            warn!(
+                worker_id = %worker.id,
+                leader_id = %leader.id,
+                session_id = %leader_session_id,
+                "worker report skipped: leader session is initializing"
+            );
+            return LeaderReportResult::skipped("leader session initializing");
+        }
+        SessionStatus::Error => {
+            warn!(
+                worker_id = %worker.id,
+                leader_id = %leader.id,
+                session_id = %leader_session_id,
+                "worker report skipped: leader session is in error state"
+            );
+            return LeaderReportResult::skipped("leader session error");
+        }
+        SessionStatus::Exited => {
+            warn!(
+                worker_id = %worker.id,
+                leader_id = %leader.id,
+                session_id = %leader_session_id,
+                "worker report skipped: leader session exited"
+            );
+            return LeaderReportResult::skipped("leader session exited");
+        }
+    }
+
+    let summary = worker
+        .completion_summary
+        .as_deref()
+        .filter(|summary| !summary.trim().is_empty())
+        .map(|summary| sanitize_pty_line(summary, 500))
+        .unwrap_or_else(|| "(no summary)".to_string());
+    let line = format!(
+        "[worker-report] id={} status={} summary={}",
+        worker.id, worker.status, summary
+    );
+
+    match submit_text_to_session(&state.terminal_service, &leader_session_id, &line).await {
+        Ok(()) => {
+            info!(
+                worker_id = %worker.id,
+                leader_id = %leader.id,
+                session_id = %leader_session_id,
+                "worker report sent to leader"
+            );
+            LeaderReportResult::sent()
+        }
+        Err(e) => {
+            warn!(
+                worker_id = %worker.id,
+                leader_id = %leader.id,
+                session_id = %leader_session_id,
+                err = %e,
+                "worker report failed to submit to leader"
+            );
+            LeaderReportResult::skipped(format!("submit failed: {}", e))
+        }
+    }
+}
+
 /// 剥离 Windows `canonicalize()` 产生的 `\\?\` UNC 前缀
 #[cfg(windows)]
 fn strip_unc_prefix(path: String) -> String {
@@ -5490,6 +5772,64 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("authorization", "abc123".parse().unwrap());
         assert!(!verify_token(&headers, "abc123"));
+    }
+
+    #[test]
+    fn test_should_notify_terminal_transition() {
+        let cases = [
+            (
+                Some(TaskBindingStatus::Running),
+                TaskBindingStatus::Completed,
+                true,
+            ),
+            (
+                Some(TaskBindingStatus::Completed),
+                TaskBindingStatus::Completed,
+                false,
+            ),
+            (
+                Some(TaskBindingStatus::Failed),
+                TaskBindingStatus::Failed,
+                false,
+            ),
+            (None, TaskBindingStatus::Completed, true),
+            (
+                Some(TaskBindingStatus::Pending),
+                TaskBindingStatus::Failed,
+                true,
+            ),
+            (
+                Some(TaskBindingStatus::Running),
+                TaskBindingStatus::Running,
+                false,
+            ),
+        ];
+
+        for (old, new, expected) in cases {
+            assert_eq!(
+                should_notify_terminal_transition(old.clone(), new.clone()),
+                expected,
+                "old={old:?} new={new:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_sanitize_pty_line_replaces_line_breaks_and_controls() {
+        let sanitized = sanitize_pty_line("done\nline\rmore\x1b[31m", 500);
+
+        assert!(!sanitized.contains('\r'));
+        assert!(!sanitized.contains('\n'));
+        assert!(sanitized.chars().all(|ch| ch == '\t' || ch >= ' '));
+        assert_eq!(sanitized, "done | line | more[31m");
+    }
+
+    #[test]
+    fn test_sanitize_pty_line_truncates_to_max_chars() {
+        let input = "a".repeat(600);
+        let sanitized = sanitize_pty_line(&input, 500);
+
+        assert_eq!(sanitized.chars().count(), 500);
     }
 
     #[test]

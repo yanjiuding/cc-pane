@@ -62,11 +62,7 @@ export default function HomeRecentProjects({ records, onOpenTerminal }: HomeRece
           </h2>
         </div>
         <div
-          className="relative flex flex-col items-center justify-center py-10 rounded-xl overflow-hidden"
-          style={{
-            background: "var(--app-glass-bg)",
-            border: "1px solid var(--app-border)",
-          }}
+          className="relative flex flex-col items-center justify-center py-10 rounded-2xl overflow-hidden border border-[var(--app-home-border)] bg-[var(--app-home-surface)]"
         >
           {/* 点阵纹理装饰 */}
           <div
@@ -90,7 +86,7 @@ export default function HomeRecentProjects({ records, onOpenTerminal }: HomeRece
             className="relative px-5 py-2 rounded-lg text-sm font-medium cursor-pointer transition-all duration-200 hover:opacity-90 hover:-translate-y-[0.5px]"
             style={{
               background: "var(--app-accent)",
-              color: "white",
+              color: "var(--primary-foreground)",
               boxShadow: "0 2px 8px color-mix(in srgb, var(--app-accent) 25%, transparent)",
             }}
             onClick={() => {
@@ -126,24 +122,20 @@ export default function HomeRecentProjects({ records, onOpenTerminal }: HomeRece
           <ChevronRight className="w-3 h-3" />
         </button>
       </div>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-2">
         {uniqueRecords.map((record) => (
           <div
             key={record.id}
-            className="home-project-card flex items-center gap-3 p-3 rounded-xl transition-all duration-200 group hover:-translate-y-[0.5px] hover:shadow-md"
-            style={{
-              background: "var(--app-glass-bg)",
-              border: "1px solid var(--app-border)",
-            }}
+            className="home-project-card flex items-center gap-3.5 p-3 rounded-xl border border-[var(--app-home-border)] bg-[var(--app-home-surface)] transition-all duration-200 group hover:-translate-y-[0.5px] hover:bg-[var(--app-home-surface-hover)] hover:shadow-md hover:border-[var(--app-home-border-hover)]"
           >
             <div
-              className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0"
+              className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0"
               style={{
                 background: "color-mix(in srgb, var(--app-accent) 10%, transparent)",
               }}
             >
               <FolderOpen
-                className="w-4 h-4"
+                className="w-[18px] h-[18px]"
                 style={{ color: "var(--app-accent)" }}
               />
             </div>
@@ -169,8 +161,7 @@ export default function HomeRecentProjects({ records, onOpenTerminal }: HomeRece
             </div>
             <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all duration-200 translate-x-1 group-hover:translate-x-0 shrink-0">
               <button
-                className="p-1.5 rounded-md cursor-pointer transition-colors hover:bg-[var(--app-hover)]"
-                style={{ color: "var(--app-text-secondary)" }}
+                className="p-1.5 rounded-md cursor-pointer transition-colors text-[var(--app-text-secondary)] hover:bg-[var(--app-accent)] hover:text-[var(--primary-foreground)]"
                 title={t("open")}
                 onClick={() =>
                   onOpenTerminal({
@@ -186,8 +177,7 @@ export default function HomeRecentProjects({ records, onOpenTerminal }: HomeRece
               </button>
               {record.resumeSessionId && (
                 <button
-                  className="p-1.5 rounded-md cursor-pointer transition-colors hover:bg-[var(--app-hover)]"
-                  style={{ color: "var(--app-accent)" }}
+                  className="p-1.5 rounded-md cursor-pointer transition-colors text-[var(--app-accent)] hover:bg-[var(--app-accent)] hover:text-[var(--primary-foreground)]"
                   title={t("resume")}
                   onClick={() =>
                     onOpenTerminal(buildLaunchRecordTerminalOptions(record, workspaces, machines))
