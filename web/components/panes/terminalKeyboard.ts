@@ -1,7 +1,9 @@
 type TerminalKeyboardEvent = Pick<
   KeyboardEvent,
-  "type" | "key" | "ctrlKey" | "metaKey" | "altKey"
+  "type" | "key" | "ctrlKey" | "metaKey" | "shiftKey" | "altKey"
 >;
+
+export const TERMINAL_ALT_ENTER_SEQUENCE = "\x1b\r";
 
 export function isTerminalPasteShortcut(
   event: TerminalKeyboardEvent,
@@ -16,4 +18,15 @@ export function isTerminalPasteShortcut(
   }
 
   return event.ctrlKey && !event.metaKey;
+}
+
+export function isTerminalShiftEnterShortcut(event: TerminalKeyboardEvent): boolean {
+  return (
+    event.type === "keydown" &&
+    event.key === "Enter" &&
+    event.shiftKey === true &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    !event.altKey
+  );
 }

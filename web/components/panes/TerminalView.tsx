@@ -35,7 +35,11 @@ import { formatTerminalFilePaths, resolveTerminalPastePayload } from "./terminal
 import { isDropInsideTerminalHost } from "./terminalDrop";
 import { attachTerminalInputTrace } from "./terminalInputTrace";
 import { attachTerminalImeGuard, isLinuxWebKitImeEnvironment } from "./terminalImeGuard";
-import { isTerminalPasteShortcut } from "./terminalKeyboard";
+import {
+  TERMINAL_ALT_ENTER_SEQUENCE,
+  isTerminalPasteShortcut,
+  isTerminalShiftEnterShortcut,
+} from "./terminalKeyboard";
 import { createTerminalWriteFlowControl } from "./terminalWriteFlowControl";
 import {
   createTerminalLayoutScheduler,
@@ -922,6 +926,13 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
             e.preventDefault();
             e.stopPropagation();
             pasteTerminalPayload(null);
+            return false;
+          }
+
+          if (isTerminalShiftEnterShortcut(e)) {
+            e.preventDefault();
+            e.stopPropagation();
+            term.input(TERMINAL_ALT_ENTER_SEQUENCE);
             return false;
           }
 

@@ -741,6 +741,17 @@ fn write_via_writer_tx(writer_tx: &mpsc::Sender<WriterCommand>, data: Vec<u8>) -
     }
 }
 
+fn project_cli_hooks_launch_path<'a>(
+    cli_tool: CliTool,
+    project_path: &'a str,
+    workspace_path: Option<&'a str>,
+) -> &'a str {
+    match cli_tool {
+        CliTool::Codex => project_path,
+        _ => workspace_path.unwrap_or(project_path),
+    }
+}
+
 /// ConPTY style-only 空闲帧：\x1b[39m\x1b[49m\x1b[59m\x1b[0m\x1b[?25l  (25 字节)
 #[cfg_attr(not(windows), allow(dead_code))]
 const CONPTY_STYLE_ONLY: &[u8] = b"\x1b[39m\x1b[49m\x1b[59m\x1b[0m\x1b[?25l";
@@ -1238,7 +1249,8 @@ impl TerminalService {
             strip_wsl_proxy_env_vars(&mut env_vars);
 
             if cli_tool_id != "none" {
-                let hooks_project_path = workspace_path.unwrap_or(project_path);
+                let hooks_project_path =
+                    project_cli_hooks_launch_path(cli_tool, project_path, workspace_path);
                 if sync_project_hooks {
                     if let Err(error) = self
                         .project_cli_hooks_service
@@ -1377,7 +1389,8 @@ impl TerminalService {
                     .get(cli_tool_id)
                     .ok_or_else(|| anyhow!("Unknown CLI tool: {}", cli_tool_id))?;
 
-                let hooks_project_path = workspace_path.unwrap_or(project_path);
+                let hooks_project_path =
+                    project_cli_hooks_launch_path(cli_tool, project_path, workspace_path);
                 if sync_project_hooks {
                     if let Err(error) = self
                         .project_cli_hooks_service
@@ -2918,6 +2931,26 @@ mod tests {
     fn test_detect_shells_not_empty() {
         let shells = detect_shells();
         assert!(!shells.is_empty(), "should detect at least one shell");
+    }
+
+    #[test]
+    fn test_project_cli_hooks_launch_path_uses_codex_project_root() {
+        assert_eq!(
+            project_cli_hooks_launch_path(
+                CliTool::Codex,
+                "/workspace/apps/api",
+                Some("/workspace")
+            ),
+            "/workspace/apps/api"
+        );
+        assert_eq!(
+            project_cli_hooks_launch_path(
+                CliTool::Claude,
+                "/workspace/apps/api",
+                Some("/workspace")
+            ),
+            "/workspace"
+        );
     }
 
     #[test]

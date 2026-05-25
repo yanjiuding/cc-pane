@@ -142,6 +142,32 @@ impl CodexAdapter {
         ));
     }
 
+    fn normalize_path_for_compare(path: &str) -> String {
+        let normalized = path.replace('\\', "/");
+        let trimmed = normalized.trim_end_matches('/');
+        if trimmed.is_empty() {
+            normalized
+        } else {
+            trimmed.to_string()
+        }
+    }
+
+    fn push_workspace_root_args(args: &mut Vec<String>, ctx: &CliAdapterContext) {
+        let Some(workspace_path) = ctx.workspace_path.as_deref() else {
+            return;
+        };
+        if Self::normalize_path_for_compare(workspace_path)
+            == Self::normalize_path_for_compare(&ctx.project_path)
+        {
+            return;
+        }
+
+        args.push("-C".to_string());
+        args.push(ctx.project_path.clone());
+        args.push("--add-dir".to_string());
+        args.push(workspace_path.to_string());
+    }
+
     fn push_mcp_overrides(&self, args: &mut Vec<String>, ctx: &CliAdapterContext) {
         if let (Some(port), Some(token)) = (ctx.orchestrator_port, ctx.orchestrator_token.as_ref())
         {
@@ -503,6 +529,10 @@ impl CliToolAdapter for CodexAdapter {
 
         let mut args = Vec::new();
 
+        // CC-Panes 在工作空间模式下会把 PTY cwd 设为 workspace_path。
+        // Codex 需要显式 -C 才会把右键点击的项目作为主工作根。
+        Self::push_workspace_root_args(&mut args, ctx);
+
         // MCP 注入使用 Codex 的 per-launch -c override，避免写入用户全局 config.toml。
         if ctx.skip_mcp {
             info!(
@@ -686,5 +716,47 @@ mod tests {
                 "mcp_servers.chrome-devtools-windows.enabled=false",
             ]
         );
+    }
+
+    fn test_context(project_path: &str, workspace_path: Option<&str>) -> CliAdapterContext {
+        CliAdapterContext {
+            session_id: "session-1".to_string(),
+            project_path: project_path.to_string(),
+            workspace_path: workspace_path.map(str::to_string),
+            provider: None,
+            resume_id: None,
+            skip_mcp: true,
+            append_system_prompt: None,
+            initial_prompt: None,
+            orchestrator_port: None,
+            orchestrator_token: None,
+            data_dir: PathBuf::from("/tmp/cc-panes"),
+            shared_mcp_urls: HashMap::new(),
+            allowed_mcp_server_ids: Vec::new(),
+            disable_unlisted_mcp_servers: false,
+        }
+    }
+
+    #[test]
+    fn workspace_launch_sets_codex_project_as_primary_root() {
+        let ctx = test_context("/workspace/apps/api", Some("/workspace"));
+        let mut args = Vec::new();
+
+        CodexAdapter::push_workspace_root_args(&mut args, &ctx);
+
+        assert_eq!(
+            args,
+            vec!["-C", "/workspace/apps/api", "--add-dir", "/workspace",]
+        );
+    }
+
+    #[test]
+    fn root_project_launch_does_not_add_duplicate_codex_roots() {
+        let ctx = test_context("/workspace/project", Some("/workspace/project/"));
+        let mut args = Vec::new();
+
+        CodexAdapter::push_workspace_root_args(&mut args, &ctx);
+
+        assert!(args.is_empty());
     }
 }
