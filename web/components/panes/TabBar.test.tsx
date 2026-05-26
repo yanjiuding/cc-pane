@@ -83,7 +83,7 @@ describe("TabBar", () => {
 
     await user.click(await screen.findByRole("menuitem", { name: "重命名" }));
 
-    const input = await screen.findByDisplayValue("Alpha");
+    const input = screen.getByDisplayValue("Alpha");
     await user.clear(input);
     await user.type(input, "Beta{enter}");
 

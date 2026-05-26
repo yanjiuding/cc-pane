@@ -149,6 +149,7 @@ function SortableTab({
   registerTabNode: (tabId: string, node: HTMLDivElement | null) => void;
   t: TFunction<"panes">;
 }) {
+  const suppressCloseAutoFocusRef = useRef(false);
   const {
     attributes,
     listeners,
@@ -178,6 +179,11 @@ function SortableTab({
     transition,
     opacity: isDragging ? 0.4 : undefined,
   };
+
+  const startRenameFromContextMenu = useCallback(() => {
+    suppressCloseAutoFocusRef.current = true;
+    startRename(tab);
+  }, [startRename, tab]);
 
   return (
     <ContextMenu>
@@ -278,8 +284,15 @@ function SortableTab({
           </div>
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent className="w-48">
-        <ContextMenuItem onClick={() => startRename(tab)}>
+      <ContextMenuContent
+        className="w-48"
+        onCloseAutoFocus={(event) => {
+          if (!suppressCloseAutoFocusRef.current) return;
+          event.preventDefault();
+          suppressCloseAutoFocusRef.current = false;
+        }}
+      >
+        <ContextMenuItem onSelect={startRenameFromContextMenu}>
           <Pencil /> {t("renameTab")}
         </ContextMenuItem>
         <ContextMenuItem inset onClick={() => onTogglePin(tab.id)}>
