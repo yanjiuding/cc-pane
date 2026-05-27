@@ -6,9 +6,10 @@ import SplitView from "./SplitView";
 
 interface SplitContainerProps {
   pane: SplitPane;
+  isVisible?: boolean;
 }
 
-export default function SplitContainer({ pane }: SplitContainerProps) {
+export default function SplitContainer({ pane, isVisible = true }: SplitContainerProps) {
   const resizePanes = usePanesStore((s) => s.resizePanes);
 
   const handleDragEnd = useCallback(
@@ -43,7 +44,7 @@ export default function SplitContainer({ pane }: SplitContainerProps) {
         keys={childKeys}
       >
         {pane.children.map((child) => (
-          <PaneContainer key={child.id} pane={child} />
+          <PaneContainer key={child.id} pane={child} isVisible={isVisible} />
         ))}
       </SplitView>
     </div>

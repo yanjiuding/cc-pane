@@ -214,7 +214,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     const isSshRef = useRef(!!props.ssh);
     const isUnmountedRef = useRef(false);
     // Delay PTY creation for inactive restored tabs until they become active.
-    const deferredRestoreRef = useRef(false);
+    const deferredSessionStartRef = useRef(false);
 
     const onSessionCreatedRef = useRef(props.onSessionCreated);
     const onSessionExitedRef = useRef(props.onSessionExited);
@@ -1068,16 +1068,15 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
                 console.warn("[TerminalView] Failed to load restored output:", err);
               }
 
-              // Inactive restored tabs only replay saved output; PTY creation waits until activation.
-              // The live session is created later when the tab becomes active again.
-              if (!props.isActive) {
-                debugLog("session.restore.defer", {
-                  savedSessionId: props.savedSessionId,
-                });
-                console.info(`[TerminalView] Deferred restore (not active): ${props.projectPath}`);
-                deferredRestoreRef.current = true;
-                return;
-              }
+            }
+
+            if (!props.isActive && !props.sessionId) {
+              debugLog("session.create.defer-inactive", {
+                restoring: props.restoring ?? false,
+                savedSessionId: props.savedSessionId ?? null,
+              });
+              deferredSessionStartRef.current = true;
+              return;
             }
 
             let sessionId: string;
@@ -1289,10 +1288,10 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       };
     }, [scheduleTextureAtlasRefresh]);
 
-    // Refit on activation and create deferred PTYs for restored tabs.
+    // Refit on activation and create deferred PTYs.
     useEffect(() => {
       debugLog("active.effect", {
-        deferredRestore: deferredRestoreRef.current,
+        deferredSessionStart: deferredSessionStartRef.current,
         trackedBuffer: trackedBufferTypeRef.current,
       });
 
@@ -1308,14 +1307,14 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         });
       };
 
-      // Create the deferred PTY once the restored tab becomes active.
-      if (props.isActive && deferredRestoreRef.current) {
+      // Create the deferred PTY once the terminal becomes active.
+      if (props.isActive && deferredSessionStartRef.current) {
         if (!props.projectPath) return;
 
         scheduleRefit((term) => {
           if (isUnmountedRef.current) return;
 
-          deferredRestoreRef.current = false;
+          deferredSessionStartRef.current = false;
 
           void (async () => {
             try {
@@ -1325,10 +1324,10 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
               if (isUnmountedRef.current) return;
 
-              debugLog("session.deferred-restore.begin", {
+              debugLog("session.deferred-start.begin", {
                 resumeId: effectiveResumeId ?? null,
               });
-              console.info(`[TerminalView] Deferred restore: creating PTY for ${props.projectPath}`);
+              console.info(`[TerminalView] Deferred start: creating PTY for ${props.projectPath}`);
               const backfillStartTime = new Date().toISOString();
               const sessionId = await terminalService.createSession({
                 launchId: props.projectId,
@@ -1356,7 +1355,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
               }
 
               currentSessionIdRef.current = sessionId;
-              debugLog("session.deferred-restore.end", {
+              debugLog("session.deferred-start.end", {
                 createdSessionId: sessionId,
               });
               onSessionCreatedRef.current(sessionId);

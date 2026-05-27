@@ -5,13 +5,14 @@ import SplitContainer from "./SplitContainer";
 
 interface PaneContainerProps {
   pane: PaneNode;
+  isVisible?: boolean;
 }
 
-const PaneContainer = memo(function PaneContainer({ pane }: PaneContainerProps) {
+const PaneContainer = memo(function PaneContainer({ pane, isVisible = true }: PaneContainerProps) {
   if (pane.type === "panel") {
-    return <Panel pane={pane} />;
+    return <Panel pane={pane} isVisible={isVisible} />;
   }
-  return <SplitContainer pane={pane} />;
+  return <SplitContainer pane={pane} isVisible={isVisible} />;
 });
 
 export default PaneContainer;

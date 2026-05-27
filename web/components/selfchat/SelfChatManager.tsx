@@ -9,7 +9,11 @@ import { selfChatService, terminalService } from "@/services";
 
 const LOG_PREFIX = "[SelfChat]";
 
-export default function SelfChatManager() {
+interface SelfChatManagerProps {
+  isActive?: boolean;
+}
+
+export default function SelfChatManager({ isActive = true }: SelfChatManagerProps) {
   const { t } = useTranslation("common");
 
   const defaultCliTool = useSettingsStore((s) => s.settings?.general.defaultCliTool ?? "claude");
@@ -150,7 +154,7 @@ export default function SelfChatManager() {
             sessionId={activeSession.ptySessionId}
             projectId={activeSession.id}
             projectPath={activeSession.appCwd}
-            isActive={true}
+            isActive={isActive}
             launchClaude={true}
             cliTool={defaultCliTool}
             providerId={activeProviderId}

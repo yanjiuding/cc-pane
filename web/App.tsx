@@ -41,6 +41,7 @@ import {
   useResourceStatsStore,
   useEnvironmentStore,
   useVoiceInputStore,
+  useSelfChatStore,
 } from "@/stores";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 import { useTodoReminders } from "@/hooks/useTodoReminders";
@@ -112,6 +113,9 @@ function MainApp() {
   const sidebarVisible = useActivityBarStore((s) => s.sidebarVisible);
   const activeView = useActivityBarStore((s) => s.activeView);
   const appViewMode = useActivityBarStore((s) => s.appViewMode);
+  const hasSelfChatSession = useSelfChatStore((s) => Boolean(s.activeSession));
+  const isPanesMode = appViewMode === "panes";
+  const isSelfChatMode = appViewMode === "selfchat";
 
   const selectedWorkspace = useWorkspacesStore((s) => s.selectedWorkspace);
 
@@ -754,56 +758,67 @@ function MainApp() {
             {/* 主区域：ActivityBar | Sidebar/Todo | 主内容区 */}
             <div className="flex-1 flex overflow-hidden relative z-[1]">
               <ActivityBar />
-              {appViewMode === "home" ? (
-                /* 首页仪表盘：占满 ActivityBar 右侧所有空间 */
-                <div className="flex-1 overflow-hidden">
-                  <HomeDashboard onOpenTerminal={handleOpenTerminal} />
-                </div>
-              ) : appViewMode === "todo" ? (
-                /* Todo 全屏模式：占满 ActivityBar 右侧所有空间 */
-                <div className="flex-1 overflow-hidden">
-                  <TodoManager scope="" scopeRef="" />
-                </div>
-              ) : appViewMode === "selfchat" ? (
-                /* Self-Chat 全屏模式 */
-                <div className="flex-1 overflow-hidden">
-                  <SelfChatManager />
-                </div>
-              ) : appViewMode === "providers" ? (
-                /* Providers 全屏模式 */
-                <div className="flex-1 overflow-hidden">
-                  <ProvidersPanel />
-                </div>
-              ) : appViewMode === "files" ? (
-                /* Files 模式：侧边栏（文件浏览器）+ 文件编辑面板 */
-                <>
-                  {sidebarVisible && (
-                    <Sidebar
-                      activeView={activeView}
-                      onOpenTerminal={handleOpenTerminal}
-                    />
-                  )}
-                  <div className="flex-1 overflow-hidden p-1.5" style={{ background: "var(--app-panel-bg)" }}>
-                    <FileEditorPanel />
+              <div className="relative flex-1 overflow-hidden">
+                {appViewMode === "home" && (
+                  <div className="absolute inset-0 overflow-hidden">
+                    <HomeDashboard onOpenTerminal={handleOpenTerminal} />
                   </div>
-                </>
-              ) : (
-                <>
-                  {/* 侧边栏 */}
+                )}
+
+                {appViewMode === "todo" && (
+                  <div className="absolute inset-0 overflow-hidden">
+                    <TodoManager scope="" scopeRef="" />
+                  </div>
+                )}
+
+                {appViewMode === "providers" && (
+                  <div className="absolute inset-0 overflow-hidden">
+                    <ProvidersPanel />
+                  </div>
+                )}
+
+                {appViewMode === "files" && (
+                  <div className="absolute inset-0 flex overflow-hidden">
+                    {sidebarVisible && (
+                      <Sidebar
+                        activeView={activeView}
+                        onOpenTerminal={handleOpenTerminal}
+                      />
+                    )}
+                    <div className="flex-1 overflow-hidden p-1.5" style={{ background: "var(--app-panel-bg)" }}>
+                      <FileEditorPanel />
+                    </div>
+                  </div>
+                )}
+
+                <div
+                  className="absolute inset-0 overflow-hidden"
+                  style={{ display: isSelfChatMode ? "block" : "none" }}
+                >
+                  {(isSelfChatMode || hasSelfChatSession) && (
+                    <SelfChatManager isActive={isSelfChatMode} />
+                  )}
+                </div>
+
+                <div
+                  className="absolute inset-0 overflow-hidden"
+                  style={{
+                    display: isPanesMode ? "flex" : "none",
+                  }}
+                >
                   {sidebarVisible && (
                     <Sidebar
                       activeView={activeView}
                       onOpenTerminal={handleOpenTerminal}
                     />
                   )}
-                  {/* 面板区域 */}
                   <div className="flex-1 overflow-hidden p-1.5" style={{ background: "var(--app-panel-bg)" }}>
                     <DndPaneProvider>
-                      <PaneContainer pane={rootPane} />
+                      <PaneContainer pane={rootPane} isVisible={isPanesMode} />
                     </DndPaneProvider>
                   </div>
-                </>
-              )}
+                </div>
+              </div>
             </div>
             <StatusBar />
           </>

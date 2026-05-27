@@ -18,6 +18,7 @@ import type { TerminalViewHandle } from "./TerminalView";
 
 interface PanelProps {
   pane: PanelType;
+  isVisible?: boolean;
 }
 
 function collectTerminalSessionIds(tab: Tab): string[] {
@@ -43,7 +44,7 @@ function findActiveTerminalSessionId(tab: Tab): string | null {
   return activeLeaf?.sessionId ?? null;
 }
 
-export default memo(function Panel({ pane }: PanelProps) {
+export default memo(function Panel({ pane, isVisible = true }: PanelProps) {
   const { t } = useTranslation("panes");
 
   // Data 选择器：值变化时触发重渲染
@@ -95,7 +96,7 @@ export default memo(function Panel({ pane }: PanelProps) {
     action: () => void;
   } | null>(null);
 
-  const isActivePane = activePaneId === pane.id;
+  const isActivePane = isVisible && activePaneId === pane.id;
   const isFullscreenPanel = isFullscreen && fullscreenPaneId === pane.id;
 
   const activeTab = useMemo(
