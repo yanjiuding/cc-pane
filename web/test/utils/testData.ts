@@ -102,7 +102,7 @@ export function createTestSettings(overrides?: Partial<AppSettings>): AppSetting
       fontSize: 15,
       fontFamily: "monospace",
       cursorStyle: "block",
-      cursorBlink: true,
+      cursorBlink: false,
       scrollback: 20000,
       themeMode: "followApp",
       rendererMode: "auto",
@@ -118,7 +118,7 @@ export function createTestSettings(overrides?: Partial<AppSettings>): AppSetting
       searchScope: "Workspace",
       onboardingCompleted: false,
       defaultCliTool: "claude",
-      launchFavorites: ["terminal-default", "claude-local", "codex-local"],
+      launchFavorites: ["terminal-default", "claude-default", "codex-default"],
       hideNonFavoriteLaunchActions: false,
     },
     notification: {

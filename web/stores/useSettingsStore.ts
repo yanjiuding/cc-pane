@@ -78,7 +78,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       fontSize: 15,
       fontFamily: '"Maple Mono NF CN", "Maple Mono", "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, "Sarasa Mono SC", "Microsoft YaHei UI", "PingFang SC", monospace',
       cursorStyle: "block",
-      cursorBlink: true,
+      cursorBlink: false,
       scrollback: 20000,
       themeMode: "followApp",
       rendererMode: "auto",

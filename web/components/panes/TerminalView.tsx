@@ -191,7 +191,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     const terminalFontSize = useSettingsStore((s) => normalizeTerminalFontSize(s.settings?.terminal.fontSize));
     const terminalFontFamily = useSettingsStore((s) => normalizeTerminalFontFamily(s.settings?.terminal.fontFamily));
     const terminalCursorStyle = useSettingsStore((s) => normalizeTerminalCursorStyle(s.settings?.terminal.cursorStyle));
-    const terminalCursorBlink = useSettingsStore((s) => s.settings?.terminal.cursorBlink ?? true);
+    const terminalCursorBlink = useSettingsStore((s) => s.settings?.terminal.cursorBlink ?? false);
     const terminalTheme = getTerminalTheme(isDark, terminalThemeMode);
     const terminalRef = useRef<HTMLDivElement>(null);
     const terminalInstanceRef = useRef<Terminal | null>(null);
@@ -650,12 +650,14 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         const fontSize = normalizeTerminalFontSize(termSettings?.fontSize);
         const fontFamily = normalizeTerminalFontFamily(termSettings?.fontFamily);
         const cursorStyle = normalizeTerminalCursorStyle(termSettings?.cursorStyle);
-        const cursorBlink = termSettings?.cursorBlink ?? true;
+        const cursorBlink = termSettings?.cursorBlink ?? false;
         const term = new Terminal({
           allowProposedApi: true,
           cursorBlink,
           cursorStyle,
+          fastScrollSensitivity: 5,
           fontSize,
+          smoothScrollDuration: 0,
           scrollback,
           fontFamily,
           ...(navigator.platform.startsWith('Win') && buildNumber && buildNumber > 0 && {

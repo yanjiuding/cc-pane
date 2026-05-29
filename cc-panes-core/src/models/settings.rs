@@ -362,7 +362,7 @@ impl Default for TerminalSettings {
             font_size: DEFAULT_TERMINAL_FONT_SIZE,
             font_family: "Consolas, \"Courier New\", monospace".to_string(),
             cursor_style: "block".to_string(),
-            cursor_blink: true,
+            cursor_blink: false,
             scrollback: crate::constants::terminal::DEFAULT_SCROLLBACK,
             theme_mode: default_terminal_theme_mode(),
             renderer_mode: default_terminal_renderer_mode(),

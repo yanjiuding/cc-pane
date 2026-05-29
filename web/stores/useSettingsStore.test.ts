@@ -105,6 +105,7 @@ describe("useSettingsStore", () => {
       expect(defaults.theme.mode).toBe("dark");
       expect(defaults.terminal.fontSize).toBe(15);
       expect(defaults.terminal.cursorStyle).toBe("block");
+      expect(defaults.terminal.cursorBlink).toBe(false);
       expect(defaults.terminal.scrollback).toBe(20000);
       expect(defaults.terminal.themeMode).toBe("followApp");
       expect(defaults.terminal.rendererMode).toBe("auto");
