@@ -537,11 +537,20 @@ fn detect_in_sessions(
         .map(|path| normalize_compare_path(path))
         .collect::<Vec<_>>();
 
+    // mtime 被截成整秒（CodexSession.modified_at = as_secs），而 after 带亚秒；
+    // 同秒生成的 rollout 会出现 modified_at < after。放宽 1s 容差以免误跳。
+    // after 取 spawn 时刻，旧会话 mtime 远早于它，1s 容差不会误纳旧会话。
+    let after_relaxed = after - chrono::Duration::seconds(1);
+
+    // 按 mtime 倒序，确保同 cwd 多个候选时取最新（并发/重启场景）。
+    let mut sessions = sessions;
+    sessions.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+
     for session in sessions {
         let modified_at =
             chrono::DateTime::<chrono::Utc>::from_timestamp(session.modified_at as i64, 0)
                 .ok_or_else(|| "Invalid Codex session timestamp".to_string())?;
-        if modified_at < after {
+        if modified_at < after_relaxed {
             continue;
         }
         let session_path = normalize_compare_path(&session.project_path);
@@ -565,7 +574,7 @@ pub fn detect_wsl_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_session_description, parse_session_file};
+    use super::{detect_in_sessions, extract_session_description, parse_session_file, CodexSession};
     use std::fs;
     use tempfile::NamedTempFile;
 
@@ -601,5 +610,68 @@ mod tests {
         assert_eq!(session.id, "session-42");
         assert_eq!(session.project_path, "/tmp/project");
         assert_eq!(session.file_path, path.to_string_lossy());
+    }
+
+    fn mk_session(id: &str, cwd: &str, modified_at: u64) -> CodexSession {
+        CodexSession {
+            id: id.to_string(),
+            project_path: cwd.to_string(),
+            modified_at,
+            file_path: format!("/fake/{id}.jsonl"),
+            description: String::new(),
+        }
+    }
+
+    // after 对应的整秒时间戳：用一个固定基准便于构造 mtime。
+    fn after_at(secs: u64) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::<chrono::Utc>::from_timestamp(secs as i64, 0).unwrap()
+    }
+
+    #[test]
+    fn detect_matches_cwd_within_window() {
+        let sessions = vec![
+            mk_session("other", "/tmp/elsewhere", 1000),
+            mk_session("hit", "/tmp/project", 1000),
+        ];
+        let got = detect_in_sessions(sessions, &["/tmp/project"], after_at(1000)).unwrap();
+        assert_eq!(got, Some("hit".to_string()));
+    }
+
+    #[test]
+    fn detect_skips_rollout_before_after_minus_epsilon() {
+        // mtime=997, after=1000 → 比 after-1s(=999) 还早，跳过。
+        let sessions = vec![mk_session("old", "/tmp/project", 997)];
+        let got = detect_in_sessions(sessions, &["/tmp/project"], after_at(1000)).unwrap();
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn detect_epsilon_tolerates_same_second_truncation() {
+        // rollout 与 spawn 同秒：mtime 被截成 1000，after 实际带亚秒(用 1000 + 1ms 模拟)。
+        // 没有 ε 时 1000 < 1000.001 会误跳；ε=1s 后 after_relaxed=999.001，命中。
+        let after = chrono::DateTime::<chrono::Utc>::from_timestamp(1000, 1_000_000).unwrap();
+        let sessions = vec![mk_session("samesec", "/tmp/project", 1000)];
+        let got = detect_in_sessions(sessions, &["/tmp/project"], after).unwrap();
+        assert_eq!(got, Some("samesec".to_string()));
+    }
+
+    #[test]
+    fn detect_picks_latest_when_multiple_same_cwd() {
+        // 并发同 cwd：乱序给入，应取 mtime 最新的。
+        let sessions = vec![
+            mk_session("older", "/tmp/project", 1000),
+            mk_session("newest", "/tmp/project", 1005),
+            mk_session("mid", "/tmp/project", 1002),
+        ];
+        let got = detect_in_sessions(sessions, &["/tmp/project"], after_at(1000)).unwrap();
+        assert_eq!(got, Some("newest".to_string()));
+    }
+
+    #[test]
+    fn detect_normalizes_windows_path_case_and_backslash() {
+        // candidate 用 Windows 反斜杠+大写，rollout cwd 用小写正斜杠，应命中。
+        let sessions = vec![mk_session("win", "d:/proj/app", 1000)];
+        let got = detect_in_sessions(sessions, &["D:\\Proj\\App"], after_at(1000)).unwrap();
+        assert_eq!(got, Some("win".to_string()));
     }
 }

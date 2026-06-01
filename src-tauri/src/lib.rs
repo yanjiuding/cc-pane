@@ -1175,6 +1175,25 @@ pub fn run() {
                 let ws_svc = app.state::<Arc<WorkspaceService>>();
                 ws_svc.start_watcher(tauri_emitter);
             }
+
+            // ---- 一次性补救历史遗留的 Codex 记录（resume_session_id 为 null）----
+            // 本修复前经 orchestrator 启动的 Codex 从未回填 resume id，导致旧会话 reload 不能恢复。
+            // 用 marker 文件确保只跑一次；后台 spawn，不阻塞启动。
+            {
+                let marker = app.state::<Arc<AppPaths>>().runtime_dir().join(".codex-null-rescued");
+                if !marker.exists() {
+                    let app_handle = app.handle().clone();
+                    let lh_svc = app.state::<Arc<LaunchHistoryService>>().inner().clone();
+                    tauri::async_runtime::spawn(async move {
+                        services::rescue_null_codex_records(app_handle, lh_svc).await;
+                        if let Some(parent) = marker.parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        let _ = std::fs::write(&marker, "");
+                    });
+                }
+            }
+
             info!(
                 "[boot] +{}ms: emitters injected + workspace watcher started",
                 boot_t0.elapsed().as_millis()

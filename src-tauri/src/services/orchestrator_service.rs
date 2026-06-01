@@ -2612,6 +2612,11 @@ impl McpToolHandler {
             Err(error) => return format!("错误: {}", error),
         };
 
+        // 在创建 PTY 之前捕获 backfill 起始时刻：本地 Windows / WSL Codex 不装 hook，
+        // 靠 run_launch_history_backfill 启动后扫 ~/.codex/sessions 反查 rollout id 回填。
+        // after_ts 必须早于 PTY spawn，否则 rollout 已生成但 mtime 早于扫描起点会被跳过。
+        let backfill_after_ts = chrono::Utc::now().to_rfc3339();
+
         // 创建 PTY 会话（resume 时传 resume_id）
         // 把 child_launch_id 传进去，TerminalService 会写入 CC_PANES_LAUNCH_ID
         // 环境变量并把它附在 ccpanes MCP URL 的 `?launchId=` 上，让子 Claude
@@ -2699,6 +2704,28 @@ impl McpToolHandler {
                 err = %error,
                 "mcp::launch_task: failed to insert launch_history; grandchild numbering may degrade"
             );
+        }
+
+        // 本地 / WSL Codex 经 orchestrator 启动时不装 hook、不会自报 resume_session_id，
+        // 也不走 GUI 的 startLaunchHistoryBackfill。这里补一个后端兜底回填：扫
+        // ~/.codex/sessions 反查刚生成的 rollout id 回填 + emit history-updated，让 reload
+        // 能自动恢复。仅新会话（无 resume_id）需要；resume 启动本就带 id。
+        if cli_tool == CliTool::Codex
+            && params.resume_id.is_none()
+            && matches!(runtime.kind.as_str(), "local" | "wsl")
+        {
+            tauri::async_runtime::spawn(crate::services::run_launch_history_backfill(
+                self.state.app_handle.clone(),
+                self.state.launch_history_service.clone(),
+                child_launch_id.clone(),
+                session_id.clone(),
+                "codex".to_string(),
+                runtime.kind.as_str().to_string(),
+                wsl_distro.map(|s| s.to_string()),
+                params.project_path.clone(),
+                ws_path.clone(),
+                backfill_after_ts.clone(),
+            ));
         }
 
         // 通知前端
