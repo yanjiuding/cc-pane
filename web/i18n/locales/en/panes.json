@@ -59,6 +59,7 @@
   "layoutDeleteSshRestoring": "{{ssh}} SSH, {{restoring}} restoring",
   "confirmDeleteLayout": "Delete",
   "layoutDeleted": "Deleted layout \"{{name}}\"",
+  "orchestratorLaunchProjectPathMissing": "Ignored MCP launch event because project path is missing",
   "voiceStartRecording": "Voice input",
   "voiceStopRecording": "Stop recording",
   "voiceTranscribing": "Transcribing",

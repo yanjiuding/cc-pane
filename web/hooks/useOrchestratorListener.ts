@@ -13,6 +13,7 @@ import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { toast } from "sonner";
+import i18n from "@/i18n";
 import {
   usePanesStore,
   useActivityBarStore,
@@ -89,6 +90,12 @@ export function useOrchestratorListener() {
             "[Orchestrator] Received launch-task event:",
             event.payload
           );
+
+          if (!projectPath?.trim()) {
+            console.warn("[Orchestrator] Ignoring launch-task without projectPath:", event.payload);
+            toast.error(i18n.t("orchestratorLaunchProjectPathMissing", { ns: "panes" }));
+            return;
+          }
 
           const activityBar = useActivityBarStore.getState();
           if (activityBar.appViewMode !== "panes") {

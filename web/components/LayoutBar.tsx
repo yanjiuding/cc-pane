@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type { SyntheticEvent } from "react";
 import { Check, Command, Plus, Trash2 } from "lucide-react";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { useTranslation } from "react-i18next";
@@ -18,6 +20,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -30,6 +33,11 @@ interface DeleteSummary {
   poppedTabIds: string[];
   sshCount: number;
   restoringCount: number;
+}
+
+interface FloatingPosition {
+  left: number;
+  top: number;
 }
 
 function summarizeLayoutDelete(layout: LayoutEntry): DeleteSummary {
@@ -76,6 +84,11 @@ async function closePoppedWindows(tabIds: string[]) {
   }));
 }
 
+function stopLayoutRowAction(event: SyntheticEvent) {
+  event.preventDefault();
+  event.stopPropagation();
+}
+
 export default function LayoutBar() {
   const { t } = useTranslation("panes");
   const layouts = usePanesStore((s) => s.layouts);
@@ -88,11 +101,13 @@ export default function LayoutBar() {
   const setAppViewMode = useActivityBarStore((s) => s.setAppViewMode);
 
   const rootRef = useRef<HTMLDivElement>(null);
+  const floatingRef = useRef<HTMLDivElement>(null);
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoveringRef = useRef(false);
   const editingIdRef = useRef<string | null>(null);
   const contextMenuOpenRef = useRef(false);
   const [open, setOpen] = useState(false);
+  const [floatingPosition, setFloatingPosition] = useState<FloatingPosition | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [deleteSummary, setDeleteSummary] = useState<DeleteSummary | null>(null);
@@ -126,11 +141,21 @@ export default function LayoutBar() {
     }
   }
 
+  function updateFloatingPosition() {
+    const root = rootRef.current;
+    if (!root) return;
+    const rect = root.getBoundingClientRect();
+    const left = Math.min(rect.right + 10, Math.max(8, window.innerWidth - 264 - 8));
+    const top = Math.min(rect.top, Math.max(8, window.innerHeight - 360 - 8));
+    setFloatingPosition({ left, top: Math.max(8, top) });
+  }
+
   function closeSelector() {
     clearCloseTimer();
     editingIdRef.current = null;
     contextMenuOpenRef.current = false;
     setOpen(false);
+    setFloatingPosition(null);
     setEditingId(null);
     setEditingName("");
   }
@@ -138,6 +163,7 @@ export default function LayoutBar() {
   function openSelector() {
     hoveringRef.current = true;
     clearCloseTimer();
+    updateFloatingPosition();
     setOpen(true);
   }
 
@@ -173,8 +199,15 @@ export default function LayoutBar() {
 
     function handlePointerDown(event: PointerEvent) {
       const root = rootRef.current;
+      const floating = floatingRef.current;
       const target = event.target;
-      if (!root || !(target instanceof Node) || root.contains(target) || contextMenuOpenRef.current) {
+      if (
+        !root ||
+        !(target instanceof Node) ||
+        root.contains(target) ||
+        floating?.contains(target) ||
+        contextMenuOpenRef.current
+      ) {
         return;
       }
       closeSelector();
@@ -186,11 +219,16 @@ export default function LayoutBar() {
       }
     }
 
+    updateFloatingPosition();
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("resize", updateFloatingPosition);
+    window.addEventListener("scroll", updateFloatingPosition, true);
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("resize", updateFloatingPosition);
+      window.removeEventListener("scroll", updateFloatingPosition, true);
     };
   }, [open]);
 
@@ -258,6 +296,135 @@ export default function LayoutBar() {
     }
   }
 
+  const selectorPanel = open && floatingPosition
+    ? createPortal(
+      <div
+        ref={floatingRef}
+        role="dialog"
+        aria-label={t("layouts")}
+        className="fixed z-[100] w-64 rounded-md border p-2 shadow-md outline-none"
+        onMouseEnter={openSelector}
+        onMouseLeave={scheduleClose}
+        style={{
+          left: floatingPosition.left,
+          top: floatingPosition.top,
+          background: "var(--app-panel-bg)",
+          borderColor: "var(--app-border)",
+          color: "var(--app-text-primary)",
+        }}
+      >
+        <div className="mb-2 flex items-center justify-between px-1">
+          <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: "var(--app-text-tertiary)" }}>
+            {t("layouts")}
+          </span>
+          <button
+            type="button"
+            className="flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--app-hover)]"
+            title={t("newLayout")}
+            onClick={handleCreateLayout}
+          >
+            <Plus className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex max-h-[320px] flex-col gap-1 overflow-y-auto">
+          {layouts.map((layout) => {
+            const selected = layout.id === currentLayoutId;
+            if (editingId === layout.id) {
+              return (
+                <div
+                  key={layout.id}
+                  className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm"
+                  style={rowStyle(selected)}
+                  onMouseEnter={openSelector}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                    {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                  </span>
+                  <InlineRename
+                    value={editingName}
+                    onChange={setEditingName}
+                    onConfirm={confirmRename}
+                    onCancel={cancelRename}
+                    confirmOnBlur={false}
+                    confirmOnOutsidePointerDown
+                    className="h-6 min-w-0 flex-1 rounded px-1 text-xs outline-none"
+                    style={{
+                      background: "var(--app-content)",
+                      border: "1px solid var(--app-accent)",
+                      color: "var(--app-text-primary)",
+                    }}
+                  />
+                </div>
+              );
+            }
+            return (
+              <ContextMenu key={layout.id} onOpenChange={handleContextMenuOpenChange}>
+                <ContextMenuTrigger asChild>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    className="group flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors hover:bg-[var(--app-hover)]"
+                    style={rowStyle(selected)}
+                    onClick={() => {
+                      selectLayout(layout.id);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        selectLayout(layout.id);
+                      }
+                    }}
+                    onDoubleClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      startRename(layout);
+                    }}
+                  >
+                    <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                      {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">{layout.name}</span>
+                    <button
+                      type="button"
+                      aria-label={deletingLastLayout ? t("cannotDeleteLastLayout") : t("deleteLayout")}
+                      title={deletingLastLayout ? t("cannotDeleteLastLayout") : t("deleteLayout")}
+                      disabled={deletingLastLayout}
+                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md opacity-0 transition-opacity hover:bg-[var(--app-hover)] focus:opacity-100 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
+                      onPointerDown={stopLayoutRowAction}
+                      onClick={(event) => {
+                        stopLayoutRowAction(event);
+                        requestDelete(layout);
+                      }}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </ContextMenuTrigger>
+                <ContextMenuContent className="z-[120] w-44">
+                  <ContextMenuItem onClick={() => startRename(layout)}>
+                    {t("renameLayout")}
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    variant="destructive"
+                    disabled={deletingLastLayout}
+                    onClick={() => requestDelete(layout)}
+                  >
+                    <Trash2 />
+                    {deletingLastLayout ? t("cannotDeleteLastLayout") : t("deleteLayout")}
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
+            );
+          })}
+        </div>
+      </div>,
+      document.body
+    )
+    : null;
+
   return (
     <div
       ref={rootRef}
@@ -293,122 +460,15 @@ export default function LayoutBar() {
         </span>
       </button>
 
-      {open && (
-        <div
-          role="dialog"
-          aria-label={t("layouts")}
-          className="absolute left-[calc(100%+10px)] top-0 z-50 w-64 rounded-md border p-2 shadow-md outline-none"
-          onMouseEnter={openSelector}
-          onMouseLeave={scheduleClose}
-          style={{
-            background: "var(--app-panel-bg)",
-            borderColor: "var(--app-border)",
-            color: "var(--app-text-primary)",
-          }}
-        >
-          <div className="mb-2 flex items-center justify-between px-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: "var(--app-text-tertiary)" }}>
-              {t("layouts")}
-            </span>
-            <button
-              type="button"
-              className="flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--app-hover)]"
-              title={t("newLayout")}
-              onClick={handleCreateLayout}
-            >
-              <Plus className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="flex max-h-[320px] flex-col gap-1 overflow-y-auto">
-            {layouts.map((layout) => {
-              const selected = layout.id === currentLayoutId;
-              if (editingId === layout.id) {
-                return (
-                  <div
-                    key={layout.id}
-                    className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm"
-                    style={rowStyle(selected)}
-                    onMouseEnter={openSelector}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={(event) => event.stopPropagation()}
-                  >
-                    <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                      {selected ? <Check className="h-3.5 w-3.5" /> : null}
-                    </span>
-                    <InlineRename
-                      value={editingName}
-                      onChange={setEditingName}
-                      onConfirm={confirmRename}
-                      onCancel={cancelRename}
-                      confirmOnBlur={false}
-                      confirmOnOutsidePointerDown
-                      className="h-6 min-w-0 flex-1 rounded px-1 text-xs outline-none"
-                      style={{
-                        background: "var(--app-content)",
-                        border: "1px solid var(--app-accent)",
-                        color: "var(--app-text-primary)",
-                      }}
-                    />
-                  </div>
-                );
-              }
-              return (
-                <ContextMenu key={layout.id} onOpenChange={handleContextMenuOpenChange}>
-                  <ContextMenuTrigger asChild>
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors hover:bg-[var(--app-hover)]"
-                      style={rowStyle(selected)}
-                      onClick={() => {
-                        selectLayout(layout.id);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          selectLayout(layout.id);
-                        }
-                      }}
-                      onDoubleClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        startRename(layout);
-                      }}
-                    >
-                      <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                        {selected ? <Check className="h-3.5 w-3.5" /> : null}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">{layout.name}</span>
-                    </div>
-                  </ContextMenuTrigger>
-                  <ContextMenuContent className="w-44">
-                    <ContextMenuItem onClick={() => startRename(layout)}>
-                      {t("renameLayout")}
-                    </ContextMenuItem>
-                    <ContextMenuItem
-                      variant="destructive"
-                      disabled={deletingLastLayout}
-                      onClick={() => requestDelete(layout)}
-                    >
-                      <Trash2 />
-                      {deletingLastLayout ? t("cannotDeleteLastLayout") : t("deleteLayout")}
-                    </ContextMenuItem>
-                  </ContextMenuContent>
-                </ContextMenu>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {selectorPanel}
 
       <Dialog open={deleteSummary !== null} onOpenChange={(open) => !open && setDeleteSummary(null)}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>{t("deleteLayoutTitle", { name: deleteSummary?.layout.name ?? "" })}</DialogTitle>
+            <DialogDescription>{t("deleteLayoutDescription")}</DialogDescription>
           </DialogHeader>
           <div className="space-y-3 text-sm" style={{ color: "var(--app-text-secondary)" }}>
-            <p>{t("deleteLayoutDescription")}</p>
             <ul className="space-y-1 rounded-md border p-3" style={{ borderColor: "var(--app-border)" }}>
               {summaryItems.map((item) => (
                 <li key={item}>{item}</li>

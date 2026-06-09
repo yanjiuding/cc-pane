@@ -2,12 +2,20 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { useOrchestratorListener } from "./useOrchestratorListener";
 import { useActivityBarStore, usePanesStore } from "@/stores";
 import { createPanel } from "@/stores/paneTreeHelpers";
 import { mockTauriInvoke, resetTauriInvoke } from "@/test/utils/mockTauriInvoke";
 
 type WebviewListener = (event: { payload: Record<string, unknown> }) => void | Promise<void>;
+
+vi.mock("sonner", () => ({
+  toast: {
+    error: vi.fn(),
+    info: vi.fn(),
+  },
+}));
 
 function resetStores() {
   const rootPane = createPanel();
@@ -44,6 +52,8 @@ function mockWebviewListeners() {
 describe("useOrchestratorListener layout placement", () => {
   beforeEach(() => {
     resetTauriInvoke();
+    vi.mocked(toast.error).mockClear();
+    vi.mocked(toast.info).mockClear();
     vi.mocked(getCurrentWebview().listen).mockReset();
     mockTauriInvoke({
       exit_fullscreen: undefined,
@@ -81,6 +91,34 @@ describe("useOrchestratorListener layout placement", () => {
     const projectedLayout = state.listLayouts().find((item) => item.id === layout?.id);
     expect(projectedLayout?.rootPane).toBe(state.rootPane);
     expect(useActivityBarStore.getState().appViewMode).toBe("panes");
+  });
+
+  it("launch-task 缺少 projectPath 时不创建布局和 tab", async () => {
+    const listeners = mockWebviewListeners();
+    renderHook(() => useOrchestratorListener());
+    await waitFor(() => expect(listeners.has("orchestrator-launch-task")).toBe(true));
+
+    await act(async () => {
+      await listeners.get("orchestrator-launch-task")?.({
+        payload: {
+          taskId: "task-blank-path",
+          sessionId: "session-blank-path",
+          projectPath: "",
+          projectId: "project-a",
+          layoutName: "不应创建",
+          cliTool: "codex",
+        },
+      });
+    });
+
+    const state = usePanesStore.getState();
+    expect(state.layouts).toHaveLength(1);
+    expect(state.layouts.some((layout) => layout.name === "不应创建")).toBe(false);
+    expect(useActivityBarStore.getState().appViewMode).toBe("home");
+    expect(state.allPanelsAcrossLayouts().flatMap((panel) => panel.tabs)).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ sessionId: "session-blank-path" })])
+    );
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining("项目路径"));
   });
 
   it("query-panes 返回当前 panes 兼容字段和 layouts 详情", async () => {

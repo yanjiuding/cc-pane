@@ -43,6 +43,31 @@ function resetStores() {
   });
 }
 
+function addSecondLayout() {
+  const current = usePanesStore.getState();
+  const rootPane = current.rootPane;
+  const secondRootPane = createPanel();
+  usePanesStore.setState({
+    rootPane,
+    activePaneId: rootPane.id,
+    layouts: [
+      {
+        id: "layout-1",
+        name: "布局 1",
+        rootPane,
+        activePaneId: rootPane.id,
+      },
+      {
+        id: "layout-2",
+        name: "布局 2",
+        rootPane: secondRootPane,
+        activePaneId: secondRootPane.id,
+      },
+    ],
+    currentLayoutId: "layout-1",
+  });
+}
+
 describe("LayoutBar", () => {
   beforeEach(() => {
     resetStores();
@@ -51,11 +76,13 @@ describe("LayoutBar", () => {
   it("点击布局按钮只打开选择器，不切换 home/panes 主视图", async () => {
     const user = userEvent.setup();
     useActivityBarStore.setState({ appViewMode: "home" });
-    render(<LayoutBar />);
+    const { container } = render(<LayoutBar />);
 
     await user.click(screen.getByRole("button", { name: /布局|Layout/i }));
 
-    expect(await screen.findByRole("dialog", { name: /布局|Layouts/i })).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: /布局|Layouts/i });
+    expect(dialog).toBeInTheDocument();
+    expect(container.contains(dialog)).toBe(false);
     expect(useActivityBarStore.getState().appViewMode).toBe("home");
   });
 
@@ -100,5 +127,33 @@ describe("LayoutBar", () => {
 
     expect(usePanesStore.getState().layouts[0].name).toBe("外部确认布局");
     expect(screen.queryByDisplayValue("外部确认布局")).not.toBeInTheDocument();
+  });
+
+  it("多布局时右键菜单显示删除并打开确认框", async () => {
+    const user = userEvent.setup();
+    addSecondLayout();
+    render(<LayoutBar />);
+
+    await user.hover(screen.getByRole("button", { name: /布局|Layout/i }));
+    fireEvent.contextMenu(await screen.findByText("布局 2"));
+
+    const deleteItem = await screen.findByRole("menuitem", { name: /删除布局|Delete Layout/i });
+    expect(deleteItem).toBeInTheDocument();
+
+    await user.click(deleteItem);
+
+    expect(await screen.findByRole("dialog", { name: /删除.*布局 2|Delete.*布局 2/i })).toBeInTheDocument();
+  });
+
+  it("多布局时行内删除按钮打开确认框", async () => {
+    const user = userEvent.setup();
+    addSecondLayout();
+    render(<LayoutBar />);
+
+    await user.hover(screen.getByRole("button", { name: /布局|Layout/i }));
+    const deleteButtons = await screen.findAllByRole("button", { name: /删除布局|Delete Layout/i });
+    await user.click(deleteButtons[0]);
+
+    expect(await screen.findByRole("dialog", { name: /删除.*布局|Delete/i })).toBeInTheDocument();
   });
 });
