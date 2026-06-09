@@ -13,6 +13,7 @@ interface TerminalTabContentProps {
   tab: Tab;
   isVisible: boolean;
   isActive: boolean;
+  layoutActive: boolean;
   onSessionCreated: (sessionId: string, terminalPaneId?: string) => void;
   onSessionExited?: (exitCode: number, terminalPaneId?: string) => void;
   onTerminalRef: (terminalPaneId: string, ref: TerminalViewHandle | null) => void;
@@ -32,6 +33,7 @@ export default memo(function TerminalTabContent({
   tab,
   isVisible,
   isActive,
+  layoutActive,
   onSessionCreated,
   onSessionExited,
   onTerminalRef,
@@ -63,20 +65,16 @@ export default memo(function TerminalTabContent({
       const showRestorePlaceholder = !leaf.sessionId && !!leaf.restoring;
       const restoreLaunchState = restoreLaunchStates[leaf.id];
       const isLaunching = showPlaceholder && hasProjectPath;
-      const restoreTitle = !isVisible
-        ? t("waitingToRestore")
-        : restoreLaunchState === "queued"
-          ? t("restoreQueued")
-          : restoreLaunchState === "failed"
-            ? t("restoreFailed")
-            : t("restoringTerminal");
-      const restoreHint = !isVisible
-        ? t("waitingToRestoreHint")
-        : restoreLaunchState === "queued"
-          ? t("restoreQueuedHint")
-          : restoreLaunchState === "failed"
-            ? t("restoreFailedHint")
-            : t("restoringTerminalHint");
+      const restoreTitle = restoreLaunchState === "queued"
+        ? t("restoreQueued")
+        : restoreLaunchState === "failed"
+          ? t("restoreFailed")
+          : t("restoringTerminal");
+      const restoreHint = restoreLaunchState === "queued"
+        ? t("restoreQueuedHint")
+        : restoreLaunchState === "failed"
+          ? t("restoreFailedHint")
+          : t("restoringTerminalHint");
       return (
         <div
           key={leaf.id}
@@ -90,6 +88,7 @@ export default memo(function TerminalTabContent({
             projectPath={tab.projectPath}
             isVisible={isVisible}
             isActive={isActive && tab.activeTerminalPaneId === leaf.id}
+            layoutActive={layoutActive}
             workspaceName={leaf.workspaceName}
             providerId={leaf.providerId}
             providerSelection={leaf.providerSelection}
@@ -206,6 +205,7 @@ export default memo(function TerminalTabContent({
   }, [
     isActive,
     isVisible,
+    layoutActive,
     hasProjectPath,
     onReconnect,
     onSessionCreated,

@@ -44,6 +44,17 @@ export default function HomeActiveSessions() {
     return t("idle");
   };
 
+  function focusTab(tabId: string) {
+    const store = usePanesStore.getState();
+    const location = store.findTabAcrossLayouts(tabId);
+    if (!location) return;
+    if (location.layoutId !== store.currentLayoutId) {
+      store.switchLayout(location.layoutId);
+    }
+    store.setActivePane(location.panel.id);
+    store.selectTab(location.panel.id, location.tab.id);
+  }
+
   if (activeTabs.length === 0) {
     return (
       <div>
@@ -95,10 +106,12 @@ export default function HomeActiveSessions() {
         {activeTabs.slice(0, 5).map((tab) => {
           const status = statusMap.get(tab.sessionId!)?.status ?? null;
           return (
-            <div
+            <button
               key={tab.id}
-              className="home-session-item flex items-center gap-2 px-3 py-2.5 transition-colors duration-150"
+              type="button"
+              className="home-session-item flex w-full items-center gap-2 px-3 py-2.5 text-left transition-colors duration-150"
               style={{ borderColor: "var(--app-home-row-border)" }}
+              onClick={() => focusTab(tab.id)}
             >
               <Circle
                 className={`w-2.5 h-2.5 shrink-0 ${isBusyStatus(status) ? "animate-pulse" : ""}`}
@@ -117,7 +130,7 @@ export default function HomeActiveSessions() {
               >
                 {getStatusLabel(status)}
               </span>
-            </div>
+            </button>
           );
         })}
         <div

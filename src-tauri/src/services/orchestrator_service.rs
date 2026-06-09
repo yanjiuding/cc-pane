@@ -83,6 +83,10 @@ pub struct LaunchTaskRequest {
     pub resume_id: Option<String>,
     /// 指定目标面板 ID（可选，不指定则使用活跃面板。通过 list_panes 获取可用面板）
     pub pane_id: Option<String>,
+    /// 指定目标布局 ID（可选，通过 list_panes 获取可用布局）
+    pub layout_id: Option<String>,
+    /// 指定目标布局名称（可选；前端不存在时会自动创建）
+    pub layout_name: Option<String>,
     /// CLI 工具类型：`"claude"` | `"codex"`，默认 `"claude"`。
     /// 其他已注册工具请通过直接终端启动。
     pub cli_tool: Option<String>,
@@ -146,6 +150,8 @@ pub struct OrchestratorLaunchEvent {
     pub title: Option<String>,
     pub resume_id: Option<String>,
     pub pane_id: Option<String>,
+    pub layout_id: Option<String>,
+    pub layout_name: Option<String>,
     pub cli_tool: Option<String>,
     pub runtime_kind: String,
     pub runtime_source: String,
@@ -886,6 +892,12 @@ struct McpLaunchTaskParams {
     /// 指定目标面板 ID（可选，不指定则使用活跃面板。通过 list_panes 获取可用面板）
     #[serde(rename = "paneId")]
     pane_id: Option<String>,
+    /// 指定目标布局 ID（可选，通过 list_panes 获取可用布局）
+    #[serde(rename = "layoutId")]
+    layout_id: Option<String>,
+    /// 指定目标布局名称（可选；前端不存在时会自动创建）
+    #[serde(rename = "layoutName")]
+    layout_name: Option<String>,
     /// CLI 工具类型：`"claude"` | `"codex"`，默认 `"claude"`。
     /// 其他已注册工具请通过直接终端启动。
     #[serde(rename = "cliTool")]
@@ -2773,6 +2785,8 @@ impl McpToolHandler {
             title: params.title.clone(),
             resume_id: params.resume_id.clone(),
             pane_id: params.pane_id.clone(),
+            layout_id: params.layout_id.clone(),
+            layout_name: params.layout_name.clone(),
             cli_tool: params.cli_tool.clone(),
             runtime_kind: runtime.kind.as_str().to_string(),
             runtime_source: runtime.source.to_string(),
@@ -3618,7 +3632,7 @@ impl McpToolHandler {
         }
     }
 
-    /// 查询当前所有面板信息（ID、稳定显示编号、标签数量、活跃标签等），可用于 launch_task 的 paneId 参数
+    /// 查询当前所有布局和面板信息（布局 ID/名称、面板 ID、稳定显示编号、标签数量、活跃标签等），可用于 launch_task 的 layoutId/layoutName/paneId 参数
     #[tool]
     async fn list_panes(&self) -> String {
         debug!("mcp::list_panes");
@@ -4890,6 +4904,7 @@ impl ServerHandler for McpToolHandler {
                 "CC-Panes Orchestrator: 多 CLI（Claude/Codex）多实例编排与工作空间管理。\n",
                 "工具按需调用，完整列表见 tools/list。\n",
                 "典型流程: launch_task → get_session_status → get_session_output。\n",
+                "布局分流: list_panes 查看 layoutId/paneId，launch_task 可传 layoutId 或 layoutName；layoutName 不存在时前端会自动创建布局。\n",
                 "项目接入: scan_directory → create_workspace → add_project_to_workspace → launch_task。\n",
                 "Resume: list_launch_history(projectPath) → 取 resumeSessionId/cliTool/runtimeKind → launch_task(resumeId, cliTool, runtimeKind)。",
             ))
@@ -5543,6 +5558,8 @@ async fn handle_launch_task(
         title: req.title.clone(),
         resume_id: req.resume_id.clone(),
         pane_id: req.pane_id.clone(),
+        layout_id: req.layout_id.clone(),
+        layout_name: req.layout_name.clone(),
         cli_tool: req.cli_tool.clone(),
         runtime_kind: runtime.kind.as_str().to_string(),
         runtime_source: runtime.source.to_string(),

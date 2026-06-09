@@ -72,6 +72,17 @@ export default function SessionsView({ onOpenTerminal }: SessionsViewProps) {
       }))
   );
 
+  function focusTab(tabId: string) {
+    const store = usePanesStore.getState();
+    const location = store.findTabAcrossLayouts(tabId);
+    if (!location) return;
+    if (location.layoutId !== store.currentLayoutId) {
+      store.switchLayout(location.layoutId);
+    }
+    store.setActivePane(location.panel.id);
+    store.selectTab(location.panel.id, location.tab.id);
+  }
+
   return (
     <div className="flex flex-col h-full">
       {/* 视图标题栏 */}
@@ -96,10 +107,7 @@ export default function SessionsView({ onOpenTerminal }: SessionsViewProps) {
                 <button
                   key={s.tabId}
                   className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg transition-colors text-left hover:bg-[var(--app-hover)] text-[var(--app-text-secondary)]"
-                  onClick={() => {
-                    usePanesStore.getState().setActivePane(s.paneId);
-                    usePanesStore.getState().selectTab(s.paneId, s.tabId);
-                  }}
+                  onClick={() => focusTab(s.tabId)}
                 >
                   <div className="relative shrink-0">
                     <Terminal className="w-3.5 h-3.5" />

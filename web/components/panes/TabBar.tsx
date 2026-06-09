@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/context-menu";
 import { useTerminalStatusStore } from "@/stores";
 import StatusIndicator from "@/components/StatusIndicator";
+import InlineRename from "@/components/ui/InlineRename";
 import { computeTabNumbers } from "@/lib/tabNumbering";
 import type { Tab, TerminalStatusType } from "@/types";
 import type { TFunction } from "i18next";
@@ -92,7 +93,6 @@ function SortableTab({
   editingTabId,
   editingTitle,
   setEditingTitle,
-  editInputRef,
   confirmRename,
   cancelRename,
   startRename,
@@ -129,7 +129,6 @@ function SortableTab({
   editingTabId: string | null;
   editingTitle: string;
   setEditingTitle: (v: string) => void;
-  editInputRef: React.RefObject<HTMLInputElement | null>;
   confirmRename: () => void;
   cancelRename: () => void;
   startRename: (tab: Tab) => void;
@@ -187,110 +186,115 @@ function SortableTab({
     transition,
     opacity: isDragging ? 0.4 : undefined,
   };
+  const isEditing = editingTabId === tab.id;
+
+  const tabNode = (
+    <div
+      ref={(node) => {
+        setNodeRef(node);
+        registerTabNode(tab.id, node);
+      }}
+      style={style}
+      {...(isEditing ? {} : attributes)}
+      {...(isEditing ? {} : listeners)}
+      data-tab-id={tab.id}
+      className="relative flex shrink-0 items-center h-full group"
+    >
+      {/* 竖线分隔符 */}
+      {showSeparator && (
+        <div
+          className={`absolute left-0 top-1/2 -translate-y-1/2 ${d.separatorH} w-px group-hover:opacity-0 transition-opacity`}
+          style={{ background: 'var(--app-border)' }}
+        />
+      )}
+
+      {/* 标签主体 */}
+      <div
+        className={`relative flex shrink-0 items-center gap-1.5 ${d.tabHeight} ${d.tabPadding} ${d.tabMaxW} ${d.tabMinW}
+          ${isEditing ? "cursor-text" : "cursor-pointer"} select-none transition-colors ${d.fontSize} font-medium
+          ${active
+            ? `${d.tabRadius} z-20`
+            : `${d.inactiveRadius} ${d.inactiveMargin} hover:bg-[var(--notch-tab-hover-bg)] hover:text-[var(--notch-tab-hover-fg)]`
+          }`}
+        style={active ? {
+          background: 'transparent',
+          color: activeTabFg ?? 'var(--app-text-primary)',
+          borderTop: '2px solid var(--app-accent)',
+          fontWeight: 600,
+        } : {
+          color: 'var(--notch-tab-inactive-fg)',
+        }}
+        onClick={isEditing ? undefined : () => onSelect(tab.id)}
+        onDoubleClick={isEditing ? undefined : () => onFullscreen(tab.id)}
+      >
+        <StatusIndicator status={getStatus(tab.sessionId ?? null)} size={d.statusSize} />
+        {tab.pinned && (
+          <Pin size={d.pinSize} className="shrink-0 opacity-60 rotate-45" style={{ color: "var(--app-accent)" }} onDoubleClick={(e) => e.stopPropagation()} />
+        )}
+        {isEditing ? (
+          <InlineRename
+            value={editingTitle}
+            onChange={setEditingTitle}
+            onConfirm={confirmRename}
+            onCancel={cancelRename}
+            confirmOnBlur={false}
+            confirmOnOutsidePointerDown
+            className={`${d.titleMaxW} text-xs font-medium rounded px-1 py-0.5 outline-none`}
+            style={{
+              background: "var(--app-content)",
+              border: "1px solid var(--app-accent)",
+              color: "var(--app-text-primary)",
+            }}
+          />
+        ) : (
+          <span
+            className={`${d.titleMaxW} truncate`}
+            onPointerDown={(e) => {
+              if (e.detail > 1) {
+                e.stopPropagation();
+              }
+            }}
+            onDoubleClickCapture={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              startRename(tab);
+            }}
+          >
+            {displayNumber ? (
+              <span
+                className="opacity-60 mr-1"
+                aria-hidden="true"
+              >{`#${displayNumber}`}</span>
+            ) : null}
+            {tab.title}
+          </span>
+        )}
+        {!tab.pinned && (
+          <div
+            className={`flex items-center justify-center ${d.closeBtnSize} rounded-full
+              hover:bg-[var(--app-hover)] transition-colors
+              ${active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+            style={{ color: 'var(--editor-tab-inactive-fg)' }}
+            onClick={(e) => {
+              e.stopPropagation();
+              onClose(tab.id);
+            }}
+          >
+            <X size={d.closeIconSize} strokeWidth={2.5} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  if (isEditing) {
+    return tabNode;
+  }
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
-        <div
-          ref={(node) => {
-            setNodeRef(node);
-            registerTabNode(tab.id, node);
-          }}
-          style={style}
-          {...attributes}
-          {...listeners}
-          data-tab-id={tab.id}
-          className="relative flex shrink-0 items-center h-full group"
-        >
-          {/* 竖线分隔符 */}
-          {showSeparator && (
-            <div
-              className={`absolute left-0 top-1/2 -translate-y-1/2 ${d.separatorH} w-px group-hover:opacity-0 transition-opacity`}
-              style={{ background: 'var(--app-border)' }}
-            />
-          )}
-
-          {/* 标签主体 */}
-          <div
-            className={`relative flex shrink-0 items-center gap-1.5 ${d.tabHeight} ${d.tabPadding} ${d.tabMaxW} ${d.tabMinW}
-              cursor-pointer select-none transition-colors ${d.fontSize} font-medium
-              ${active
-                ? `${d.tabRadius} z-20`
-                : `${d.inactiveRadius} ${d.inactiveMargin} hover:bg-[var(--notch-tab-hover-bg)] hover:text-[var(--notch-tab-hover-fg)]`
-              }`}
-            style={active ? {
-              background: 'transparent',
-              color: activeTabFg ?? 'var(--app-text-primary)',
-              borderTop: '2px solid var(--app-accent)',
-              fontWeight: 600,
-            } : {
-              color: 'var(--notch-tab-inactive-fg)',
-            }}
-            onClick={() => onSelect(tab.id)}
-            onDoubleClick={() => onFullscreen(tab.id)}
-          >
-            <StatusIndicator status={getStatus(tab.sessionId ?? null)} size={d.statusSize} />
-            {tab.pinned && (
-              <Pin size={d.pinSize} className="shrink-0 opacity-60 rotate-45" style={{ color: "var(--app-accent)" }} onDoubleClick={(e) => e.stopPropagation()} />
-            )}
-            {editingTabId === tab.id ? (
-              <input
-                ref={editInputRef}
-                value={editingTitle}
-                onChange={(e) => setEditingTitle(e.target.value)}
-                className={`${d.titleMaxW} text-xs font-medium rounded px-1 py-0.5 outline-none`}
-                style={{
-                  background: "var(--app-content)",
-                  border: "1px solid var(--app-accent)",
-                  color: "var(--app-text-primary)",
-                }}
-                onBlur={confirmRename}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") confirmRename();
-                  else if (e.key === "Escape") cancelRename();
-                }}
-                onClick={(e) => e.stopPropagation()}
-                onPointerDown={(e) => e.stopPropagation()}
-              />
-            ) : (
-              <span
-                className={`${d.titleMaxW} truncate`}
-                onPointerDown={(e) => {
-                  if (e.detail > 1) {
-                    e.stopPropagation();
-                  }
-                }}
-                onDoubleClickCapture={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  startRename(tab);
-                }}
-              >
-                {displayNumber ? (
-                  <span
-                    className="opacity-60 mr-1"
-                    aria-hidden="true"
-                  >{`#${displayNumber}`}</span>
-                ) : null}
-                {tab.title}
-              </span>
-            )}
-            {!tab.pinned && (
-              <div
-                className={`flex items-center justify-center ${d.closeBtnSize} rounded-full
-                  hover:bg-[var(--app-hover)] transition-colors
-                  ${active ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
-                style={{ color: 'var(--editor-tab-inactive-fg)' }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onClose(tab.id);
-                }}
-              >
-                <X size={d.closeIconSize} strokeWidth={2.5} />
-              </div>
-            )}
-          </div>
-        </div>
+        {tabNode}
       </ContextMenuTrigger>
       <ContextMenuContent className="w-48">
         <ContextMenuItem onClick={() => startRename(tab)}>
@@ -420,7 +424,6 @@ export default memo(function TabBar({
 
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
-  const editInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const tabNodeRefs = useRef(new Map<string, HTMLDivElement>());
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -431,22 +434,6 @@ export default memo(function TabBar({
     setEditingTabId(tab.id);
     setEditingTitle(tab.title);
   }, []);
-
-  // Radix ContextMenu 关闭时焦点恢复在 rAF 之后，用 setTimeout 延迟聚焦避免抢占
-  useEffect(() => {
-    if (editingTabId) {
-      const initialTitle = editingTitle;
-      const timer = setTimeout(() => {
-        const input = editInputRef.current;
-        if (!input) return;
-        input.focus();
-        if (input.value === initialTitle) {
-          input.select();
-        }
-      }, 50);
-      return () => clearTimeout(timer);
-    }
-  }, [editingTabId]);
 
   function confirmRename() {
     if (editingTabId && editingTitle.trim()) {
@@ -576,11 +563,10 @@ export default memo(function TabBar({
                 activeId={activeId}
                 tabs={tabs}
                 density={density}
-                editingTabId={editingTabId}
-                editingTitle={editingTitle}
-                setEditingTitle={setEditingTitle}
-                editInputRef={editInputRef}
-                confirmRename={confirmRename}
+            editingTabId={editingTabId}
+            editingTitle={editingTitle}
+            setEditingTitle={setEditingTitle}
+            confirmRename={confirmRename}
                 cancelRename={cancelRename}
                 startRename={startRename}
                 onSelect={onSelect}

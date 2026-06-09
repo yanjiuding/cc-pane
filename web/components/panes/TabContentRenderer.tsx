@@ -18,6 +18,7 @@ interface TabContentRendererProps {
   tab: Tab;
   isVisible: boolean;
   isActive: boolean;
+  layoutActive: boolean;
   paneId: string;
   isPoppedOut?: boolean;
   onSessionCreated: (sessionId: string, terminalPaneId?: string) => void;
@@ -38,6 +39,7 @@ export default memo(function TabContentRenderer({
   tab,
   isVisible,
   isActive,
+  layoutActive,
   paneId,
   isPoppedOut,
   onSessionCreated,
@@ -92,6 +94,7 @@ export default memo(function TabContentRenderer({
           tab={tab}
           isVisible={isVisible}
           isActive={isActive}
+          layoutActive={layoutActive}
           onSessionCreated={onSessionCreated}
           onSessionExited={onSessionExited}
           onTerminalRef={onTerminalRef}

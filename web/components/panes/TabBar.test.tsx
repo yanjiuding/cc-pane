@@ -1,5 +1,5 @@
 import "@/i18n";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DndContext } from "@dnd-kit/core";
@@ -90,10 +90,33 @@ describe("TabBar", () => {
     await user.click(await screen.findByRole("menuitem", { name: "重命名" }));
 
     const input = await screen.findByDisplayValue("Alpha");
+    await waitFor(() => expect(input).toHaveFocus());
+    fireEvent.blur(input);
+    expect(screen.getByDisplayValue("Alpha")).toBeInTheDocument();
+    expect(onRename).not.toHaveBeenCalled();
+
     await user.clear(input);
     await user.type(input, "Beta{enter}");
 
     expect(onRename).toHaveBeenCalledWith("tab-1", "Beta");
+  });
+
+  it("重命名时点击输入框外应确认并退出编辑态", async () => {
+    const user = userEvent.setup();
+    const onRename = vi.fn();
+    renderTabBar({ onRename });
+
+    fireEvent.contextMenu(screen.getByText("Alpha"));
+    await user.click(await screen.findByRole("menuitem", { name: "重命名" }));
+
+    const input = await screen.findByDisplayValue("Alpha");
+    await waitFor(() => expect(input).toHaveFocus());
+    await user.clear(input);
+    await user.type(input, "Outside");
+    await user.click(screen.getByRole("button", { name: "New tab" }));
+
+    expect(onRename).toHaveBeenCalledWith("tab-1", "Outside");
+    expect(screen.queryByDisplayValue("Outside")).not.toBeInTheDocument();
   });
 
   it("双击标题后应进入编辑态，且不触发全屏", async () => {

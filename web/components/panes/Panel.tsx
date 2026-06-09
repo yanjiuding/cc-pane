@@ -1,14 +1,16 @@
-import { useState, useMemo, useEffect, useCallback, useRef, memo } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, memo, useContext } from "react";
 import { X, Terminal } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { handleErrorSilent } from "@/utils";
-import type { Panel as PanelType, Tab, TerminalPaneNode, TerminalPaneLeaf } from "@/types";
+import type { Panel as PanelType, Tab } from "@/types";
 import { useShallow } from "zustand/react/shallow";
 import { useDialogStore, usePanesStore, useFullscreenStore, useFileTreeStore, useWorkspacesStore } from "@/stores";
 import { terminalService, popOutTab } from "@/services";
 import type { PopupTabData } from "@/services/popupWindowService";
 import { computeGlobalTabNumbers } from "@/lib/tabNumbering";
+import { LayoutVisibilityContext } from "@/contexts/LayoutVisibilityContext";
+import { collectTerminalLeaves, collectTerminalSessionIds } from "@/lib/paneSessions";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -19,20 +21,6 @@ import type { TerminalViewHandle } from "./TerminalView";
 
 interface PanelProps {
   pane: PanelType;
-}
-
-function collectTerminalSessionIds(tab: Tab): string[] {
-  if (tab.contentType !== "terminal" || !tab.terminalRootPane) {
-    return tab.sessionId ? [tab.sessionId] : [];
-  }
-  return collectTerminalLeaves(tab.terminalRootPane)
-    .map((leaf) => leaf.sessionId)
-    .filter((sessionId): sessionId is string => Boolean(sessionId));
-}
-
-function collectTerminalLeaves(node: TerminalPaneNode): TerminalPaneLeaf[] {
-  if (node.type === "leaf") return [node];
-  return node.children.flatMap(collectTerminalLeaves);
 }
 
 function findActiveTerminalSessionId(tab: Tab): string | null {
@@ -46,6 +34,7 @@ function findActiveTerminalSessionId(tab: Tab): string | null {
 
 export default memo(function Panel({ pane }: PanelProps) {
   const { t } = useTranslation("panes");
+  const layoutVisible = useContext(LayoutVisibilityContext);
 
   // Data 选择器：值变化时触发重渲染
   const activePaneId = usePanesStore((s) => s.activePaneId);
@@ -470,8 +459,9 @@ export default memo(function Panel({ pane }: PanelProps) {
           >
             <TabContentRenderer
               tab={tab}
-              isVisible={tab.id === pane.activeTabId}
-              isActive={tab.id === pane.activeTabId && isActivePane}
+              isVisible={layoutVisible && tab.id === pane.activeTabId}
+              isActive={layoutVisible && tab.id === pane.activeTabId && isActivePane}
+              layoutActive={layoutVisible}
               paneId={pane.id}
               isPoppedOut={isTabPoppedOut(tab.id)}
               onSessionCreated={(sid, terminalPaneId) => handleSessionCreated(tab.id, sid, terminalPaneId)}

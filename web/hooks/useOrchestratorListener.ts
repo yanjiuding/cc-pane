@@ -22,7 +22,7 @@ import {
 import { isTauriReady } from "@/utils";
 import { computeGlobalTabNumbers } from "@/lib/tabNumbering";
 
-import type { CliTool, LaunchProviderSelection, SshConnectionInfo, WslLaunchInfo } from "@/types";
+import type { CliTool, LaunchProviderSelection, PaneNode, Panel, SshConnectionInfo, WslLaunchInfo } from "@/types";
 
 interface OrchestratorLaunchPayload {
   taskId: string;
@@ -36,6 +36,8 @@ interface OrchestratorLaunchPayload {
   title?: string;
   resumeId?: string;  // 对应 Rust OrchestratorLaunchEvent.resume_id
   paneId?: string;
+  layoutId?: string;
+  layoutName?: string;
   cliTool?: string;
   runtimeKind?: string;
   runtimeSource?: string;
@@ -48,6 +50,11 @@ interface OrchestratorLaunchPayload {
    * resolve a `parentTabId` for hierarchical numbering (#N.M).
    */
   parentSessionId?: string;
+}
+
+function collectPanels(node: PaneNode): Panel[] {
+  if (node.type === "panel") return [node];
+  return node.children.flatMap(collectPanels);
 }
 
 export function useOrchestratorListener() {
@@ -71,6 +78,8 @@ export function useOrchestratorListener() {
             workspacePath,
             title,
             paneId: targetPaneId,
+            layoutId: targetLayoutId,
+            layoutName: targetLayoutName,
             cliTool: rawCliTool,
             wsl,
             ssh,
@@ -86,8 +95,30 @@ export function useOrchestratorListener() {
             activityBar.setAppViewMode("panes");
           }
 
-          const panesStore = usePanesStore.getState();
-          const activePane = panesStore.activePane();
+          const requestedLayoutName = targetLayoutName?.trim();
+          const requestedLayoutId = targetLayoutId?.trim();
+          let latestPanesStore = usePanesStore.getState();
+          let hasExplicitLayout = false;
+
+          if (requestedLayoutId && latestPanesStore.listLayouts().some((layout) => layout.id === requestedLayoutId)) {
+            hasExplicitLayout = true;
+            if (latestPanesStore.currentLayoutId !== requestedLayoutId) {
+              latestPanesStore.switchLayout(requestedLayoutId);
+            }
+          } else if (requestedLayoutName) {
+            const existingLayout = latestPanesStore
+              .listLayouts()
+              .find((layout) => layout.name.trim() === requestedLayoutName);
+            const layoutId = existingLayout?.id ?? latestPanesStore.createLayout(requestedLayoutName);
+            hasExplicitLayout = true;
+            latestPanesStore = usePanesStore.getState();
+            if (latestPanesStore.currentLayoutId !== layoutId) {
+              latestPanesStore.switchLayout(layoutId);
+            }
+          }
+
+          latestPanesStore = usePanesStore.getState();
+          let activePane = latestPanesStore.activePane();
 
           // 解析父 tab（按 sessionId 在所有面板里搜）。一旦找到，记下它所在的
           // panel.id —— 这是决定子 tab 落到哪个 panel 的关键，不能等到目标
@@ -97,12 +128,16 @@ export function useOrchestratorListener() {
           let parentTabId: string | undefined;
           let parentPaneId: string | undefined;
           if (parentSessionId) {
-            for (const panel of panesStore.allPanels()) {
-              const parentTab = panel.tabs.find((t) => t.sessionId === parentSessionId);
-              if (parentTab) {
-                parentTabId = parentTab.id;
-                parentPaneId = panel.id;
-                break;
+            const parentLocation = latestPanesStore.findTabBySessionAcrossLayouts(parentSessionId);
+            if (parentLocation) {
+              if (!hasExplicitLayout && parentLocation.layoutId !== latestPanesStore.currentLayoutId) {
+                latestPanesStore.switchLayout(parentLocation.layoutId);
+                latestPanesStore = usePanesStore.getState();
+                activePane = latestPanesStore.activePane();
+              }
+              if (parentLocation.layoutId === latestPanesStore.currentLayoutId) {
+                parentTabId = parentLocation.tab.id;
+                parentPaneId = parentLocation.panel.id;
               }
             }
           }
@@ -112,17 +147,22 @@ export function useOrchestratorListener() {
           // 这样无论父在不在 active pane，前缀都能渲染成 #N.M。
           let paneId: string;
           if (targetPaneId) {
-            const targetPane = panesStore.findPaneById(targetPaneId);
-            paneId = targetPane?.type === "panel"
-              ? targetPane.id
-              : (parentPaneId ?? activePane?.id ?? panesStore.rootPane.id);
+            const targetPaneLocation = latestPanesStore.findPaneAcrossLayouts(targetPaneId);
+            if (targetPaneLocation && targetPaneLocation.layoutId !== latestPanesStore.currentLayoutId) {
+              latestPanesStore.switchLayout(targetPaneLocation.layoutId);
+              latestPanesStore = usePanesStore.getState();
+              activePane = latestPanesStore.activePane();
+            }
+            paneId = targetPaneLocation?.pane.type === "panel"
+              ? targetPaneLocation.pane.id
+              : (parentPaneId ?? activePane?.id ?? latestPanesStore.rootPane.id);
           } else {
-            paneId = parentPaneId ?? activePane?.id ?? panesStore.rootPane.id;
+            paneId = parentPaneId ?? activePane?.id ?? latestPanesStore.rootPane.id;
           }
 
           const resolvedCliTool = (rawCliTool || "claude") as CliTool;
 
-          panesStore.addTab(paneId, {
+          latestPanesStore.addTab(paneId, {
             projectId,
             projectPath,
             sessionId,           // 后端已创建的 PTY session，避免前端重复创建
@@ -235,23 +275,43 @@ export function useOrchestratorListener() {
             event.payload
           );
           const panesStore = usePanesStore.getState();
-          const panels = panesStore.allPanels();
-          const activePaneId = panesStore.activePaneId;
-          const tabNumbers = computeGlobalTabNumbers(panesStore.rootPane);
-          const panes = panels.map((p) => ({
-            paneId: p.id,
-            tabCount: p.tabs.length,
-            isActive: p.id === activePaneId,
-            tabs: p.tabs.map((t) => ({
-              id: t.id,
-              displayNumber: tabNumbers.get(t.id) ?? null,
-              title: t.title,
-              contentType: t.contentType,
-              projectPath: t.projectPath,
-              sessionId: t.sessionId,
-            })),
-          }));
-          const data = JSON.stringify({ panes, total: panes.length });
+          const currentLayoutId = panesStore.currentLayoutId;
+          const layouts = panesStore.listLayouts().map((layout) => {
+            const panels = collectPanels(layout.rootPane);
+            const tabNumbers = computeGlobalTabNumbers(layout.rootPane);
+            const panes = panels.map((p) => ({
+              paneId: p.id,
+              layoutId: layout.id,
+              tabCount: p.tabs.length,
+              isActive: layout.id === currentLayoutId && p.id === layout.activePaneId,
+              tabs: p.tabs.map((t) => ({
+                id: t.id,
+                displayNumber: tabNumbers.get(t.id) ?? null,
+                title: t.title,
+                contentType: t.contentType,
+                projectPath: t.projectPath,
+                sessionId: t.sessionId,
+              })),
+            }));
+            return {
+              id: layout.id,
+              name: layout.name,
+              isCurrent: layout.id === currentLayoutId,
+              activePaneId: layout.activePaneId,
+              panes,
+              total: panes.length,
+            };
+          });
+          const currentLayout = layouts.find((layout) => layout.id === currentLayoutId);
+          const panes = currentLayout?.panes ?? [];
+          const total = panes.length;
+          const data = JSON.stringify({
+            panes,
+            total,
+            layouts,
+            currentLayoutId,
+            layoutCount: layouts.length,
+          });
           await invoke("respond_orchestrator_query", {
             requestId: event.payload.requestId,
             data,

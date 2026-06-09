@@ -1,14 +1,17 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
+import type { Draft } from "immer";
 import { useEditorTabsStore } from "./useEditorTabsStore";
 import { useActivityBarStore } from "./useActivityBarStore";
+import { useFullscreenStore } from "./useFullscreenStore";
 import { terminalService, ensureListeners } from "@/services/terminalService";
 import { devDebugLog } from "@/utils/devLogger";
 import type {
   PaneNode,
   Panel,
   SplitPane,
+  LayoutEntry,
   Tab,
   SplitDirection,
   CliTool,
@@ -254,6 +257,280 @@ function findTabLocation(rootPane: PaneNode, tabId: string): { panel: Panel; tab
   }
   return null;
 }
+
+type PanesDraft = Draft<PanesState>;
+type LayoutDraft = Draft<LayoutEntry>;
+type PaneNodeDraft = Draft<PaneNode>;
+type PanelDraft = Draft<Panel>;
+type TabDraft = Draft<Tab>;
+
+interface TabAcrossLayoutsLocation {
+  layoutId: string;
+  tree: PaneNode;
+  panel: Panel;
+  tab: Tab;
+}
+
+interface PaneAcrossLayoutsLocation {
+  layoutId: string;
+  tree: PaneNode;
+  pane: PaneNode;
+}
+
+interface DraftTabAcrossLayoutsLocation {
+  layoutId: string;
+  tree: PaneNodeDraft;
+  panel: PanelDraft;
+  tab: TabDraft;
+}
+
+function createDefaultLayout(name = "布局 1"): LayoutEntry {
+  const rootPane = createPanel();
+  return {
+    id: generateId("layout"),
+    name,
+    rootPane,
+    activePaneId: rootPane.id,
+  };
+}
+
+function nextLayoutName(layouts: Array<Pick<LayoutEntry, "name">>): string {
+  const used = new Set(layouts.map((layout) => layout.name.trim()));
+  let index = layouts.length + 1;
+  while (used.has(`布局 ${index}`)) {
+    index += 1;
+  }
+  return `布局 ${index}`;
+}
+
+function layoutTree(
+  state: PanesState | PanesDraft,
+  layoutId: string
+): PaneNode | PaneNodeDraft | null {
+  if (layoutId === state.currentLayoutId) return state.rootPane;
+  return state.layouts.find((layout) => layout.id === layoutId)?.rootPane ?? null;
+}
+
+function eachLayoutTree(state: PanesState, fn: (layout: LayoutEntry, tree: PaneNode) => void): void;
+function eachLayoutTree(
+  state: PanesDraft,
+  fn: (layout: LayoutDraft, tree: PaneNodeDraft) => void
+): void;
+function eachLayoutTree(
+  state: PanesState | PanesDraft,
+  fn: (layout: LayoutEntry | LayoutDraft, tree: PaneNode | PaneNodeDraft) => void
+): void {
+  for (const layout of state.layouts) {
+    const tree = layoutTree(state, layout.id);
+    if (tree) {
+      fn(layout, tree);
+    }
+  }
+}
+
+function findTabAcrossLayouts(state: PanesState, tabId: string): TabAcrossLayoutsLocation | null;
+function findTabAcrossLayouts(state: PanesDraft, tabId: string): DraftTabAcrossLayoutsLocation | null;
+function findTabAcrossLayouts(
+  state: PanesState | PanesDraft,
+  tabId: string
+): TabAcrossLayoutsLocation | DraftTabAcrossLayoutsLocation | null {
+  let found: TabAcrossLayoutsLocation | DraftTabAcrossLayoutsLocation | null = null;
+  eachLayoutTree(state as PanesState, (layout, tree) => {
+    if (found) return;
+    const location = findTabLocation(tree, tabId);
+    if (location) {
+      found = {
+        layoutId: layout.id,
+        tree,
+        panel: location.panel,
+        tab: location.tab,
+      };
+    }
+  });
+  return found;
+}
+
+function findTabBySessionAcrossLayouts(state: PanesState, sessionId: string): TabAcrossLayoutsLocation | null {
+  let found: TabAcrossLayoutsLocation | null = null;
+  eachLayoutTree(state, (layout, tree) => {
+    if (found) return;
+    for (const panel of collectPanels(tree)) {
+      const tab = panel.tabs.find((item) => Boolean(findSessionInTab(item, sessionId)));
+      if (tab) {
+        found = {
+          layoutId: layout.id,
+          tree,
+          panel,
+          tab,
+        };
+        return;
+      }
+    }
+  });
+  return found;
+}
+
+function findPaneAcrossLayouts(state: PanesState, paneId: string): PaneAcrossLayoutsLocation | null {
+  let found: PaneAcrossLayoutsLocation | null = null;
+  eachLayoutTree(state, (layout, tree) => {
+    if (found) return;
+    const pane = findPane(tree, paneId);
+    if (pane) {
+      found = {
+        layoutId: layout.id,
+        tree,
+        pane,
+      };
+    }
+  });
+  return found;
+}
+
+function syncWorkingCopyToCurrentLayout(state: PanesDraft): void {
+  const current = state.layouts.find((layout) => layout.id === state.currentLayoutId);
+  if (!current) return;
+  current.rootPane = state.rootPane;
+  current.activePaneId = state.activePaneId;
+}
+
+function projectedLayouts(state: Pick<PanesState, "layouts" | "currentLayoutId" | "rootPane" | "activePaneId">): LayoutEntry[] {
+  const layouts = Array.isArray(state.layouts) ? state.layouts : [];
+  if (layouts.length === 0) {
+    return [{
+      id: state.currentLayoutId || generateId("layout"),
+      name: "布局 1",
+      rootPane: state.rootPane,
+      activePaneId: state.activePaneId,
+    }];
+  }
+  return layouts.map((layout) => (
+    layout.id === state.currentLayoutId
+      ? {
+          ...layout,
+          rootPane: state.rootPane,
+          activePaneId: state.activePaneId,
+        }
+      : layout
+  ));
+}
+
+function ensureLayoutState(
+  partial: Partial<Pick<PanesState, "layouts" | "currentLayoutId" | "rootPane" | "activePaneId">>
+): Pick<PanesState, "layouts" | "currentLayoutId" | "rootPane" | "activePaneId"> {
+  const validLayouts = Array.isArray(partial.layouts)
+    ? partial.layouts.filter((layout): layout is LayoutEntry => (
+        Boolean(layout)
+        && typeof layout.id === "string"
+        && typeof layout.name === "string"
+        && Boolean(layout.rootPane)
+        && typeof layout.activePaneId === "string"
+      ))
+    : [];
+
+  const layouts = validLayouts.length > 0
+    ? validLayouts
+    : [createDefaultLayout()];
+
+  for (const layout of layouts) {
+    cleanRehydratedPanes(layout.rootPane);
+    const active = findPane(layout.rootPane, layout.activePaneId);
+    if (active?.type !== "panel") {
+      layout.activePaneId = collectPanels(layout.rootPane)[0]?.id ?? layout.rootPane.id;
+    }
+  }
+
+  const currentLayoutId = layouts.some((layout) => layout.id === partial.currentLayoutId)
+    ? partial.currentLayoutId!
+    : layouts[0].id;
+  const current = layouts.find((layout) => layout.id === currentLayoutId) ?? layouts[0];
+
+  return {
+    layouts,
+    currentLayoutId,
+    rootPane: current.rootPane,
+    activePaneId: current.activePaneId,
+  };
+}
+
+function findSessionInTab(tab: Tab, sessionId: string): TerminalPaneLeaf | null {
+  if (tab.contentType === "terminal" && tab.terminalRootPane) {
+    return collectTerminalLeaves(tab.terminalRootPane)
+      .find((leaf) => leaf.sessionId === sessionId) ?? null;
+  }
+  return tab.sessionId === sessionId
+    ? {
+        type: "leaf",
+        id: tab.id,
+        sessionId,
+      }
+    : null;
+}
+
+function closeTabInTree(rootPane: PaneNode, paneId: string, tabId: string): PaneNode {
+  const pane = findPane(rootPane, paneId);
+  if (pane?.type !== "panel") return rootPane;
+  const idx = pane.tabs.findIndex((tab) => tab.id === tabId);
+  if (idx === -1 || pane.tabs[idx].pinned) return rootPane;
+
+  if (pane.tabs.length > 1) {
+    pane.tabs.splice(idx, 1);
+    if (pane.activeTabId === tabId) {
+      const nextIdx = Math.min(idx, pane.tabs.length - 1);
+      pane.activeTabId = pane.tabs[nextIdx].id;
+    }
+    return rootPane;
+  }
+
+  const parentResult = findParent(rootPane, paneId);
+  if (!parentResult) return rootPane;
+
+  if (parentResult.parent === null) {
+    return createPanel();
+  }
+
+  const parent = parentResult.parent;
+  parent.children.splice(parentResult.index, 1);
+  parent.sizes.splice(parentResult.index, 1);
+  const total = parent.sizes.reduce((sum, size) => sum + size, 0);
+  parent.sizes = total > 0
+    ? parent.sizes.map((size) => (size / total) * 100)
+    : parent.sizes.map(() => 100 / parent.sizes.length);
+
+  return normalizePaneTree(rootPane);
+}
+
+function closeTerminalLeafInTab(tab: Tab, terminalPaneId: string): boolean {
+  if (tab.contentType !== "terminal" || !tab.terminalRootPane) return false;
+  const leaves = collectTerminalLeaves(tab.terminalRootPane);
+  if (leaves.length <= 1) return false;
+
+  const parentResult = findTerminalPaneParent(tab.terminalRootPane, terminalPaneId);
+  if (!parentResult || parentResult.parent === null) return false;
+
+  const parent = parentResult.parent;
+  parent.children.splice(parentResult.index, 1);
+  parent.sizes.splice(parentResult.index, 1);
+
+  if (parent.children.length === 1) {
+    const gpResult = findTerminalPaneParent(tab.terminalRootPane, parent.id);
+    if (!gpResult || gpResult.parent === null) {
+      tab.terminalRootPane = parent.children[0];
+    } else {
+      gpResult.parent.children[gpResult.index] = parent.children[0];
+    }
+  } else {
+    const total = parent.sizes.reduce((sum, size) => sum + size, 0);
+    parent.sizes = total > 0
+      ? parent.sizes.map((size) => (size / total) * 100)
+      : parent.sizes.map(() => 100 / parent.sizes.length);
+  }
+
+  const nextLeaves = collectTerminalLeaves(tab.terminalRootPane);
+  tab.activeTerminalPaneId = nextLeaves[Math.min(parentResult.index, nextLeaves.length - 1)]?.id;
+  syncTabTerminalState(tab);
+  return true;
+}
+
 function findPane(node: PaneNode, paneId: string): PaneNode | null {
   if (node.id === paneId) return node;
   if (node.type === "split") {
@@ -353,13 +630,26 @@ interface ClosedTabSnapshot {
 interface PanesState {
   rootPane: PaneNode;
   activePaneId: string;
+  layouts: LayoutEntry[];
+  currentLayoutId: string;
   closedTabs: ClosedTabSnapshot[];
   poppedOutTabs: Set<string>;
 
   // Derived helpers
   allPanels: () => Panel[];
+  allPanelsAcrossLayouts: () => Panel[];
   activePane: () => Panel | null;
   findPaneById: (paneId: string) => PaneNode | null;
+  findPaneAcrossLayouts: (paneId: string) => PaneAcrossLayoutsLocation | null;
+  findTabAcrossLayouts: (tabId: string) => TabAcrossLayoutsLocation | null;
+  findTabBySessionAcrossLayouts: (sessionId: string) => TabAcrossLayoutsLocation | null;
+
+  // Layouts
+  createLayout: (name?: string) => string;
+  renameLayout: (id: string, name: string) => void;
+  deleteLayout: (id: string) => void;
+  switchLayout: (id: string) => void;
+  listLayouts: () => LayoutEntry[];
 
   // Pane layout
   split: (paneId: string, direction: SplitDirection) => void;
@@ -416,6 +706,12 @@ interface PanesState {
 }
 
 const initialPanel = createPanel();
+const initialLayout: LayoutEntry = {
+  id: generateId("layout"),
+  name: "布局 1",
+  rootPane: initialPanel,
+  activePaneId: initialPanel.id,
+};
 
 /** Clean non-restorable runtime state after layout rehydration. */
 function cleanRehydratedPanes(node: PaneNode) {
@@ -449,10 +745,20 @@ export const usePanesStore = create<PanesState>()(
   immer((set, get) => ({
     rootPane: initialPanel,
     activePaneId: initialPanel.id,
+    layouts: [initialLayout],
+    currentLayoutId: initialLayout.id,
     closedTabs: [],
     poppedOutTabs: new Set<string>(),
 
     allPanels: () => collectPanels(get().rootPane),
+
+    allPanelsAcrossLayouts: () => {
+      const panels: Panel[] = [];
+      eachLayoutTree(get(), (_layout, tree) => {
+        panels.push(...collectPanels(tree));
+      });
+      return panels;
+    },
 
     activePane: () => {
       const pane = findPane(get().rootPane, get().activePaneId);
@@ -460,6 +766,81 @@ export const usePanesStore = create<PanesState>()(
     },
 
     findPaneById: (paneId) => findPane(get().rootPane, paneId),
+
+    findPaneAcrossLayouts: (paneId) => findPaneAcrossLayouts(get(), paneId),
+
+    findTabAcrossLayouts: (tabId) => findTabAcrossLayouts(get(), tabId),
+
+    findTabBySessionAcrossLayouts: (sessionId) => findTabBySessionAcrossLayouts(get(), sessionId),
+
+    createLayout: (name) => {
+      const id = generateId("layout");
+      set((state) => {
+        syncWorkingCopyToCurrentLayout(state);
+        const rootPane = createPanel();
+        const layout: LayoutEntry = {
+          id,
+          name: (name?.trim() || nextLayoutName(state.layouts)),
+          rootPane,
+          activePaneId: rootPane.id,
+        };
+        state.layouts.push(layout);
+        state.currentLayoutId = id;
+        state.rootPane = rootPane;
+        state.activePaneId = rootPane.id;
+      });
+      useFullscreenStore.getState().exitFullscreen();
+      notifyTerminalLayoutChanged("layout.create");
+      return id;
+    },
+
+    renameLayout: (id, name) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      set((state) => {
+        const layout = state.layouts.find((item) => item.id === id);
+        if (!layout) return;
+        layout.name = trimmed;
+      });
+    },
+
+    deleteLayout: (id) => {
+      set((state) => {
+        if (state.layouts.length <= 1) return;
+        const index = state.layouts.findIndex((layout) => layout.id === id);
+        if (index === -1) return;
+
+        syncWorkingCopyToCurrentLayout(state);
+        const deletingCurrent = state.currentLayoutId === id;
+        state.layouts.splice(index, 1);
+
+        if (deletingCurrent) {
+          const nextIndex = Math.max(0, index - 1);
+          const nextLayout = state.layouts[Math.min(nextIndex, state.layouts.length - 1)];
+          state.currentLayoutId = nextLayout.id;
+          state.rootPane = nextLayout.rootPane;
+          state.activePaneId = nextLayout.activePaneId;
+        }
+      });
+      useFullscreenStore.getState().exitFullscreen();
+      notifyTerminalLayoutChanged("layout.delete");
+    },
+
+    switchLayout: (id) => {
+      set((state) => {
+        if (state.currentLayoutId === id) return;
+        const target = state.layouts.find((layout) => layout.id === id);
+        if (!target) return;
+        syncWorkingCopyToCurrentLayout(state);
+        state.currentLayoutId = id;
+        state.rootPane = target.rootPane;
+        state.activePaneId = target.activePaneId;
+      });
+      useFullscreenStore.getState().exitFullscreen();
+      notifyTerminalLayoutChanged("layout.switch");
+    },
+
+    listLayouts: () => projectedLayouts(get()),
 
     split: (paneId, direction) => {
       const directionMap: Record<SplitDirection, "horizontal" | "vertical"> = {
@@ -951,7 +1332,7 @@ export const usePanesStore = create<PanesState>()(
 
     updateTabSession: (_paneId, tabId, sessionId, terminalPaneId) => {
       set((state) => {
-        const location = findTabLocation(state.rootPane, tabId);
+        const location = findTabAcrossLayouts(state, tabId);
         if (!location) return;
         const { tab } = location;
         if (tab.contentType !== "terminal") {
@@ -1105,7 +1486,9 @@ export const usePanesStore = create<PanesState>()(
           }
           return false;
         };
-        update(state.rootPane);
+        eachLayoutTree(state, (_layout, tree) => {
+          update(tree);
+        });
       });
     },
 
@@ -1364,34 +1747,27 @@ export const usePanesStore = create<PanesState>()(
       }
     },
 
-    setTabDirty: (paneId, tabId, dirty) => {
+    setTabDirty: (_paneId, tabId, dirty) => {
       set((state) => {
-        const pane = findPane(state.rootPane, paneId);
-        if (pane?.type !== "panel") return;
-        const tab = pane.tabs.find((t) => t.id === tabId);
+        const location = findTabAcrossLayouts(state, tabId);
+        const tab = location?.tab;
         if (tab) tab.dirty = dirty;
       });
     },
 
     markTabPoppedOut: (tabId) => {
-      set((state) => {
-        state.poppedOutTabs = new Set(state.poppedOutTabs).add(tabId);
-      });
+      set({ poppedOutTabs: new Set(get().poppedOutTabs).add(tabId) });
     },
 
     markTabReclaimed: (tabId) => {
+      const next = new Set(get().poppedOutTabs);
+      next.delete(tabId);
+      set({ poppedOutTabs: next });
       set((state) => {
-        const next = new Set(state.poppedOutTabs);
-        next.delete(tabId);
-        state.poppedOutTabs = next;
         // Bump reclaimKey so TerminalView remounts after a popped-out tab returns.
-        const panels = collectPanels(state.rootPane);
-        for (const panel of panels) {
-          const tab = panel.tabs.find((t) => t.id === tabId);
-          if (tab) {
-            tab.reclaimKey = (tab.reclaimKey ?? 0) + 1;
-            break;
-          }
+        const location = findTabAcrossLayouts(state, tabId);
+        if (location) {
+          location.tab.reclaimKey = (location.tab.reclaimKey ?? 0) + 1;
         }
       });
     },
@@ -1400,7 +1776,7 @@ export const usePanesStore = create<PanesState>()(
 
     setTabDisconnected: (_paneId, tabId, disconnected, terminalPaneId) => {
       set((state) => {
-        const location = findTabLocation(state.rootPane, tabId);
+        const location = findTabAcrossLayouts(state, tabId);
         const tab = location?.tab;
         if (!tab) return;
         if (tab.contentType === "terminal" && tab.terminalRootPane) {
@@ -1428,7 +1804,7 @@ export const usePanesStore = create<PanesState>()(
     reconnectTab: async (_paneId, tabId, terminalPaneId) => {
       // 从 Tab 数据中提取创建参数
       const snapshot = get();
-      const location = findTabLocation(snapshot.rootPane, tabId);
+      const location = findTabAcrossLayouts(snapshot, tabId);
       const tab = location?.tab;
       if (!tab || !tab.projectPath) return null;
       const terminalLeaf =
@@ -1456,7 +1832,7 @@ export const usePanesStore = create<PanesState>()(
 
         // 更新 tab 的 sessionId 和断连状态
         set((state) => {
-          const currentLocation = findTabLocation(state.rootPane, tabId);
+          const currentLocation = findTabAcrossLayouts(state, tabId);
           const t = currentLocation?.tab;
           if (!t) return;
           if (t.contentType === "terminal" && t.terminalRootPane) {
@@ -1488,32 +1864,42 @@ export const usePanesStore = create<PanesState>()(
     },
 
     closeTabBySessionId: (sessionId) => {
-      const panels = collectPanels(get().rootPane);
-      for (const panel of panels) {
-        const tab = panel.tabs.find((t) => {
-          if (t.contentType === "terminal" && t.terminalRootPane) {
-            return collectTerminalLeaves(t.terminalRootPane).some((leaf) => leaf.sessionId === sessionId);
-          }
-          return t.sessionId === sessionId;
-        });
-        if (tab) {
-          if (tab.contentType === "terminal" && tab.terminalRootPane) {
-            const leaf = collectTerminalLeaves(tab.terminalRootPane)
-              .find((item) => item.sessionId === sessionId);
-            if (leaf && collectTerminalLeaves(tab.terminalRootPane).length > 1) {
-              get().closeTerminalPane(tab.id, leaf.id);
+      set((state) => {
+        let handled = false;
+        eachLayoutTree(state, (layout, tree) => {
+          if (handled) return;
+          for (const panel of collectPanels(tree)) {
+            const tab = panel.tabs.find((item) => Boolean(findSessionInTab(item, sessionId)));
+            if (!tab) continue;
+            const leaf = findSessionInTab(tab, sessionId);
+            if (leaf && closeTerminalLeafInTab(tab, leaf.id)) {
+              handled = true;
               return;
             }
+            const nextTree = closeTabInTree(tree, panel.id, tab.id);
+            if (layout.id === state.currentLayoutId) {
+              state.rootPane = nextTree;
+              const activePane = findPane(state.rootPane, state.activePaneId);
+              if (activePane?.type !== "panel") {
+                state.activePaneId = collectPanels(state.rootPane)[0]?.id ?? state.rootPane.id;
+              }
+            } else {
+              layout.rootPane = nextTree;
+              const activePane = findPane(layout.rootPane, layout.activePaneId);
+              if (activePane?.type !== "panel") {
+                layout.activePaneId = collectPanels(layout.rootPane)[0]?.id ?? layout.rootPane.id;
+              }
+            }
+            handled = true;
+            return;
           }
-          get().closeTab(panel.id, tab.id);
-          return;
-        }
-      }
+        });
+      });
     },
 
     clearRestoring: (_paneId, tabId, terminalPaneId) => {
       set((state) => {
-        const location = findTabLocation(state.rootPane, tabId);
+        const location = findTabAcrossLayouts(state, tabId);
         const tab = location?.tab;
         if (tab) {
           if (tab.contentType === "terminal" && tab.terminalRootPane) {
@@ -1532,22 +1918,34 @@ export const usePanesStore = create<PanesState>()(
     },
 
     getRestorableTabs: () => {
-      const panels = collectPanels(get().rootPane);
+      set((state) => {
+        eachLayoutTree(state, (_layout, tree) => {
+          for (const panel of collectPanels(tree)) {
+            for (const tab of panel.tabs) {
+              if (tab.contentType === "terminal") {
+                syncTabTerminalState(tab);
+              }
+            }
+          }
+        });
+      });
+
       const result: Array<{ tab: Tab; paneId: string }> = [];
-      for (const panel of panels) {
-        for (const tab of panel.tabs) {
-          if (tab.contentType === "terminal" && tab.projectPath) {
-            syncTabTerminalState(tab);
-            result.push({ tab, paneId: panel.id });
+      eachLayoutTree(get(), (_layout, tree) => {
+        for (const panel of collectPanels(tree)) {
+          for (const tab of panel.tabs) {
+            if (tab.contentType === "terminal" && tab.projectPath) {
+              result.push({ tab, paneId: panel.id });
+            }
           }
         }
-      }
+      });
       return result;
     },
   })),
   {
     name: "cc-panes-layout",
-    version: 3,
+    version: 4,
     migrate: (persistedState, version) => {
       const state = persistedState as Record<string, unknown>;
       if (version < 2) {
@@ -1581,22 +1979,42 @@ export const usePanesStore = create<PanesState>()(
         };
         migrateTerminalTabs(state.rootPane as PaneNode);
       }
+      if (version < 4 && state.rootPane) {
+        const rootPane = state.rootPane as PaneNode;
+        const activePaneId = typeof state.activePaneId === "string"
+          ? state.activePaneId
+          : collectPanels(rootPane)[0]?.id ?? rootPane.id;
+        state.layouts = [{
+          id: generateId("layout"),
+          name: "布局 1",
+          rootPane,
+          activePaneId,
+        }];
+        state.currentLayoutId = (state.layouts as LayoutEntry[])[0].id;
+        delete state.rootPane;
+        delete state.activePaneId;
+      }
       return state;
     },
     partialize: (state) => ({
-      rootPane: state.rootPane,
-      activePaneId: state.activePaneId,
+      layouts: projectedLayouts(state),
+      currentLayoutId: state.currentLayoutId,
       // poppedOutTabs is runtime-only; popped windows do not survive restart.
     }),
     merge: (persistedState, currentState) => {
+      const persisted = persistedState as Partial<PanesState> | undefined;
+      const layoutState = ensureLayoutState({
+        layouts: persisted?.layouts ?? currentState.layouts,
+        currentLayoutId: persisted?.currentLayoutId ?? currentState.currentLayoutId,
+        rootPane: persisted?.rootPane ?? currentState.rootPane,
+        activePaneId: persisted?.activePaneId ?? currentState.activePaneId,
+      });
       const merged = {
         ...currentState,
-        ...(persistedState as object),
+        ...(persisted as object),
+        ...layoutState,
+        poppedOutTabs: new Set<string>(),
       };
-      // persistedState comes from JSON.parse and is safe to normalize in place.
-      if (persistedState && (persistedState as Partial<PanesState>).rootPane) {
-        cleanRehydratedPanes((merged as PanesState).rootPane);
-      }
       return merged as PanesState;
     },
   },

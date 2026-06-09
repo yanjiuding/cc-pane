@@ -7,7 +7,7 @@ import { writeText as tauriWriteText } from "@tauri-apps/plugin-clipboard-manage
 import { toast } from "sonner";
 import { terminalService, historyService, sessionRestoreService } from "@/services";
 import { ensureListeners } from "@/services/terminalService";
-import { getErrorMessage } from "@/utils";
+import { getErrorMessage, toWslPath } from "@/utils";
 import { devDebugLog } from "@/utils/devLogger";
 import {
   TERMINAL_LAYOUT_CHANGED_EVENT,
@@ -109,6 +109,46 @@ function resolveRuntimeKind(
   return "local";
 }
 
+function normalizeHistoryPath(path?: string | null): string {
+  if (!path) return "";
+  return (toWslPath(path) ?? path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+async function resolveResumeIdFromHistory(params: {
+  currentResumeId?: string;
+  projectId: string;
+  projectPath: string;
+  cliTool: string;
+  runtimeKind: string;
+}): Promise<string | undefined> {
+  if (params.currentResumeId) return params.currentResumeId;
+
+  try {
+    const records = await historyService.list(200);
+    const exact = records.find((record) => (
+      record.projectId === params.projectId
+      && !!record.resumeSessionId
+      && (record.cliTool ?? "none") === params.cliTool
+      && (record.runtimeKind ?? "local") === params.runtimeKind
+    ));
+    if (exact?.resumeSessionId) {
+      return exact.resumeSessionId;
+    }
+
+    const targetPath = normalizeHistoryPath(params.projectPath);
+    const byPath = records.find((record) => (
+      !!record.resumeSessionId
+      && normalizeHistoryPath(record.projectPath) === targetPath
+      && (record.cliTool ?? "none") === params.cliTool
+      && (record.runtimeKind ?? "local") === params.runtimeKind
+    ));
+    return byPath?.resumeSessionId;
+  } catch (error) {
+    console.warn("[TerminalView] Failed to resolve resume id from launch history:", error);
+    return undefined;
+  }
+}
+
 function writeTerminalReply(
   sessionId: string | null,
   response: string,
@@ -151,6 +191,8 @@ interface TerminalViewProps {
   isVisible?: boolean;
   /** Whether this terminal belongs to the currently focused pane. */
   isActive: boolean;
+  /** Whether this terminal belongs to the current top-level layout. */
+  layoutActive?: boolean;
   workspaceName?: string;
   providerId?: string;
   providerSelection?: CreateSessionRequest["providerSelection"];
@@ -230,6 +272,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     const lastDragFitAtRef = useRef(0);
     const isActiveRef = useRef(props.isActive);
     const isVisibleRef = useRef(props.isVisible ?? props.isActive);
+    const layoutActiveRef = useRef(props.layoutActive ?? true);
     const terminalRendererMode = useSettingsStore((s) => s.settings?.terminal.rendererMode ?? "auto");
     const effectiveCliTool = resolveCliTool(props.cliTool, props.launchClaude);
     const resolveRendererMode = useCallback((mode: TerminalRendererMode) => {
@@ -256,6 +299,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         sessionId: currentSessionIdRef.current ?? props.sessionId ?? null,
         cliTool: effectiveCliTool,
         isActive: props.isActive,
+        isVisible: props.isVisible ?? props.isActive,
+        layoutActive: props.layoutActive ?? true,
         renderer: rendererControllerRef.current?.getActiveRenderer() ?? null,
         xtermBuffer: terminalInstanceRef.current?.buffer.active.type ?? null,
         ...payload,
@@ -263,6 +308,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     }, [
       effectiveCliTool,
       props.isActive,
+      props.isVisible,
+      props.layoutActive,
       props.paneId,
       props.projectPath,
       props.sessionId,
@@ -365,6 +412,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       onReconnectRef.current = props.onReconnect;
       isActiveRef.current = props.isActive;
       isVisibleRef.current = props.isVisible ?? props.isActive;
+      layoutActiveRef.current = props.layoutActive ?? true;
     });
 
     useEffect(() => {
@@ -1070,17 +1118,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
                 console.warn("[TerminalView] Failed to load restored output:", err);
               }
 
-              // Hidden restored tabs only replay saved output; PTY creation waits until the
-              // tab becomes visible. A visible tab in an unfocused split pane should still resume.
-              // The live session is created later when the tab becomes visible again.
-              if (!(props.isVisible ?? props.isActive)) {
-                debugLog("session.restore.defer", {
-                  savedSessionId: props.savedSessionId,
-                });
-                console.info(`[TerminalView] Deferred restore (not active): ${props.projectPath}`);
-                deferredRestoreRef.current = true;
-                return;
-              }
+              // Restored tabs should start their live PTY on first app restore even when the
+              // tab is hidden, otherwise background tabs can remain stuck on the restore overlay.
             }
 
             let sessionId: string;
@@ -1112,8 +1151,26 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
                 });
               }
             } else {
+              if (props.layoutActive === false) {
+                deferredRestoreRef.current = true;
+                props.onRestoreLaunchState?.(props.restoring ? "queued" : "idle");
+                debugLog("session.create.deferred-layout-hidden", {
+                  restoring: props.restoring ?? false,
+                });
+                return;
+              }
+
               // Create a brand-new backend session. Agent resume IDs must come
               // from the tab/snapshot/history chain, not directory-level legacy state.
+              const cliTool = resolveCliTool(props.cliTool, props.launchClaude);
+              const runtimeKind = resolveRuntimeKind(props.ssh, props.wsl);
+              effectiveResumeId = await resolveResumeIdFromHistory({
+                currentResumeId: effectiveResumeId,
+                projectId: props.projectId,
+                projectPath: props.projectPath,
+                cliTool,
+                runtimeKind,
+              });
 
               console.info(
                 `[TerminalView] Creating new session: project=${props.projectPath}, launchClaude=${props.launchClaude ?? false}, resumeId=${effectiveResumeId ?? "none"}`
@@ -1143,7 +1200,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
               });
               sessionId = props.restoring
                 ? await terminalRestoreLaunchQueue.run(launchSession, {
-                    isCancelled: () => !isMounted || !isVisibleRef.current,
+                    isCancelled: () => !isMounted,
                     onState: props.onRestoreLaunchState,
                   })
                 : await launchSession();
@@ -1153,9 +1210,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
               });
               console.info(`[TerminalView] Session created: ${sessionId}`);
               if (!effectiveResumeId) {
-                const cliTool = resolveCliTool(props.cliTool, props.launchClaude);
                 if (cliTool !== "none") {
-                  const runtimeKind = resolveRuntimeKind(props.ssh, props.wsl);
                   historyService.startLaunchHistoryBackfill(
                     props.projectId,
                     sessionId,
@@ -1319,6 +1374,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       const scheduleRefit = (onReady?: (term: Terminal) => void) => {
         layoutSchedulerRef.current?.schedule("active.refit", {
           focusIfSafe: props.isActive,
+          allowInactive: Boolean(onReady),
           onAfterLayout: (term) => {
             if (activationCancelled) return;
             onReady?.(term);
@@ -1326,9 +1382,9 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         });
       };
 
-      // Create the deferred PTY once the restored tab becomes visible. It may be
-      // visible in an unfocused split pane, so focus and visibility stay separate.
-      if ((props.isVisible ?? props.isActive) && deferredRestoreRef.current) {
+      // Create the deferred PTY once the layout is active. It may be hidden in a
+      // background tab within the same layout; those restoring tabs still launch.
+      if ((props.layoutActive ?? true) && deferredRestoreRef.current) {
         if (!props.projectPath) return;
 
         scheduleRefit((term) => {
@@ -1340,7 +1396,15 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
             try {
               await ensureListeners();
 
-              const effectiveResumeId = props.resumeId;
+              const cliTool = resolveCliTool(props.cliTool, props.launchClaude);
+              const runtimeKind = resolveRuntimeKind(props.ssh, props.wsl);
+              const effectiveResumeId = await resolveResumeIdFromHistory({
+                currentResumeId: props.resumeId,
+                projectId: props.projectId,
+                projectPath: props.projectPath,
+                cliTool,
+                runtimeKind,
+              });
 
               if (isUnmountedRef.current) return;
 
@@ -1369,7 +1433,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
                 wsl: props.wsl,
               });
               const sessionId = await terminalRestoreLaunchQueue.run(launchSession, {
-                isCancelled: () => isUnmountedRef.current || activationCancelled || !isVisibleRef.current,
+                isCancelled: () => isUnmountedRef.current || activationCancelled || !layoutActiveRef.current,
                 onState: props.onRestoreLaunchState,
               });
               props.onRestoreLaunchState?.("idle");
@@ -1385,9 +1449,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
               });
               onSessionCreatedRef.current(sessionId);
               if (!effectiveResumeId) {
-                const cliTool = resolveCliTool(props.cliTool, props.launchClaude);
                 if (cliTool !== "none") {
-                  const runtimeKind = resolveRuntimeKind(props.ssh, props.wsl);
                   historyService.startLaunchHistoryBackfill(
                     props.projectId,
                     sessionId,
@@ -1444,7 +1506,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         };
       }
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [props.isActive, props.isVisible]);
+    }, [props.isActive, props.isVisible, props.layoutActive]);
 
     return (
       <div

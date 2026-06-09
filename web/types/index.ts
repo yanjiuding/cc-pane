@@ -3,6 +3,7 @@ export type {
   PaneNode,
   Panel,
   SplitPane,
+  LayoutEntry,
   SplitDirection,
   PaneContextAction,
 } from "./pane";

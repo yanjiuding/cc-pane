@@ -25,6 +25,14 @@ export interface SplitPane {
   sizes: number[]; // 各子面板占比百分比
 }
 
+/** 一套可切换的整屏分屏布局 */
+export interface LayoutEntry {
+  id: string;
+  name: string;
+  rootPane: PaneNode;
+  activePaneId: string;
+}
+
 /** 面板操作类型 */
 export type SplitDirection = "right" | "down";
 

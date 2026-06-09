@@ -24,6 +24,7 @@ import OrchestrationOverlay from "@/components/orchestration/OrchestrationOverla
 import BorderlessFloatingButton from "@/components/BorderlessFloatingButton";
 import OnboardingGuide from "@/components/OnboardingGuide";
 import ErrorBoundary from "@/components/ErrorBoundary";
+import { LayoutVisibilityContext } from "@/contexts/LayoutVisibilityContext";
 
 import RecentFilesPicker from "@/components/RecentFilesPicker";
 import PopupTerminalWindow from "@/components/PopupTerminalWindow";
@@ -59,13 +60,7 @@ import { playNotificationSound } from "@/utils/notificationSound";
 import { findPaneFocusTarget, readPaneFocusRects, type PaneFocusDirection } from "@/utils/paneFocus";
 import { registerGlobalApi } from "@/utils/globalApi";
 import i18n from "@/i18n";
-import type { PaneNode, Panel as PanelType, OpenTerminalOptions, SavedSession, TerminalPaneLeaf, TerminalPaneNode } from "@/types";
-
-/** 递归遍历 pane 树，收集所有 Panel 节点 */
-function getAllPanels(pane: PaneNode): PanelType[] {
-  if (pane.type === "panel") return [pane];
-  return pane.children.flatMap(getAllPanels);
-}
+import type { OpenTerminalOptions, SavedSession, TerminalPaneLeaf, TerminalPaneNode } from "@/types";
 
 function findTerminalLeaf(node: TerminalPaneNode, paneId: string): TerminalPaneLeaf | null {
   if (node.type === "leaf") return node.id === paneId ? node : null;
@@ -110,6 +105,8 @@ function MainApp() {
   const isMiniMode = useMiniModeStore((s) => s.isMiniMode);
 
   const rootPane = usePanesStore((s) => s.rootPane);
+  const layouts = usePanesStore((s) => s.layouts);
+  const currentLayoutId = usePanesStore((s) => s.currentLayoutId);
   const openProject = usePanesStore((s) => s.openProject);
 
   const sidebarVisible = useActivityBarStore((s) => s.sidebarVisible);
@@ -353,7 +350,7 @@ function MainApp() {
   useEffect(() => {
     waitForTauri().then((ready) => {
       if (!ready) return;
-      const allPanels = getAllPanels(usePanesStore.getState().rootPane);
+      const allPanels = usePanesStore.getState().allPanelsAcrossLayouts();
       for (const panel of allPanels) {
         for (const tab of panel.tabs) {
           if (tab.resumeId && tab.resumeId !== "new" && tab.launchClaude) {
@@ -815,7 +812,19 @@ function MainApp() {
                   {/* 面板区域 */}
                   <div className="flex-1 overflow-hidden" style={{ background: "var(--app-panel-bg)" }}>
                     <DndPaneProvider>
-                      <PaneContainer pane={rootPane} />
+                      {layouts.map((layout) => {
+                        const isCurrent = layout.id === currentLayoutId;
+                        return (
+                          <LayoutVisibilityContext.Provider key={layout.id} value={isCurrent}>
+                            <div
+                              className="h-full w-full"
+                              style={{ display: isCurrent ? "block" : "none" }}
+                            >
+                              <PaneContainer pane={isCurrent ? rootPane : layout.rootPane} />
+                            </div>
+                          </LayoutVisibilityContext.Provider>
+                        );
+                      })}
                     </DndPaneProvider>
                   </div>
                 </>

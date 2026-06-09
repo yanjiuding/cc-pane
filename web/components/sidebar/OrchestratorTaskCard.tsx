@@ -50,15 +50,15 @@ function truncateSummary(summary?: string): string {
 
 function focusSessionTab(sessionId: string): void {
   const panes = usePanesStore.getState();
-  for (const pane of panes.allPanels()) {
-    const tabIndex = pane.tabs.findIndex((tab) => tab.sessionId === sessionId);
-    if (tabIndex >= 0) {
-      // fix(C3) review: 不再发送 dead event，直接激活匹配 session 的 pane/tab。
-      panes.setActivePane(pane.id);
-      panes.switchToTab(pane.id, tabIndex);
-      return;
-    }
+  const location = panes.findTabBySessionAcrossLayouts(sessionId);
+  if (!location) return;
+  if (location.layoutId !== panes.currentLayoutId) {
+    panes.switchLayout(location.layoutId);
   }
+  const tabIndex = location.panel.tabs.findIndex((tab) => tab.id === location.tab.id);
+  // fix(C3) review: 不再发送 dead event，直接激活匹配 session 的 pane/tab。
+  panes.setActivePane(location.panel.id);
+  panes.switchToTab(location.panel.id, tabIndex);
 }
 
 interface OrchestratorTaskCardProps {

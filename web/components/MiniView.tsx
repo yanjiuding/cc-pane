@@ -8,26 +8,35 @@ import type { Tab } from "@/types";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauriReady, handleErrorSilent } from "@/utils";
 
+interface MiniSessionTab {
+  tab: Tab;
+  paneId: string;
+  layoutId: string;
+}
+
 export default function MiniView() {
   const { t } = useTranslation("common");
   const rootPane = usePanesStore((s) => s.rootPane);
   const allPanels = usePanesStore((s) => s.allPanels);
+  const currentLayoutId = usePanesStore((s) => s.currentLayoutId);
   const getStatus = useTerminalStatusStore((s) => s.getStatus);
   const exitMiniMode = useMiniModeStore((s) => s.exitMiniMode);
 
   const [isPinned, setIsPinned] = useState(true);
 
-  const activeTabs = useMemo<Tab[]>(() => {
-    const tabs: Tab[] = [];
+  const activeTabs = useMemo<MiniSessionTab[]>(() => {
+    const tabs: MiniSessionTab[] = [];
     for (const panel of allPanels()) {
       for (const tab of panel.tabs) {
-        if (tab.sessionId) tabs.push(tab);
+        if (tab.sessionId) {
+          tabs.push({ tab, paneId: panel.id, layoutId: currentLayoutId });
+        }
       }
     }
     return tabs;
     // rootPane 变化时重新计算，allPanels 是派生方法
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rootPane]);
+  }, [rootPane, currentLayoutId]);
 
   async function togglePin() {
     try {
@@ -40,6 +49,18 @@ export default function MiniView() {
 
   function handleRestore() {
     exitMiniMode();
+  }
+
+  function handleRestoreTab(item: MiniSessionTab) {
+    const store = usePanesStore.getState();
+    const location = store.findTabAcrossLayouts(item.tab.id)
+      ?? { layoutId: item.layoutId, panel: { id: item.paneId }, tab: item.tab };
+    if (location.layoutId !== store.currentLayoutId) {
+      store.switchLayout(location.layoutId);
+    }
+    store.setActivePane(location.panel.id);
+    store.selectTab(location.panel.id, location.tab.id);
+    handleRestore();
   }
 
   function startDrag() {
@@ -92,16 +113,16 @@ export default function MiniView() {
 
       {/* 状态网格 */}
       <div className="flex-1 grid grid-cols-2 gap-0.5 p-1 overflow-y-auto">
-        {activeTabs.map((tab) => (
+        {activeTabs.map((item) => (
           <div
-            key={tab.id}
+            key={item.tab.id}
             className="flex items-center gap-1 px-1.5 py-1 rounded cursor-pointer transition-colors hover:bg-[var(--app-active-bg)]"
             style={{ background: "var(--app-hover)" }}
-            onDoubleClick={(e) => { e.stopPropagation(); handleRestore(); }}
+            onDoubleClick={(e) => { e.stopPropagation(); handleRestoreTab(item); }}
           >
-            <StatusIndicator status={getStatus(tab.sessionId)} size={8} />
+            <StatusIndicator status={getStatus(item.tab.sessionId)} size={8} />
             <span className="text-[10px] overflow-hidden text-ellipsis whitespace-nowrap" style={{ color: "var(--app-text-secondary)" }}>
-              {tab.title}
+              {item.tab.title}
             </span>
           </div>
         ))}

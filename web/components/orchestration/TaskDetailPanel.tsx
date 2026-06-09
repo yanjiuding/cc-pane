@@ -134,14 +134,15 @@ export default function TaskDetailPanel({ binding }: TaskDetailPanelProps) {
     useActivityBarStore.getState().setAppViewMode("panes");
     window.requestAnimationFrame(() => {
       const panes = usePanesStore.getState();
-      for (const pane of panes.allPanels()) {
-        const tabIndex = pane.tabs.findIndex((tab) => tab.sessionId === binding.sessionId);
-        if (tabIndex >= 0) {
-          // fix(C3) review: 详情页直接激活 pane/tab，不再依赖未监听的 focus-session 事件。
-          panes.setActivePane(pane.id);
-          panes.switchToTab(pane.id, tabIndex);
-          break;
+      const location = panes.findTabBySessionAcrossLayouts(binding.sessionId!);
+      if (location) {
+        if (location.layoutId !== panes.currentLayoutId) {
+          panes.switchLayout(location.layoutId);
         }
+        const tabIndex = location.panel.tabs.findIndex((tab) => tab.id === location.tab.id);
+        // fix(C3) review: 详情页直接激活 pane/tab，不再依赖未监听的 focus-session 事件。
+        panes.setActivePane(location.panel.id);
+        panes.switchToTab(location.panel.id, tabIndex);
       }
     });
   };

@@ -44,6 +44,7 @@ function renderTerminalTabContent(tab: Tab, options?: { isVisible?: boolean; isA
         tab={tab}
         isVisible={options?.isVisible ?? true}
         isActive={options?.isActive ?? true}
+        layoutActive
         onSessionCreated={vi.fn()}
         onSessionExited={vi.fn()}
         onTerminalRef={vi.fn()}
@@ -93,7 +94,7 @@ describe("TerminalTabContent", () => {
     expect(screen.queryByText("准备就绪")).not.toBeInTheDocument();
   });
 
-  it("shows waiting overlay for a hidden restoring leaf", () => {
+  it("shows restoring overlay for a hidden restoring leaf", () => {
     renderTerminalTabContent(
       createTerminalTab({
         terminalRootPane: {
@@ -106,8 +107,8 @@ describe("TerminalTabContent", () => {
       { isVisible: false, isActive: false },
     );
 
-    expect(screen.getByText("等待恢复")).toBeVisible();
-    expect(screen.getByText("切换到此标签后启动保存的会话")).toBeVisible();
+    expect(screen.getByText("正在恢复会话")).toBeVisible();
+    expect(screen.getByText("正在启动保存的终端会话...")).toBeVisible();
   });
 
   it("shows queued restore state reported by the terminal view", () => {

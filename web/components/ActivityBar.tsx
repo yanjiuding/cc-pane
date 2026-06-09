@@ -1,5 +1,5 @@
 import {
-  Command, FolderTree, History, Bot, ListTodo, Settings, Files, Server, Zap, Workflow,
+  FolderTree, History, Bot, ListTodo, Settings, Files, Server, Zap, Workflow,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/tooltip";
 import { useActivityBarStore, type ActivityView } from "@/stores/useActivityBarStore";
 import { useDialogStore, useOrchestratorStore } from "@/stores";
+import LayoutBar from "@/components/LayoutBar";
 
 type ActivityBadge = number | { tone: "red" | "blue"; value?: number };
 
@@ -69,7 +70,6 @@ export default function ActivityBar() {
   const orchestrationOverlayOpen = useActivityBarStore((s) => s.orchestrationOverlayOpen);
   const toggleTodoMode = useActivityBarStore((s) => s.toggleTodoMode);
   const toggleSelfChatMode = useActivityBarStore((s) => s.toggleSelfChatMode);
-  const toggleHomeMode = useActivityBarStore((s) => s.toggleHomeMode);
   const toggleProvidersMode = useActivityBarStore((s) => s.toggleProvidersMode);
   const openSettings = useDialogStore((s) => s.openSettings);
   const orchestrationFailed = useOrchestratorStore((s) =>
@@ -79,8 +79,6 @@ export default function ActivityBar() {
     s.bindings.filter((binding) => binding.status === "running" || binding.status === "waiting")
       .length
   );
-
-  const isHomeActive = appViewMode === "home";
 
   const isViewActive = (view: ActivityView) => {
     if (view === "orchestration") return orchestrationOverlayOpen;
@@ -119,32 +117,7 @@ export default function ActivityBar() {
         WebkitAppRegion: "no-drag",
       } as React.CSSProperties}
     >
-      {/* Logo — 点击切换首页 */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <div className="pt-0.5 pb-2 flex items-center justify-center">
-            <button
-              className="w-8 h-8 rounded-xl flex items-center justify-center transition-all duration-200 hover:scale-105 hover:bg-[var(--app-activity-item-hover)] cursor-pointer"
-              style={{
-                background: isHomeActive ? "var(--app-accent)" : "var(--app-activity-bar-bg)",
-                border: `1px solid ${isHomeActive ? "var(--app-accent)" : "var(--app-activity-border)"}`,
-                boxShadow: isHomeActive
-                  ? "0 2px 8px color-mix(in srgb, var(--app-accent) 40%, transparent)"
-                  : "none",
-              }}
-              onClick={toggleHomeMode}
-            >
-              <Command
-                className="w-[14px] h-[14px]"
-                style={{ color: isHomeActive ? "var(--primary-foreground)" : "var(--app-accent)" }}
-              />
-            </button>
-          </div>
-        </TooltipTrigger>
-        <TooltipContent side="right" sideOffset={8}>
-          <p>{t("home", { ns: "common", defaultValue: "Home" })}</p>
-        </TooltipContent>
-      </Tooltip>
+      <LayoutBar />
 
       {/* Separator */}
       <div

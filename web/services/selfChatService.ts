@@ -66,7 +66,7 @@ async function collectAppContext(): Promise<string> {
     `你是 CC-Panes 的操控助手。CC-Panes 是一个多 CLI 的多实例分屏管理桌面应用。\n` +
     `你可以使用上面列出的 /ccbook:* skill 来帮助用户管理工作空间、Todo、Plans 等。\n\n` +
     `你拥有 ccpanes MCP 工具，按类别分组：\n` +
-    `- 编排: launch_task（启动 Claude/Codex 实例，可用 runtimeKind 指定 local/wsl/ssh）、list_projects（已注册项目）、get_task_status（任务状态）\n` +
+    `- 编排: launch_task（启动 Claude/Codex 实例，可用 runtimeKind 指定 local/wsl/ssh，可用 layoutId/layoutName/paneId 指定落点）、list_panes（查询布局和面板）、list_projects（已注册项目）、get_task_status（任务状态）\n` +
     `- 工作空间: list_workspaces、get_workspace、create_workspace、add_project_to_workspace、scan_directory\n` +
     `- 待办: query_todos、create_todo、update_todo\n` +
     `- 运行配置: create_runtime_config（创建/更新运行配置，可选创建共享 MCP）\n` +
@@ -75,6 +75,7 @@ async function collectAppContext(): Promise<string> {
     `- Skill: list_skills（查看项目可用命令模板）、list_external_skills（查看全局 Skill）\n\n` +
     `典型场景：\n` +
     `- 用户给目录路径 → scan_directory 发现项目 → create_workspace → add_project_to_workspace → launch_task\n` +
+    `- 需要把任务分组到某个布局 → list_panes 查看现有布局；launch_task 传 layoutName 可自动创建或复用布局，再把新 pane/tab 放进去\n` +
     `- 用 create_todo 跟踪多 Agent 工作进度，用 update_todo 更新状态\n` +
     `- 用户要添加 MCP → 项目专用用 upsert_mcp_server，共享复用用 upsert_shared_mcp_server\n` +
     `- 用 list_skills 查看项目可用 Skill，指导子 Agent 使用合适的命令\n\n` +

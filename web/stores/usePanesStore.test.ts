@@ -13,6 +13,13 @@ describe("usePanesStore", () => {
     usePanesStore.setState({
       rootPane: initialPanel,
       activePaneId: initialPanel.id,
+      layouts: [{
+        id: "layout-1",
+        name: "布局 1",
+        rootPane: initialPanel,
+        activePaneId: initialPanel.id,
+      }],
+      currentLayoutId: "layout-1",
       closedTabs: [],
     });
   });
