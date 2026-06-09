@@ -6,6 +6,10 @@ import i18n from "@/i18n";
 interface Props {
   children: ReactNode;
   fallbackTitle?: string;
+  /** Custom fallback node. When provided, it replaces the default error UI.
+   *  Useful for small/transparent windows (e.g. the 120x120 ccchan window)
+   *  where the default icon + button layout would be clipped. */
+  fallback?: ReactNode;
 }
 
 interface State {
@@ -30,6 +34,9 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (this.state.hasError) {
+      if (this.props.fallback !== undefined) {
+        return <>{this.props.fallback}</>;
+      }
       return (
         <div className="flex flex-col items-center justify-center h-full p-8 text-center gap-4">
           <AlertTriangle className="w-10 h-10 text-destructive opacity-60" />

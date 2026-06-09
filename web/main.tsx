@@ -34,7 +34,34 @@ async function renderRoot() {
 
   if (mode === "ccchan") {
     const { CCChanApp } = await import("./ccchan/CCChanApp");
-    root.render(<CCChanApp />);
+    const { default: ErrorBoundary } = await import("@/components/ErrorBoundary");
+    // Lightweight fallback sized for the 120x120 transparent ccchan window —
+    // the default ErrorBoundary UI (icon + button + p-8) would be clipped here.
+    const ccchanFallback = (
+      <div
+        style={{
+          width: 120,
+          height: 120,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          fontSize: 11,
+          lineHeight: 1.4,
+          color: "#ef4444",
+          background: "transparent",
+          padding: 8,
+          userSelect: "none",
+        }}
+      >
+        cc酱加载失败，请重开窗口
+      </div>
+    );
+    root.render(
+      <ErrorBoundary fallback={ccchanFallback}>
+        <CCChanApp />
+      </ErrorBoundary>,
+    );
   } else if (mode === "popup") {
     const { default: PopupTerminalWindow } = await import("@/components/PopupTerminalWindow");
     root.render(<PopupTerminalWindow />);

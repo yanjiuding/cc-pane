@@ -122,13 +122,9 @@ export function decideTerminalRenderer(
 
 export function resolveTerminalRendererModeForSession(
   requestedMode: string | null | undefined,
-  context: TerminalRendererSessionContext = {},
+  _context: TerminalRendererSessionContext = {},
 ): TerminalRendererMode {
-  const mode = normalizeTerminalRendererMode(requestedMode);
-  if (mode === "auto" && context.isWindows && context.cliToolId === "claude") {
-    return "dom";
-  }
-  return mode;
+  return normalizeTerminalRendererMode(requestedMode);
 }
 
 export function shouldUseTerminalWebglRenderer(

@@ -27,6 +27,18 @@ export interface CCChanEvent {
   ts: number;
 }
 
+export interface CCChanChatOutputPayload {
+  sessionId: string;
+  role: "assistant";
+  text: string;
+}
+
+export interface CCChanChatStatusPayload {
+  sessionId: string;
+  status: "starting" | "thinking" | "ready" | "exited" | "error";
+  message?: string | null;
+}
+
 export type CCChanPetState =
   | "idle"
   | "working"

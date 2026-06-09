@@ -9,6 +9,7 @@
 //! - 项目路径白名单校验
 //! - 请求频率限制
 
+use crate::ccchan_service::CCChanService;
 use crate::models::task_binding::{TaskBinding, TaskBindingStatus};
 use crate::models::todo::{
     CreateTodoRequest, TodoPriority, TodoQuery, TodoScope, TodoStatus, UpdateTodoRequest,
@@ -59,7 +60,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, LogicalSize, Manager};
 use tracing::{debug, error, info, warn};
 
 // ============ 数据模型 ============
@@ -372,6 +373,7 @@ pub struct AppState {
     pub external_skill_registry: Arc<ExternalSkillRegistry>,
     pub launch_history_service: Arc<LaunchHistoryService>,
     pub notification_service: Arc<NotificationService>,
+    pub ccchan_service: Arc<CCChanService>,
     pub settings_service: Arc<SettingsService>,
     pub plan_archive_service: Arc<crate::services::PlanArchiveService>,
     /// Runner Registry：项目运行实例 + 端口/PID 跟踪
@@ -452,6 +454,7 @@ impl OrchestratorService {
         external_skill_registry: Arc<ExternalSkillRegistry>,
         launch_history_service: Arc<LaunchHistoryService>,
         notification_service: Arc<NotificationService>,
+        ccchan_service: Arc<CCChanService>,
         settings_service: Arc<SettingsService>,
         plan_archive_service: Arc<crate::services::PlanArchiveService>,
         runner_service: Arc<cc_panes_core::services::RunnerService>,
@@ -478,6 +481,7 @@ impl OrchestratorService {
             external_skill_registry,
             launch_history_service,
             notification_service,
+            ccchan_service,
             settings_service,
             plan_archive_service,
             runner_service,
@@ -792,6 +796,7 @@ fn build_router(state: AppState) -> Router {
             "/api/notifications/trigger",
             post(handle_trigger_notification),
         )
+        .route("/api/ccchan/say", post(handle_ccchan_say))
         .route("/api/hook-event", post(handle_hook_event))
         .route("/api/memory/recall", post(handle_memory_recall))
         .route("/api/plan/tag", post(handle_plan_tag))
@@ -1242,6 +1247,15 @@ struct McpTriggerNotificationParams {
     #[serde(default)]
     #[schemars(schema_with = "notification_metadata_schema")]
     metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct McpCcChanSayParams {
+    /// 要显示在 cc酱气泡中的文本。
+    text: String,
+    /// 显示时长，单位毫秒。默认约 5.4 秒，限制在 1200..=30000。
+    duration_ms: Option<u64>,
 }
 
 // ============ Runner Registry Params ============
@@ -2230,6 +2244,19 @@ impl McpToolHandler {
         Self { state, tool_router }
     }
 
+    fn ccchan_say_impl(
+        &self,
+        text: &str,
+        duration_ms: Option<u64>,
+    ) -> std::result::Result<serde_json::Value, String> {
+        emit_ccchan_say(
+            &self.state.app_handle,
+            &self.state.ccchan_service,
+            text,
+            duration_ms,
+        )
+    }
+
     /// Spec 后置钩子：如果 Todo 是 spec 类型，自动同步 Tasks 段到 Spec 文件
     fn try_sync_spec_for_todo(&self, todo: &crate::models::todo::TodoItem) {
         if todo.todo_type != "spec" {
@@ -2726,6 +2753,18 @@ impl McpToolHandler {
             && params.resume_id.is_none()
             && matches!(runtime.kind.as_str(), "local" | "wsl")
         {
+            // WSL 时 rollout 的 session_meta.cwd 是 POSIX（/mnt/...），优先用 runtime.wsl.remote_path
+            // （已解析为 POSIX）作为反查候选，最易命中；非 WSL 回退 workspace 路径。
+            // 叠加 detect_in_sessions 的跨平台归一化（Windows/UNC↔POSIX）双保险。
+            let backfill_workspace_path = if runtime.kind.as_str() == "wsl" {
+                runtime
+                    .wsl
+                    .as_ref()
+                    .map(|wsl| wsl.remote_path.clone())
+                    .or_else(|| ws_path.clone())
+            } else {
+                ws_path.clone()
+            };
             tauri::async_runtime::spawn(crate::services::run_launch_history_backfill(
                 self.state.app_handle.clone(),
                 self.state.launch_history_service.clone(),
@@ -2735,7 +2774,7 @@ impl McpToolHandler {
                 runtime.kind.as_str().to_string(),
                 wsl_distro.map(|s| s.to_string()),
                 params.project_path.clone(),
-                ws_path.clone(),
+                backfill_workspace_path,
                 backfill_after_ts.clone(),
             ));
         }
@@ -3819,6 +3858,15 @@ impl McpToolHandler {
             Ok(result) => serde_json::to_string(&result).unwrap_or_else(|_| {
                 "{\"sent\":false,\"skipped\":true,\"reason\":\"serialization_failed\"}".to_string()
             }),
+            Err(error) => format!("错误: {}", error),
+        }
+    }
+
+    /// 让 cc酱在桌面浮窗中显示一句指定文本。适合轻量提醒、状态说明或手动打招呼。
+    #[tool]
+    async fn ccchan_say(&self, Parameters(params): Parameters<McpCcChanSayParams>) -> String {
+        match self.ccchan_say_impl(&params.text, params.duration_ms) {
+            Ok(result) => result.to_string(),
             Err(error) => format!("错误: {}", error),
         }
     }
@@ -5715,6 +5763,13 @@ struct TriggerNotificationRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CcChanSayRequest {
+    text: String,
+    duration_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionStartedRequest {
     launch_id: String,
     pty_session_id: String,
@@ -5739,6 +5794,123 @@ impl From<TriggerNotificationRequest> for NotificationRequest {
             metadata: value.metadata,
         }
     }
+}
+
+fn normalize_ccchan_say(
+    text: &str,
+    duration_ms: Option<u64>,
+) -> std::result::Result<(String, u64), String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return Err("text is required".to_string());
+    }
+    let text = text.chars().take(240).collect::<String>();
+    let duration_ms = duration_ms.unwrap_or(5_400).clamp(1_200, 30_000);
+    Ok((text, duration_ms))
+}
+
+fn emit_ccchan_say(
+    app_handle: &AppHandle,
+    ccchan_service: &CCChanService,
+    text: &str,
+    duration_ms: Option<u64>,
+) -> std::result::Result<serde_json::Value, String> {
+    let (text, duration_ms) = normalize_ccchan_say(text, duration_ms)?;
+    let needs_load_wait = app_handle.get_webview_window("ccchan").is_none();
+    ccchan_service
+        .show_window(app_handle)
+        .map_err(|error| format!("Failed to show ccchan: {error}"))?;
+    if needs_load_wait {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    let Some(window) = app_handle.get_webview_window("ccchan") else {
+        return Err("ccchan window was not created".to_string());
+    };
+    window
+        .set_size(LogicalSize::new(300.0, 220.0))
+        .map_err(|error| format!("Failed to resize ccchan for bubble: {error}"))?;
+    let text_json = serde_json::to_string(&text)
+        .map_err(|error| format!("Failed to encode ccchan text: {error}"))?;
+    let script = format!(
+        r#"
+(() => {{
+  const text = {text_json};
+  const durationMs = {duration_ms};
+  const root = document.getElementById("root");
+  if (root) {{
+    root.dataset.ccchanBubbleShift = "1";
+    root.style.transform = "translate(10px, 96px)";
+    root.style.transition = "transform 140ms ease";
+  }}
+  let bubble = document.getElementById("ccchan-manual-bubble");
+  if (!bubble) {{
+    bubble = document.createElement("div");
+    bubble.id = "ccchan-manual-bubble";
+    bubble.style.cssText = [
+      "position:fixed",
+      "left:12px",
+      "top:8px",
+      "z-index:2147483647",
+      "width:260px",
+      "box-sizing:border-box",
+      "border:2px solid #38bdf8",
+      "border-radius:8px",
+      "padding:8px 11px",
+      "background:#ffffff",
+      "color:#0f172a",
+      "font:600 13px/19px system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+      "box-shadow:0 14px 32px rgba(15,23,42,.28), 0 0 0 3px rgba(255,255,255,.72)",
+      "pointer-events:none",
+      "white-space:normal",
+      "overflow-wrap:anywhere"
+    ].join(";");
+    const tail = document.createElement("div");
+    tail.style.cssText = [
+      "position:absolute",
+      "left:54px",
+      "bottom:-9px",
+      "width:14px",
+      "height:14px",
+      "box-sizing:border-box",
+      "background:#ffffff",
+      "border-right:2px solid #38bdf8",
+      "border-bottom:2px solid #38bdf8",
+      "transform:rotate(45deg)",
+      "box-shadow:4px 4px 8px rgba(15,23,42,.08)"
+    ].join(";");
+    const body = document.createElement("span");
+    body.id = "ccchan-manual-bubble-text";
+    body.style.cssText = "position:relative;z-index:1";
+    bubble.appendChild(tail);
+    bubble.appendChild(body);
+    document.body.appendChild(bubble);
+  }}
+  const body = document.getElementById("ccchan-manual-bubble-text") || bubble;
+  body.textContent = text;
+  clearTimeout(window.__ccchanManualBubbleTimer);
+  window.__ccchanManualBubbleTimer = setTimeout(() => {{
+    bubble.remove();
+    if (root && root.dataset.ccchanBubbleShift === "1") {{
+      root.style.transform = "";
+      delete root.dataset.ccchanBubbleShift;
+    }}
+  }}, durationMs);
+}})();
+"#
+    );
+    window
+        .eval(&script)
+        .map_err(|error| format!("Failed to dispatch ccchan-say-dom: {error}"))?;
+    let shrink_window = window.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(duration_ms));
+        let _ = shrink_window.set_size(LogicalSize::new(120.0, 120.0));
+    });
+    Ok(serde_json::json!({
+        "success": true,
+        "text": text,
+        "durationMs": duration_ms,
+    }))
 }
 
 // ---- PTY Control REST Handlers ----
@@ -6009,6 +6181,44 @@ async fn handle_trigger_notification(
         .trigger(&state.app_handle, &state.settings_service, request)
     {
         Ok(result) => (StatusCode::OK, Json(serde_json::json!(result))),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!(ApiError { error })),
+        ),
+    }
+}
+
+async fn handle_ccchan_say(
+    headers: HeaderMap,
+    State(state): State<AppState>,
+    Json(req): Json<CcChanSayRequest>,
+) -> impl IntoResponse {
+    if !verify_token(&headers, &state.token) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!(ApiError {
+                error: "Invalid or missing Bearer token".to_string()
+            })),
+        );
+    }
+
+    if !check_rate_limit(&state.last_request_times) {
+        warn!("REST::ccchan_say rate limit exceeded");
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(serde_json::json!(ApiError {
+                error: "Rate limit exceeded".to_string()
+            })),
+        );
+    }
+
+    match emit_ccchan_say(
+        &state.app_handle,
+        &state.ccchan_service,
+        &req.text,
+        req.duration_ms,
+    ) {
+        Ok(result) => (StatusCode::OK, Json(result)),
         Err(error) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!(ApiError { error })),

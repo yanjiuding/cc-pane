@@ -60,25 +60,34 @@ export const useTerminalStatusStore = create<TerminalStatusState>((set, get) => 
 
     await get().refreshLiveStatuses();
 
-    const unlistenFn = await getCurrentWebview().listen<TerminalStatusInfo>("terminal-status", (event) => {
-      if (killedSessions.has(event.payload.sessionId)) return;
-      const current = get().statusMap.get(event.payload.sessionId);
-      if (
-        current &&
-        current.status === event.payload.status &&
-        current.updatedAt === event.payload.updatedAt &&
-        current.currentToolName === event.payload.currentToolName &&
-        current.currentToolUseId === event.payload.currentToolUseId &&
-        current.currentToolSummary === event.payload.currentToolSummary
-      ) {
-        return;
-      }
-      set((state) => {
-        const newMap = new Map(state.statusMap);
-        newMap.set(event.payload.sessionId, event.payload);
-        return { statusMap: newMap };
+    let unlistenFn: UnlistenFn;
+    try {
+      unlistenFn = await getCurrentWebview().listen<TerminalStatusInfo>("terminal-status", (event) => {
+        if (killedSessions.has(event.payload.sessionId)) return;
+        const current = get().statusMap.get(event.payload.sessionId);
+        if (
+          current &&
+          current.status === event.payload.status &&
+          current.updatedAt === event.payload.updatedAt &&
+          current.currentToolName === event.payload.currentToolName &&
+          current.currentToolUseId === event.payload.currentToolUseId &&
+          current.currentToolSummary === event.payload.currentToolSummary
+        ) {
+          return;
+        }
+        set((state) => {
+          const newMap = new Map(state.statusMap);
+          newMap.set(event.payload.sessionId, event.payload);
+          return { statusMap: newMap };
+        });
       });
-    });
+    } catch (error) {
+      // internals 未就绪 / 监听注册失败：回滚 _initialized 以便后续可重试，
+      // 且不抛出 unhandled rejection（调用方 void init() 收不到错误）。
+      console.warn("[terminal-status] failed to subscribe to terminal-status:", error);
+      set({ _initialized: false });
+      return;
+    }
     set({ _unlisten: unlistenFn });
 
     // Idle 阈值 30 秒，检查间隔 15 秒足够（无需 5 秒精度）

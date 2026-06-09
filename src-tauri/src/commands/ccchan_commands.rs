@@ -28,7 +28,7 @@ pub async fn hide_ccchan(app: AppHandle) -> AppResult<()> {
 pub async fn resize_ccchan_for_chat(window: WebviewWindow, expanded: bool) -> AppResult<()> {
     debug!(expanded, "cmd::resize_ccchan_for_chat");
     let (width, height) = if expanded {
-        (460.0, 640.0)
+        (460.0, 680.0)
     } else {
         (120.0, 120.0)
     };
@@ -42,6 +42,19 @@ pub async fn resize_ccchan_for_menu(window: WebviewWindow, expanded: bool) -> Ap
     debug!(expanded, "cmd::resize_ccchan_for_menu");
     let (width, height) = if expanded {
         (300.0, 280.0)
+    } else {
+        (120.0, 120.0)
+    };
+    window
+        .set_size(LogicalSize::new(width, height))
+        .map_err(|error| AppError::from(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn resize_ccchan_for_bubble(window: WebviewWindow, expanded: bool) -> AppResult<()> {
+    debug!(expanded, "cmd::resize_ccchan_for_bubble");
+    let (width, height) = if expanded {
+        (300.0, 220.0)
     } else {
         (120.0, 120.0)
     };
@@ -127,6 +140,21 @@ pub async fn stop_ccchan_chat(
     .await
     .map_err(|error| AppError::from(error.to_string()))?;
     result
+}
+
+#[tauri::command]
+pub fn is_ccchan_chat_session_alive(
+    app: AppHandle,
+    terminal_service: State<'_, Arc<TerminalService>>,
+    session_id: String,
+) -> AppResult<bool> {
+    debug!(session_id = %session_id, "cmd::is_ccchan_chat_session_alive");
+    let service = app
+        .try_state::<Arc<CCChanService>>()
+        .ok_or_else(|| AppError::from("CCChanService is not registered"))?
+        .inner()
+        .clone();
+    service.is_chat_session_alive(terminal_service.inner().clone(), &session_id)
 }
 
 #[tauri::command]

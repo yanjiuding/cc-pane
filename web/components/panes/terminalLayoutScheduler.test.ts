@@ -90,6 +90,33 @@ describe("terminal layout scheduler", () => {
     expect(scheduler.hasPendingLayout()).toBe(true);
   });
 
+  it("can layout a visible inactive pane when explicitly allowed", () => {
+    const host = createRenderableHost();
+    const term = { cols: 80, rows: 24, focus: vi.fn() } as unknown as Terminal;
+    const fitAddon = { fit: vi.fn() } as unknown as FitAddon;
+    const onAfterLayout = vi.fn();
+
+    const scheduler = createTerminalLayoutScheduler({
+      getTerminal: () => term,
+      getFitAddon: () => fitAddon,
+      getHost: () => host,
+      getSessionId: () => "session-1",
+      isActive: () => false,
+      repaint: vi.fn(),
+      resizeBackend: vi.fn(),
+      logger: vi.fn(),
+    });
+
+    expect(scheduler.flush("inactive-visible", {
+      allowInactive: true,
+      onAfterLayout,
+    })).toBe(term);
+    expect(fitAddon.fit).toHaveBeenCalledOnce();
+    expect(onAfterLayout).toHaveBeenCalledWith(term);
+    expect(term.focus).not.toHaveBeenCalled();
+    expect(scheduler.hasPendingLayout()).toBe(false);
+  });
+
   it("can force a layout even when the container delta is below the jitter threshold", () => {
     const host = createRenderableHost();
     const term = { cols: 80, rows: 24 } as Terminal;

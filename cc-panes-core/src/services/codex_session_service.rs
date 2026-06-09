@@ -28,6 +28,75 @@ fn normalize_compare_path(path: &str) -> String {
     path.replace('\\', "/").trim_end_matches('/').to_lowercase()
 }
 
+/// 跨平台归一化 backfill 反查的路径比较键：把 Windows 盘符 / WSL UNC / `\\?\` 扩展前缀
+/// 统一到 WSL 视角的 POSIX `/mnt/<drive>/...`，让 Windows/UNC 形态的候选能匹配 rollout
+/// 里 POSIX 形态的 `session_meta.cwd`。非 WSL 网络共享、盘符相对路径不强转 `/mnt`，仅做
+/// 保守归一（避免误判）。**无 `#[cfg(windows)]`**：cc-panes-core 跨平台、需在 Linux 跑单测。
+fn normalize_cross_platform_compare_path(path: &str) -> String {
+    let stripped = strip_extended_length_prefix(path);
+    let slashed = stripped.replace('\\', "/");
+
+    // WSL UNC（//wsl.localhost/<distro>/… | //wsl$/<distro>/… | //wsl/<distro>/…）
+    // → 取 distro 内的 POSIX 绝对路径，POSIX 大小写敏感不 lowercase。
+    if let Some(rest) = strip_wsl_unc_prefix(&slashed) {
+        return rest.trim_end_matches('/').to_string();
+    }
+
+    // 盘符绝对路径（D:/x，`:` 后紧跟分隔符）→ /mnt/d/x（盘符路径统一 lowercase）。
+    if let Some(mnt) = drive_to_mnt_path(&slashed) {
+        return mnt.trim_end_matches('/').to_lowercase();
+    }
+
+    // 纯 POSIX 绝对路径（单斜杠开头、非 UNC 双斜杠）：去尾斜杠，保持大小写（Linux 敏感）。
+    if slashed.starts_with('/') && !slashed.starts_with("//") {
+        return slashed.trim_end_matches('/').to_string();
+    }
+
+    // 兜底（纯 UNC //server/share、C:relative 相对路径、其它）：lowercase + 去尾斜杠
+    // （= 旧 normalize_compare_path 行为）。
+    slashed.trim_end_matches('/').to_lowercase()
+}
+
+/// 剥离 Windows 扩展长度前缀：`\\?\UNC\server\share` → `\\server\share`；`\\?\D:\x` → `D:\x`。
+fn strip_extended_length_prefix(path: &str) -> String {
+    let lower = path.to_ascii_lowercase();
+    if lower.starts_with(r"\\?\unc\") {
+        return format!(r"\\{}", &path[r"\\?\UNC\".len()..]);
+    }
+    if let Some(rest) = path.strip_prefix(r"\\?\") {
+        return rest.to_string();
+    }
+    path.to_string()
+}
+
+/// 识别 WSL UNC 主机（wsl.localhost / wsl$ / wsl）并返回 distro 内的 POSIX 路径（含前导 `/`）。
+/// 入参须已把 `\` 转 `/`。非 WSL 主机返回 None。
+fn strip_wsl_unc_prefix(slashed: &str) -> Option<&str> {
+    let rest = slashed.strip_prefix("//")?;
+    let lower = rest.to_ascii_lowercase();
+    let is_wsl_host = lower.starts_with("wsl.localhost/")
+        || lower.starts_with("wsl$/")
+        || lower.starts_with("wsl/");
+    if !is_wsl_host {
+        return None;
+    }
+    let host_slash = rest.find('/')?;
+    let after_host = &rest[host_slash + 1..];
+    let distro_slash = after_host.find('/')?;
+    Some(&after_host[distro_slash..])
+}
+
+/// Windows 盘符绝对路径 → `/mnt/<drive>/…`。要求 `<letter>:` 后紧跟分隔符，
+/// 否则（如 `C:relative`）返回 None，不当作绝对盘符。入参须已把 `\` 转 `/`。
+fn drive_to_mnt_path(slashed: &str) -> Option<String> {
+    let bytes = slashed.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
+        let drive = bytes[0].to_ascii_lowercase() as char;
+        return Some(format!("/mnt/{}{}", drive, &slashed[2..]));
+    }
+    None
+}
+
 fn collect_user_text(content: &Value) -> Option<String> {
     let items = content.as_array()?;
     let mut merged = Vec::new();
@@ -385,7 +454,7 @@ elif command -v python >/dev/null 2>&1; then
 else
   exit 127
 fi
-"$PY_BIN" - <<'PY'
+"\$PY_BIN" - <<'PY'
 import json
 from pathlib import Path
 
@@ -534,7 +603,7 @@ fn detect_in_sessions(
 ) -> Result<Option<String>, String> {
     let targets = cli_project_paths
         .iter()
-        .map(|path| normalize_compare_path(path))
+        .map(|path| normalize_cross_platform_compare_path(path))
         .collect::<Vec<_>>();
 
     // mtime 被截成整秒（CodexSession.modified_at = as_secs），而 after 带亚秒；
@@ -553,7 +622,7 @@ fn detect_in_sessions(
         if modified_at < after_relaxed {
             continue;
         }
-        let session_path = normalize_compare_path(&session.project_path);
+        let session_path = normalize_cross_platform_compare_path(&session.project_path);
         if targets.contains(&session_path) {
             return Ok(Some(session.id));
         }
@@ -574,7 +643,10 @@ pub fn detect_wsl_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{detect_in_sessions, extract_session_description, parse_session_file, CodexSession};
+    use super::{
+        detect_in_sessions, extract_session_description, normalize_cross_platform_compare_path,
+        parse_session_file, CodexSession,
+    };
     use std::fs;
     use tempfile::NamedTempFile;
 
@@ -673,5 +745,96 @@ mod tests {
         let sessions = vec![mk_session("win", "d:/proj/app", 1000)];
         let got = detect_in_sessions(sessions, &["D:\\Proj\\App"], after_at(1000)).unwrap();
         assert_eq!(got, Some("win".to_string()));
+    }
+
+    #[test]
+    fn normalize_cross_platform_drive_to_mnt() {
+        assert_eq!(
+            normalize_cross_platform_compare_path("I:\\Proj"),
+            "/mnt/i/proj"
+        );
+        assert_eq!(
+            normalize_cross_platform_compare_path("D:/Code/App"),
+            "/mnt/d/code/app"
+        );
+    }
+
+    #[test]
+    fn normalize_cross_platform_wsl_unc_variants() {
+        assert_eq!(
+            normalize_cross_platform_compare_path(r"\\wsl.localhost\Ubuntu\mnt\d\cc-book"),
+            "/mnt/d/cc-book"
+        );
+        assert_eq!(
+            normalize_cross_platform_compare_path(r"\\wsl$\Ubuntu\mnt\i\x"),
+            "/mnt/i/x"
+        );
+        // 兼容 \\wsl\<distro> 历史写法。
+        assert_eq!(
+            normalize_cross_platform_compare_path(r"\\wsl\Ubuntu\mnt\d\x"),
+            "/mnt/d/x"
+        );
+    }
+
+    #[test]
+    fn normalize_cross_platform_extended_length_prefixes() {
+        // \\?\D:\x 与 \\?\UNC\wsl.localhost\... 扩展前缀须先剥离再归一。
+        assert_eq!(
+            normalize_cross_platform_compare_path(r"\\?\D:\x"),
+            "/mnt/d/x"
+        );
+        assert_eq!(
+            normalize_cross_platform_compare_path(r"\\?\UNC\wsl.localhost\Ubuntu\mnt\d\x"),
+            "/mnt/d/x"
+        );
+    }
+
+    #[test]
+    fn normalize_cross_platform_posix_passthrough() {
+        assert_eq!(
+            normalize_cross_platform_compare_path("/mnt/i/x"),
+            "/mnt/i/x"
+        );
+        // POSIX 大小写敏感，不 lowercase；去尾斜杠。
+        assert_eq!(
+            normalize_cross_platform_compare_path("/home/dev/Repo/"),
+            "/home/dev/Repo"
+        );
+    }
+
+    #[test]
+    fn normalize_cross_platform_non_wsl_unc_not_mounted() {
+        // 纯网络共享不转 /mnt，仅保守归一（lowercase + 去尾斜杠）。
+        assert_eq!(
+            normalize_cross_platform_compare_path(r"\\server\share\X"),
+            "//server/share/x"
+        );
+    }
+
+    #[test]
+    fn normalize_cross_platform_drive_relative_not_absolute() {
+        // C:relative（: 后非分隔符）不当绝对盘符，仅兜底归一。
+        assert_eq!(
+            normalize_cross_platform_compare_path("C:relative"),
+            "c:relative"
+        );
+    }
+
+    #[test]
+    fn detect_matches_wsl_posix_cwd_against_windows_candidates() {
+        // rollout cwd 是 POSIX；候选给 Windows 盘符 / WSL UNC / POSIX 三种都应命中。
+        for cand in [
+            "I:\\proj",
+            r"\\wsl.localhost\Ubuntu\mnt\i\proj",
+            "/mnt/i/proj",
+        ] {
+            let sessions = vec![mk_session("wslhit", "/mnt/i/proj", 1000)];
+            let got = detect_in_sessions(sessions, &[cand], after_at(1000)).unwrap();
+            assert_eq!(
+                got,
+                Some("wslhit".to_string()),
+                "candidate {cand} should match POSIX rollout cwd"
+            );
+        }
     }
 }

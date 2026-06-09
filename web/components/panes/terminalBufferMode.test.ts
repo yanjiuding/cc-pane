@@ -17,9 +17,10 @@ describe("terminalBufferMode", () => {
     expect(stripAlternateBufferSequences("a\x1b[?1049hb\x1b[?1049lc")).toBe("abc");
   });
 
-  it("keeps Codex output in the normal buffer", () => {
+  it("keeps agent CLI output in the normal buffer", () => {
     expect(shouldKeepCliOutputInNormalBuffer("codex")).toBe(true);
-    expect(shouldKeepCliOutputInNormalBuffer("claude")).toBe(false);
+    expect(shouldKeepCliOutputInNormalBuffer("claude")).toBe(true);
+    expect(shouldKeepCliOutputInNormalBuffer("gemini")).toBe(false);
     expect(shouldKeepCliOutputInNormalBuffer("none")).toBe(false);
   });
 });

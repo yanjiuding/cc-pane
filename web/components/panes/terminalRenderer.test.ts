@@ -77,11 +77,11 @@ describe("terminal renderer selection", () => {
     expect(normalizeTerminalRendererMode("dom")).toBe("dom");
   });
 
-  it("uses DOM for Claude on Windows when renderer mode is auto", () => {
+  it("keeps auto renderer mode for Claude on Windows", () => {
     expect(resolveTerminalRendererModeForSession("auto", {
       cliToolId: "claude",
       isWindows: true,
-    })).toBe("dom");
+    })).toBe("auto");
   });
 
   it("keeps explicit WebGL and Codex auto renderer decisions", () => {

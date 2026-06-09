@@ -47,9 +47,9 @@
   "scrollback": "回滚行数",
   "rendererMode": "渲染器",
   "rendererAuto": "自动（优先 WebGL）",
-  "rendererWebgl": "强制 WebGL",
+  "rendererWebgl": "尝试 WebGL",
   "rendererDom": "DOM 降级",
-  "rendererHint": "自动模式会在 Chromium/WebView2 上启用 WebGL，仅在宿主不支持时降级。",
+  "rendererHint": "自动模式会在 Chromium/WebView2 上尝试 WebGL，宿主或插件不支持时会降级。",
   "shellAutoDetect": "留空则自动检测",
 
   "voiceTitle": "语音输入",

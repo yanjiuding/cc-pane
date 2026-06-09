@@ -126,6 +126,36 @@ impl LaunchHistoryService {
         )
     }
 
+    /// 回填会话启动信息（upsert）：有记录则更新，无记录则创建带 pty+resume 的完整记录。
+    /// 用于 GUI 经 TabBar 新建等不写 launch_history 的启动路径，使 Codex 也能 reload 恢复。
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_session_started(
+        &self,
+        launch_id: &str,
+        pty_session_id: &str,
+        resume_session_id: &str,
+        cli_tool: &str,
+        runtime_kind: &str,
+        wsl_distro: Option<&str>,
+        launch_cwd: Option<&str>,
+        project_path: &str,
+        project_name: &str,
+        workspace_path: Option<&str>,
+    ) -> Result<i64, String> {
+        self.repo.upsert_session_started(
+            launch_id,
+            pty_session_id,
+            resume_session_id,
+            cli_tool,
+            runtime_kind,
+            wsl_distro,
+            launch_cwd,
+            project_path,
+            project_name,
+            workspace_path,
+        )
+    }
+
     /// 更新最后 Prompt
     pub fn update_last_prompt(&self, id: i64, last_prompt: &str) -> Result<(), String> {
         self.repo.update_last_prompt(id, last_prompt)

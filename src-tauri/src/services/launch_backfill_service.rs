@@ -18,9 +18,24 @@ use chrono::{DateTime, Utc};
 use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 use cc_panes_core::services::LaunchHistoryService;
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RescueNullCodexSummary {
+    pub checked: usize,
+    pub rescued: usize,
+    pub detect_errors: usize,
+    pub update_errors: usize,
+    pub list_failed: bool,
+}
+
+impl RescueNullCodexSummary {
+    pub fn has_errors(self) -> bool {
+        self.list_failed || self.detect_errors > 0 || self.update_errors > 0
+    }
+}
 
 /// 反查某次启动对应的 agent rollout/session id（claude/codex，含 wsl）。
 pub(crate) fn detect_resume_session(
@@ -120,6 +135,17 @@ fn detect_claude_session(
     Ok(None)
 }
 
+/// 从项目路径取末段作 project_name（跨 POSIX/Windows 分隔符），供 upsert 无记录时 INSERT。
+fn derive_project_name(project_path: &str) -> String {
+    let trimmed = project_path.trim_end_matches(['/', '\\']);
+    trimmed
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|segment| !segment.is_empty())
+        .unwrap_or(trimmed)
+        .to_string()
+}
+
 /// 兜底回填循环：每轮先查记录是否已有 resume_session_id（提前退出 / 幂等），否则反查并回填+emit。
 /// `after_ts` 应由调用方在创建 PTY 前捕获。`spawn` 在调用方完成，本函数只跑循环。
 #[allow(clippy::too_many_arguments)]
@@ -142,55 +168,109 @@ pub async fn run_launch_history_backfill(
             }
         }
 
-        if let Ok(Some(resume_session_id)) = detect_resume_session(
+        let detected = detect_resume_session(
             &cli_tool,
             Some(&runtime_kind),
             wsl_distro.as_deref(),
             project_path.clone(),
             workspace_path.clone(),
             after_ts.clone(),
-        ) {
-            if let Ok(Some(record_id)) = service.update_session_started(
-                &launch_id,
-                &pty_session_id,
-                &resume_session_id,
-                &cli_tool,
-                &runtime_kind,
-                wsl_distro.as_deref(),
-                workspace_path.as_deref(),
-            ) {
-                if let Ok(Some(last_prompt)) = extract_last_prompt(
-                    &cli_tool,
-                    Some(&runtime_kind),
-                    wsl_distro.as_deref(),
-                    &project_path,
-                    &resume_session_id,
-                ) {
-                    let _ =
-                        service.update_last_prompt_by_pty_session_id(&pty_session_id, &last_prompt);
+        );
+        let resume_session_id = match detected {
+            Ok(Some(resume_session_id)) => resume_session_id,
+            Ok(None) => {
+                if attempt == 14 {
+                    warn!(
+                        launch_id = %launch_id,
+                        pty_session_id = %pty_session_id,
+                        cli_tool = %cli_tool,
+                        runtime_kind = %runtime_kind,
+                        wsl_distro = ?wsl_distro,
+                        project_path = %project_path,
+                        workspace_path = ?workspace_path,
+                        after_ts = %after_ts,
+                        "launch-backfill: exhausted attempts without detecting resume_session_id"
+                    );
                 }
-                let _ = app_handle.emit(
-                    "history-updated",
-                    serde_json::json!({
-                        "source": "launch-backfill",
-                        "recordId": record_id,
-                        "launchId": launch_id,
-                        "ptySessionId": pty_session_id,
-                        "resumeSessionId": resume_session_id,
-                    }),
-                );
-                debug!(
+                let delay = if attempt < 4 { 500 } else { 2000 };
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                continue;
+            }
+            Err(error) => {
+                warn!(
                     launch_id = %launch_id,
                     pty_session_id = %pty_session_id,
-                    "launch-backfill: filled resume_session_id"
+                    cli_tool = %cli_tool,
+                    runtime_kind = %runtime_kind,
+                    wsl_distro = ?wsl_distro,
+                    project_path = %project_path,
+                    workspace_path = ?workspace_path,
+                    after_ts = %after_ts,
+                    attempt,
+                    err = %error,
+                    "launch-backfill: detect_resume_session failed"
                 );
+                let delay = if attempt < 4 { 500 } else { 2000 };
+                tokio::time::sleep(Duration::from_millis(delay)).await;
+                continue;
             }
-            return;
-        }
+        };
 
-        // Codex 冷启 1-3s：前几轮快查，之后放慢。总覆盖 ~2s + 22s。
-        let delay = if attempt < 4 { 500 } else { 2000 };
-        tokio::time::sleep(Duration::from_millis(delay)).await;
+        // upsert：有记录则更新；无记录（GUI 经 TabBar 新建等路径从未写 launch_history）
+        // 则创建一条带 pty+resume 的记录，使这类会话也能 reload 恢复。
+        let project_name = derive_project_name(&project_path);
+        let record_id = match service.upsert_session_started(
+            &launch_id,
+            &pty_session_id,
+            &resume_session_id,
+            &cli_tool,
+            &runtime_kind,
+            wsl_distro.as_deref(),
+            workspace_path.as_deref(),
+            &project_path,
+            &project_name,
+            workspace_path.as_deref(),
+        ) {
+            Ok(record_id) => record_id,
+            Err(error) => {
+                warn!(
+                    launch_id = %launch_id,
+                    pty_session_id = %pty_session_id,
+                    resume_session_id = %resume_session_id,
+                    cli_tool = %cli_tool,
+                    runtime_kind = %runtime_kind,
+                    err = %error,
+                    "launch-backfill: failed to persist detected resume_session_id"
+                );
+                return;
+            }
+        };
+        if let Ok(Some(last_prompt)) = extract_last_prompt(
+            &cli_tool,
+            Some(&runtime_kind),
+            wsl_distro.as_deref(),
+            &project_path,
+            &resume_session_id,
+        ) {
+            let _ = service.update_last_prompt_by_pty_session_id(&pty_session_id, &last_prompt);
+        }
+        let _ = app_handle.emit(
+            "history-updated",
+            serde_json::json!({
+                "source": "launch-backfill",
+                "recordId": record_id,
+                "launchId": launch_id,
+                "ptySessionId": pty_session_id,
+                "resumeSessionId": resume_session_id,
+            }),
+        );
+        debug!(
+            launch_id = %launch_id,
+            pty_session_id = %pty_session_id,
+            "launch-backfill: filled resume_session_id"
+        );
+
+        return;
     }
 }
 
@@ -199,20 +279,25 @@ pub async fn run_launch_history_backfill(
 /// 按各自 runtime/cwd + launched_at 反查 `~/.codex/sessions` 的 rollout id 补上，
 /// 使旧会话也能 reload 恢复。best-effort、按记录 launched_at 作为时间窗口起点。
 /// 调用方负责 marker 去重与放进后台任务。
-pub async fn rescue_null_codex_records(app_handle: AppHandle, service: Arc<LaunchHistoryService>) {
+pub async fn rescue_null_codex_records(
+    app_handle: AppHandle,
+    service: Arc<LaunchHistoryService>,
+) -> RescueNullCodexSummary {
+    let mut summary = RescueNullCodexSummary::default();
     let records = match service.list(2000) {
         Ok(records) => records,
         Err(error) => {
-            debug!(err = %error, "rescue_null_codex_records: list failed");
-            return;
+            summary.list_failed = true;
+            warn!(err = %error, "rescue_null_codex_records: list failed");
+            return summary;
         }
     };
 
-    let mut rescued = 0usize;
     for record in records {
         if record.cli_tool != "codex" || record.resume_session_id.is_some() {
             continue;
         }
+        summary.checked += 1;
         // 反查时间窗口起点：用记录的 launched_at（历史时刻）。
         let after_ts = record.launched_at.clone();
         let workspace_path = record
@@ -229,9 +314,22 @@ pub async fn rescue_null_codex_records(app_handle: AppHandle, service: Arc<Launc
             after_ts,
         );
 
-        if let Ok(Some(resume_session_id)) = detected {
-            if service.update_session_id(record.id, &resume_session_id).is_ok() {
-                rescued += 1;
+        match detected {
+            Ok(Some(resume_session_id)) => {
+                if let Err(error) = service.update_session_id(record.id, &resume_session_id) {
+                    summary.update_errors += 1;
+                    warn!(
+                        record_id = record.id,
+                        project_path = %record.project_path,
+                        runtime_kind = %record.runtime_kind,
+                        resume_session_id = %resume_session_id,
+                        err = %error,
+                        "rescue_null_codex_records: failed to update detected resume_session_id"
+                    );
+                    continue;
+                }
+
+                summary.rescued += 1;
                 let _ = app_handle.emit(
                     "history-updated",
                     serde_json::json!({
@@ -242,11 +340,54 @@ pub async fn rescue_null_codex_records(app_handle: AppHandle, service: Arc<Launc
                     }),
                 );
             }
+            Ok(None) => {
+                debug!(
+                    record_id = record.id,
+                    project_path = %record.project_path,
+                    runtime_kind = %record.runtime_kind,
+                    launched_at = %record.launched_at,
+                    "rescue_null_codex_records: no matching Codex session found"
+                );
+            }
+            Err(error) => {
+                summary.detect_errors += 1;
+                warn!(
+                    record_id = record.id,
+                    project_path = %record.project_path,
+                    runtime_kind = %record.runtime_kind,
+                    wsl_distro = ?record.wsl_distro,
+                    launched_at = %record.launched_at,
+                    err = %error,
+                    "rescue_null_codex_records: detect_resume_session failed"
+                );
+            }
         }
     }
 
-    if rescued > 0 {
-        debug!(rescued, "rescue_null_codex_records: backfilled legacy codex records");
-    }
+    info!(
+        checked = summary.checked,
+        rescued = summary.rescued,
+        detect_errors = summary.detect_errors,
+        update_errors = summary.update_errors,
+        list_failed = summary.list_failed,
+        "rescue_null_codex_records: completed"
+    );
+    summary
 }
 
+#[cfg(test)]
+mod tests {
+    use super::derive_project_name;
+
+    #[test]
+    fn derive_project_name_handles_posix_and_windows() {
+        assert_eq!(
+            derive_project_name("/mnt/i/emergency-enterprise-project"),
+            "emergency-enterprise-project"
+        );
+        assert_eq!(derive_project_name("I:\\vms-workspace"), "vms-workspace");
+        assert_eq!(derive_project_name("/home/dev/repo/"), "repo"); // 尾斜杠
+        assert_eq!(derive_project_name("D:\\a\\b\\c"), "c");
+        assert_eq!(derive_project_name("singlename"), "singlename"); // 无分隔符兜底
+    }
+}

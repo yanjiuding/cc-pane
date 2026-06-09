@@ -47,9 +47,9 @@
   "scrollback": "Scrollback Lines",
   "rendererMode": "Renderer",
   "rendererAuto": "Auto (WebGL first)",
-  "rendererWebgl": "Force WebGL",
+  "rendererWebgl": "Try WebGL",
   "rendererDom": "DOM fallback",
-  "rendererHint": "Auto keeps WebGL enabled on Chromium/WebView2 and falls back only when the host cannot support it.",
+  "rendererHint": "Auto tries WebGL on Chromium/WebView2 and falls back when the host or addon cannot support it.",
   "shellAutoDetect": "Auto-detect if empty",
 
   "voiceTitle": "Voice Input",

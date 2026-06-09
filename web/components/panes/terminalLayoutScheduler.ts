@@ -14,6 +14,7 @@ export interface TerminalLayoutRequestOptions {
   containerSize?: TerminalContainerSize;
   minContainerDelta?: number;
   force?: boolean;
+  allowInactive?: boolean;
   onAfterLayout?: (term: Terminal) => void;
 }
 
@@ -139,7 +140,7 @@ export function createTerminalLayoutScheduler({
     const host = getHost();
     if (!term || !fitAddon || !host) return null;
 
-    if (!isActive()) {
+    if (!isActive() && !options.allowInactive) {
       pendingReason = reason;
       logger("layout.skip.inactive", { reason });
       return null;

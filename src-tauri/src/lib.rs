@@ -12,9 +12,9 @@ pub mod services;
 pub mod utils;
 
 use ccchan_commands::{
-    get_ccchan_pets, get_ccchan_settings, hide_ccchan, move_ccchan_window, resize_ccchan_for_chat,
-    resize_ccchan_for_menu, save_ccchan_settings, send_to_ccchan, show_ccchan, start_ccchan_chat,
-    stop_ccchan_chat,
+    get_ccchan_pets, get_ccchan_settings, hide_ccchan, is_ccchan_chat_session_alive,
+    move_ccchan_window, resize_ccchan_for_bubble, resize_ccchan_for_chat, resize_ccchan_for_menu,
+    save_ccchan_settings, send_to_ccchan, show_ccchan, start_ccchan_chat, stop_ccchan_chat,
 };
 use ccchan_service::{CCChanService, CcChanSessionNotifier};
 use commands::{
@@ -951,6 +951,7 @@ pub fn run() {
     let notification_service = Arc::new(NotificationService::new());
     let ccchan_service = Arc::new(CCChanService::new(
         settings_service.clone(),
+        provider_service.clone(),
         app_paths.clone(),
     ));
     let mcp_config_service = Arc::new(McpConfigService::new());
@@ -1180,12 +1181,28 @@ pub fn run() {
             // 本修复前经 orchestrator 启动的 Codex 从未回填 resume id，导致旧会话 reload 不能恢复。
             // 用 marker 文件确保只跑一次；后台 spawn，不阻塞启动。
             {
-                let marker = app.state::<Arc<AppPaths>>().runtime_dir().join(".codex-null-rescued");
+                // v3：补救过程增加可观测日志，并且仅在无扫描/写库错误时写 marker。
+                // v2 marker 可能由旧二进制写入，不能再作为本轮补救已成功的证据。
+                let marker = app
+                    .state::<Arc<AppPaths>>()
+                    .runtime_dir()
+                    .join(".codex-null-rescued-v3");
                 if !marker.exists() {
                     let app_handle = app.handle().clone();
                     let lh_svc = app.state::<Arc<LaunchHistoryService>>().inner().clone();
                     tauri::async_runtime::spawn(async move {
-                        services::rescue_null_codex_records(app_handle, lh_svc).await;
+                        let summary = services::rescue_null_codex_records(app_handle, lh_svc).await;
+                        if summary.has_errors() {
+                            warn!(
+                                checked = summary.checked,
+                                rescued = summary.rescued,
+                                detect_errors = summary.detect_errors,
+                                update_errors = summary.update_errors,
+                                list_failed = summary.list_failed,
+                                "codex null rescue had errors; marker not written so next startup will retry"
+                            );
+                            return;
+                        }
                         if let Some(parent) = marker.parent() {
                             let _ = std::fs::create_dir_all(parent);
                         }
@@ -1252,6 +1269,7 @@ pub fn run() {
                 let external_skill_registry = app.state::<Arc<ExternalSkillRegistry>>();
                 let lh_svc = app.state::<Arc<LaunchHistoryService>>();
                 let notif_svc = app.state::<Arc<NotificationService>>();
+                let ccchan_svc = app.state::<Arc<CCChanService>>();
                 let settings_svc = app.state::<Arc<SettingsService>>();
                 let plan_archive_svc = app.state::<Arc<PlanArchiveService>>();
                 let runner_svc = app.state::<Arc<cc_panes_core::services::RunnerService>>();
@@ -1274,6 +1292,7 @@ pub fn run() {
                     external_skill_registry.inner().clone(),
                     lh_svc.inner().clone(),
                     notif_svc.inner().clone(),
+                    ccchan_svc.inner().clone(),
                     settings_svc.inner().clone(),
                     plan_archive_svc.inner().clone(),
                     runner_svc.inner().clone(),
@@ -1545,12 +1564,14 @@ pub fn run() {
             get_popup_tab_data,
             show_ccchan,
             hide_ccchan,
+            resize_ccchan_for_bubble,
             resize_ccchan_for_chat,
             resize_ccchan_for_menu,
             move_ccchan_window,
             start_ccchan_chat,
             send_to_ccchan,
             stop_ccchan_chat,
+            is_ccchan_chat_session_alive,
             get_ccchan_pets,
             get_ccchan_settings,
             save_ccchan_settings,

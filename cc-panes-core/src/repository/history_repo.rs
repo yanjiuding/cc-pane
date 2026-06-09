@@ -354,6 +354,94 @@ impl HistoryRepository {
         Ok(Some(id))
     }
 
+    /// 回填会话启动信息（upsert）：先按 project_id UPDATE（同 update_session_started）；
+    /// 若无匹配记录（GUI 经 TabBar 新建等路径从未 INSERT 过 launch_history），则 INSERT
+    /// 一条带 pty + resume 的完整记录，使这类会话也能在 reload 时 `codex resume`。
+    /// 与 update_session_started 不同：本方法保证落库（返回命中或新建的记录 id）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn upsert_session_started(
+        &self,
+        launch_id: &str,
+        pty_session_id: &str,
+        resume_session_id: &str,
+        cli_tool: &str,
+        runtime_kind: &str,
+        wsl_distro: Option<&str>,
+        launch_cwd: Option<&str>,
+        project_path: &str,
+        project_name: &str,
+        workspace_path: Option<&str>,
+    ) -> Result<i64, String> {
+        let conn = self.db.connection().map_err(|e| e.to_string())?;
+        let affected = conn
+            .execute(
+                "UPDATE launch_history
+                 SET pty_session_id = ?1,
+                     resume_session_id = ?2,
+                     cli_tool = ?3,
+                     runtime_kind = ?4,
+                     wsl_distro = COALESCE(?5, wsl_distro),
+                     launch_cwd = COALESCE(?6, launch_cwd)
+                 WHERE project_id = ?7",
+                rusqlite::params![
+                    pty_session_id,
+                    resume_session_id,
+                    cli_tool,
+                    runtime_kind,
+                    wsl_distro,
+                    launch_cwd,
+                    launch_id
+                ],
+            )
+            .map_err(|e| {
+                error!(table = "launch_history", launch_id = %launch_id, err = %e, "SQL upsert_session_started UPDATE failed");
+                e.to_string()
+            })?;
+
+        if affected > 0 {
+            let id = conn
+                .query_row(
+                    "SELECT id FROM launch_history WHERE project_id = ?1 ORDER BY launched_at DESC LIMIT 1",
+                    rusqlite::params![launch_id],
+                    |row| row.get(0),
+                )
+                .map_err(|e| {
+                    error!(table = "launch_history", launch_id = %launch_id, err = %e, "SQL upsert_session_started query id failed");
+                    e.to_string()
+                })?;
+            return Ok(id);
+        }
+
+        // 无匹配记录：该会话从未写过 launch_history（GUI TabBar 新建等路径）。
+        // INSERT 一条带 pty + resume 的记录，让 reload 能恢复。
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO launch_history (
+                project_id, project_name, project_path, launched_at,
+                pty_session_id, resume_session_id, cli_tool, runtime_kind, wsl_distro, workspace_path, launch_cwd
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            rusqlite::params![
+                launch_id,
+                project_name,
+                project_path,
+                &now,
+                pty_session_id,
+                resume_session_id,
+                cli_tool,
+                runtime_kind,
+                wsl_distro,
+                workspace_path,
+                launch_cwd
+            ],
+        )
+        .map_err(|e| {
+            error!(table = "launch_history", launch_id = %launch_id, err = %e, "SQL upsert_session_started INSERT failed");
+            e.to_string()
+        })?;
+
+        Ok(conn.last_insert_rowid())
+    }
+
     /// 更新启动记录的最后 Prompt
     pub fn update_last_prompt(&self, id: i64, last_prompt: &str) -> Result<(), String> {
         let conn = self.db.connection().map_err(|e| e.to_string())?;
@@ -756,5 +844,95 @@ mod tests {
             .expect("row exists");
         assert_eq!(found.pty_session_id.as_deref(), Some(pty_session));
         assert_eq!(found.resume_session_id.as_deref(), Some("resume-uuid"));
+    }
+
+    #[test]
+    fn upsert_session_started_inserts_when_no_record_exists() {
+        // GUI 经 TabBar 新建 WSL Codex 的路径：从未 INSERT 过 launch_history。
+        // upsert 必须创建一条带 pty + resume 的记录，否则 reload 永远无法 codex resume。
+        let r = repo();
+        let launch_id = "gui-codex-1";
+
+        let id = r
+            .upsert_session_started(
+                launch_id,
+                "pty-gui-1",
+                "019e893b-resume",
+                "codex",
+                "wsl",
+                Some("Ubuntu"),
+                Some("/mnt/i/emergency-enterprise-project"), // launch_cwd
+                "/mnt/i/emergency-enterprise-project",       // project_path
+                "emergency-enterprise-project",              // project_name
+                None,                                        // workspace_path
+            )
+            .expect("upsert insert");
+        assert!(id > 0);
+
+        let found = r
+            .find_by_launch_id(launch_id)
+            .expect("find ok")
+            .expect("row exists");
+        assert_eq!(found.project_id, launch_id);
+        assert_eq!(found.project_name, "emergency-enterprise-project");
+        assert_eq!(found.pty_session_id.as_deref(), Some("pty-gui-1"));
+        assert_eq!(found.resume_session_id.as_deref(), Some("019e893b-resume"));
+        assert_eq!(found.cli_tool, "codex");
+        assert_eq!(found.runtime_kind, "wsl");
+    }
+
+    #[test]
+    fn upsert_session_started_updates_existing_without_duplicating() {
+        // 已有记录（handleOpenTerminal / MCP 路径已 add）：upsert 走 UPDATE 分支，不新增行。
+        let r = repo();
+        let launch_id = "existing-1";
+
+        r.add_with_pty_session(
+            launch_id,
+            "proj",
+            "/tmp/proj",
+            "old-pty",
+            "codex",
+            "wsl",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("seed insert");
+
+        let id = r
+            .upsert_session_started(
+                launch_id,
+                "new-pty",
+                "resume-xyz",
+                "codex",
+                "wsl",
+                None,
+                None,
+                "/tmp/proj",
+                "proj",
+                None,
+            )
+            .expect("upsert update");
+        assert!(id > 0);
+
+        let matching: Vec<_> = r
+            .list(100)
+            .expect("list")
+            .into_iter()
+            .filter(|rec| rec.project_id == launch_id)
+            .collect();
+        assert_eq!(
+            matching.len(),
+            1,
+            "upsert must not duplicate an existing record"
+        );
+        assert_eq!(matching[0].pty_session_id.as_deref(), Some("new-pty"));
+        assert_eq!(matching[0].resume_session_id.as_deref(), Some("resume-xyz"));
     }
 }

@@ -1,4 +1,4 @@
-import { Bot, LogOut, Settings, Shuffle, EyeOff } from "lucide-react";
+import { Bot, EyeOff, LogOut, MessageCircle, Settings, Shuffle } from "lucide-react";
 
 export interface CCChanContextMenuPosition {
   x: number;
@@ -8,6 +8,7 @@ export interface CCChanContextMenuPosition {
 interface ContextMenuProps {
   position: CCChanContextMenuPosition;
   onHide: () => void;
+  onOpenChat: () => void;
   onSwitchPet: () => void;
   onOpenSettings: () => void;
   onExit: () => void;
@@ -17,12 +18,14 @@ interface ContextMenuProps {
 export function ContextMenu({
   position,
   onHide,
+  onOpenChat,
   onSwitchPet,
   onOpenSettings,
   onExit,
   onClose,
 }: ContextMenuProps) {
   const items = [
+    { label: "打开对话", icon: MessageCircle, action: onOpenChat, closeAfter: false },
     { label: "隐藏", icon: EyeOff, action: onHide },
     { label: "切换角色", icon: Shuffle, action: onSwitchPet },
     { label: "设置", icon: Settings, action: onOpenSettings },
@@ -31,41 +34,48 @@ export function ContextMenu({
 
   return (
     <div
-      className="fixed inset-0 z-50"
+      className="absolute inset-0 z-50"
       onMouseDown={(event) => {
+        event.stopPropagation();
         if (event.target === event.currentTarget) onClose();
       }}
       onContextMenu={(event) => {
         event.preventDefault();
-        onClose();
+        event.stopPropagation();
+        if (event.target === event.currentTarget) onClose();
       }}
     >
       <div
-        className="min-w-[150px] overflow-hidden rounded-md border py-1 shadow-xl"
+        className="w-[164px] overflow-hidden rounded-lg border py-1 shadow-2xl"
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
         style={{
-          position: "fixed",
+          position: "absolute",
           left: position.x,
           top: position.y,
-          background: "var(--app-content)",
-          borderColor: "var(--app-border)",
-          color: "var(--app-text-primary)",
+          background: "#ffffff",
+          borderColor: "rgba(15, 23, 42, 0.16)",
+          color: "#0f172a",
+          boxShadow: "0 18px 42px rgba(15, 23, 42, 0.32), 0 0 0 1px rgba(255, 255, 255, 0.82)",
         }}
       >
-        <div className="flex items-center gap-2 px-3 py-2 text-[12px] font-medium" style={{ color: "var(--app-text-secondary)" }}>
+        <div className="flex items-center gap-2 px-3 py-2 text-[12px] font-semibold" style={{ color: "#0f172a" }}>
           <Bot size={14} />
           <span>cc酱</span>
         </div>
-        <div className="h-px" style={{ background: "var(--app-border)" }} />
+        <div className="h-px" style={{ background: "#bae6fd" }} />
         {items.map((item) => {
           const Icon = item.icon;
           return (
             <button
               key={item.label}
               type="button"
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] transition-colors hover:bg-[var(--app-hover)]"
+              className="flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] font-medium transition-colors hover:bg-sky-50"
               onClick={() => {
                 item.action();
-                onClose();
+                if (item.closeAfter !== false) onClose();
               }}
             >
               <Icon size={14} />

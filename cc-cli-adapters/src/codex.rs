@@ -472,13 +472,68 @@ impl CodexAdapter {
         let features_table = features
             .as_table_mut()
             .ok_or_else(|| anyhow!("Codex config [features] must be a TOML table"))?;
-        // Dual-write both the new `hooks` key and the legacy `codex_hooks` key.
-        // Codex >= 0.135 reads `hooks`; older builds still read `codex_hooks`.
-        // Writing both keeps hooks firing across supported Codex versions until a
-        // minimum Codex version is enforced (neither key is rejected by --strict-config).
-        features_table.insert("hooks".to_string(), toml::Value::Boolean(true));
-        features_table.insert("codex_hooks".to_string(), toml::Value::Boolean(true));
+        Self::apply_hooks_feature_keys(features_table, Self::codex_uses_hooks_key_only());
         Self::write_config_toml(project_path, &config)
+    }
+
+    /// 按 `hooks_only` 写 `[features]` 下的 hooks 相关键（纯函数，便于确定性单测）：
+    /// - `hooks_only=true`（Codex >= 0.135）：只写新 `hooks`，并清除已废弃的 `codex_hooks`，
+    ///   避免 0.136 的 deprecated 警告。
+    /// - `hooks_only=false`（旧版 / 版本探测失败）：双写 `hooks` + `codex_hooks`，确保旧版
+    ///   Codex 仍能识别 hook（保守、不丢功能）。
+    fn apply_hooks_feature_keys(features_table: &mut toml::value::Table, hooks_only: bool) {
+        features_table.insert("hooks".to_string(), toml::Value::Boolean(true));
+        if hooks_only {
+            features_table.remove("codex_hooks");
+        } else {
+            features_table.insert("codex_hooks".to_string(), toml::Value::Boolean(true));
+        }
+    }
+
+    /// 是否采用「仅新 hooks 键」写法：探测 host `codex --version` 是否 >= 0.135，
+    /// 进程内缓存只跑一次。探测失败 / 无法解析版本 → false（保守双写）。
+    /// 注：WSL 启动写的 config 由 WSL 内 codex 读取，此处以 host codex 版本近似（host 与
+    /// WSL 的 codex 通常同源）；探测失败回退双写对两侧都安全，不会让旧版丢 hook。
+    fn codex_uses_hooks_key_only() -> bool {
+        use std::sync::OnceLock;
+        static CACHE: OnceLock<bool> = OnceLock::new();
+        *CACHE.get_or_init(|| {
+            Self::detect_host_codex_version()
+                .map(|(major, minor)| (major, minor) >= (0, 135))
+                .unwrap_or(false)
+        })
+    }
+
+    /// 跑 host `codex --version` 并解析 `(major, minor)`；失败返回 None。
+    fn detect_host_codex_version() -> Option<(u32, u32)> {
+        let path = which::which("codex").ok()?;
+        let mut cmd = std::process::Command::new(path);
+        cmd.arg("--version");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        let output = cmd.output().ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        Self::parse_codex_version(&String::from_utf8_lossy(&output.stdout))
+    }
+
+    /// 从 `codex-cli 0.136.0` 之类文本中解析首个 `X.Y` 版本号。
+    fn parse_codex_version(text: &str) -> Option<(u32, u32)> {
+        for token in text.split_whitespace() {
+            let cleaned = token.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
+            let mut parts = cleaned.split('.');
+            if let (Some(major), Some(minor)) = (parts.next(), parts.next()) {
+                if let (Ok(major), Ok(minor)) = (major.parse::<u32>(), minor.parse::<u32>()) {
+                    return Some((major, minor));
+                }
+            }
+        }
+        None
     }
 
     fn sync_project_hooks_inner(
@@ -744,8 +799,9 @@ mod tests {
         let config = fs::read_to_string(project_path.join(".codex").join("config.toml")).unwrap();
         let hooks = fs::read_to_string(project_path.join(".codex").join("hooks.json")).unwrap();
 
+        // codex_hooks 是否写入取决于 host codex 版本（版本门控）；integration 测试只断言
+        // 版本无关的 hooks=true，版本门控行为由 apply_hooks_feature_keys 单测覆盖。
         assert!(config.contains("hooks = true"));
-        assert!(config.contains("codex_hooks = true"));
         assert!(hooks.contains("SessionStart"));
         assert!(hooks.contains("session-init"));
 
@@ -782,39 +838,46 @@ mod tests {
         let config = fs::read_to_string(project_path.join(".codex").join("config.toml")).unwrap();
         let hooks = fs::read_to_string(project_path.join(".codex").join("hooks.json")).unwrap();
 
+        // 见上：codex_hooks 受 host codex 版本门控，integration 测试只断言 hooks=true。
         assert!(config.contains("hooks = true"));
-        assert!(config.contains("codex_hooks = true"));
         assert!(hooks.contains("/mnt/c/Users/wuxiran"));
         assert!(hooks.contains("session-init"));
     }
 
     #[test]
-    fn sync_project_hooks_dual_writes_hooks_and_legacy_codex_hooks_feature() {
-        let dir = tempdir().unwrap();
-        let project_path = dir.path();
-        let hook_binary = PathBuf::from(
-            "/mnt/c/Users/wuxiran/AppData/Local/cc-panes/binaries/cc-panes-cli-hook.exe",
+    fn apply_hooks_feature_keys_version_gated() {
+        // hooks_only=true（Codex >= 0.135）：写新 hooks 键并清除已废弃的 codex_hooks。
+        let mut table = toml::value::Table::new();
+        table.insert("codex_hooks".to_string(), toml::Value::Boolean(true));
+        CodexAdapter::apply_hooks_feature_keys(&mut table, true);
+        assert_eq!(table.get("hooks"), Some(&toml::Value::Boolean(true)));
+        assert!(
+            table.get("codex_hooks").is_none(),
+            "legacy codex_hooks must be cleared on Codex >= 0.135"
         );
-        let codex_dir = project_path.join(".codex");
-        fs::create_dir_all(&codex_dir).unwrap();
-        fs::write(
-            codex_dir.join("config.toml"),
-            "[features]\ncodex_hooks = true\n",
-        )
-        .unwrap();
 
-        let adapter = CodexAdapter::new();
-        let desired = HashMap::from([("session-inject".to_string(), true)]);
+        // hooks_only=false（旧版 / 版本探测失败）：双写，旧 Codex 不丢 hook。
+        let mut table = toml::value::Table::new();
+        CodexAdapter::apply_hooks_feature_keys(&mut table, false);
+        assert_eq!(table.get("hooks"), Some(&toml::Value::Boolean(true)));
+        assert_eq!(table.get("codex_hooks"), Some(&toml::Value::Boolean(true)));
+    }
 
-        adapter
-            .sync_project_hooks_for_wsl_launch(project_path, &hook_binary, &desired)
-            .unwrap();
-
-        let config = fs::read_to_string(codex_dir.join("config.toml")).unwrap();
-        // Dual-write: keep the legacy codex_hooks key and add the new hooks key,
-        // so hooks fire on both current and older Codex CLIs.
-        assert!(config.contains("hooks = true"));
-        assert!(config.contains("codex_hooks = true"));
+    #[test]
+    fn parse_codex_version_extracts_major_minor() {
+        assert_eq!(
+            CodexAdapter::parse_codex_version("codex-cli 0.136.0"),
+            Some((0, 136))
+        );
+        assert_eq!(
+            CodexAdapter::parse_codex_version("codex 0.135.0\n"),
+            Some((0, 135))
+        );
+        assert_eq!(
+            CodexAdapter::parse_codex_version("0.134.2 (build abc)"),
+            Some((0, 134))
+        );
+        assert_eq!(CodexAdapter::parse_codex_version("no version here"), None);
     }
 
     #[cfg(windows)]

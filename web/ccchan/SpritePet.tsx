@@ -1,4 +1,4 @@
-import type { MouseEventHandler } from "react";
+import type { MouseEventHandler, PointerEventHandler } from "react";
 import { getPetAnimation, usePetAnimationFrame } from "./petAnimation";
 import type { CCChanPetState, PetMeta } from "./types";
 
@@ -10,6 +10,10 @@ interface SpritePetProps {
   onClick?: MouseEventHandler<HTMLButtonElement>;
   onMouseDown?: MouseEventHandler<HTMLButtonElement>;
   onContextMenu?: MouseEventHandler<HTMLButtonElement>;
+  onPointerCancel?: PointerEventHandler<HTMLButtonElement>;
+  onPointerDown?: PointerEventHandler<HTMLButtonElement>;
+  onPointerMove?: PointerEventHandler<HTMLButtonElement>;
+  onPointerUp?: PointerEventHandler<HTMLButtonElement>;
 }
 
 export function SpritePet({
@@ -20,6 +24,10 @@ export function SpritePet({
   onClick,
   onMouseDown,
   onContextMenu,
+  onPointerCancel,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
 }: SpritePetProps) {
   const { cellW, cellH, cols, rows } = pet.atlas;
   const animation = getPetAnimation(pet, state);
@@ -29,12 +37,15 @@ export function SpritePet({
   return (
     <button
       type="button"
-      data-tauri-drag-region
       aria-label={title ?? pet.displayName}
       title={title ?? pet.displayName}
       onClick={onClick}
       onMouseDown={onMouseDown}
       onContextMenu={onContextMenu}
+      onPointerCancel={onPointerCancel}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
       className="block border-0 bg-transparent p-0 outline-none select-none"
       style={{
         width: size,

@@ -1103,8 +1103,9 @@ impl TerminalService {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_codex_resume_args, parse_selected_mcp_servers, push_codex_developer_instructions_arg,
-        push_codex_yolo_mode_arg, push_wsl_codex_mcp_isolation_prelude, render_wsl_launch_script,
+        append_codex_resume_args, parse_selected_mcp_servers,
+        push_codex_developer_instructions_arg, push_codex_yolo_mode_arg,
+        push_wsl_codex_mcp_isolation_prelude, render_wsl_launch_script,
     };
     #[cfg(windows)]
     use super::{
@@ -1204,11 +1205,7 @@ mod tests {
     fn codex_mcp_isolation_prelude_no_longer_isolates_home_and_disables_unlisted() {
         let mut commands = Vec::new();
 
-        push_wsl_codex_mcp_isolation_prelude(
-            &mut commands,
-            true,
-            &["allowedserver".to_string()],
-        );
+        push_wsl_codex_mcp_isolation_prelude(&mut commands, true, &["allowedserver".to_string()]);
         let script = render_wsl_launch_script(&commands);
 
         // 去隔离：不再 export 隔离 CODEX_HOME、不再 rm -rf、不再 sanitize 拷 config。
@@ -1319,9 +1316,8 @@ mod tests {
             .iter()
             .any(|line: &String| line.contains("find \"$CCPANES_WSL_CODEX_DST\"")));
         // 仍正常 upsert 内置 skill。
-        assert!(commands
-            .iter()
-            .any(|line: &String| line.contains("mkdir -p \"$CCPANES_WSL_CODEX_DST/ccpanes-launch-task\"")));
+        assert!(commands.iter().any(|line: &String| line
+            .contains("mkdir -p \"$CCPANES_WSL_CODEX_DST/ccpanes-launch-task\"")));
         assert!(commands.iter().any(|line: &String| line
             .contains("cp \"$CCPANES_WSL_CODEX_SRC/ccpanes-launch-task/SKILL.md\"")));
     }

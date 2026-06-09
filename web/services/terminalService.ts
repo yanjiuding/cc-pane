@@ -267,7 +267,9 @@ export const terminalService = {
     outputCallbacks.delete(sessionId);
     exitCallbacks.delete(sessionId);
     pendingBuffers.delete(sessionId);
-    return invoke("kill_terminal", { sessionId });
+    // 幂等关闭：reload cleanup 常杀已退/不存在的 session，用 idempotent 命令把
+    // NOT_FOUND / already-exited 视为成功，避免 [UNHANDLED REJECTION] Session not found。
+    return invoke("kill_terminal_idempotent", { sessionId });
   },
 
   // ── 单例监听器 API ─────────────────────────────────────

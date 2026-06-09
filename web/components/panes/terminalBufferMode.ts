@@ -23,6 +23,8 @@ export function stripAlternateBufferSequences(data: string): string {
   return data.replace(new RegExp(ALTERNATE_BUFFER_SEQUENCE_SOURCE, "g"), "");
 }
 
+const NORMAL_BUFFER_CLI_TOOLS = new Set(["claude", "codex"]);
+
 export function shouldKeepCliOutputInNormalBuffer(cliToolId: string): boolean {
-  return cliToolId === "codex";
+  return NORMAL_BUFFER_CLI_TOOLS.has(cliToolId);
 }
