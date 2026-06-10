@@ -89,3 +89,6 @@ target-package*/
 # Vite 编译产物
 vite.config.d.ts
 vite.config.js
+
+# VitePress 构建缓存（dist/ 已在上方忽略构建产物）
+docs/.vitepress/cache/
