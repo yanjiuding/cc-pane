@@ -15,6 +15,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { collectPanels } from "@/stores/paneTreeHelpers";
 import TabBar from "./TabBar";
 import TabContentRenderer from "./TabContentRenderer";
 import type { TerminalViewHandle } from "./TerminalView";
@@ -40,6 +41,8 @@ export default memo(function Panel({ pane }: PanelProps) {
   const activePaneId = usePanesStore((s) => s.activePaneId);
   const rootPane = usePanesStore((s) => s.rootPane);
   const allPanels = usePanesStore((s) => s.allPanels);
+  const layouts = usePanesStore((s) => s.layouts);
+  const currentLayoutId = usePanesStore((s) => s.currentLayoutId);
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const openWorkspaceEnvironment = useDialogStore((s) => s.openWorkspaceEnvironment);
 
@@ -47,7 +50,7 @@ export default memo(function Panel({ pane }: PanelProps) {
   const {
     selectTab, closeTab, togglePinTab, renameTab, addTab,
     splitRight, splitDown, splitAndMoveTab, splitTerminalPane, closeTerminalPane,
-    moveTab,
+    moveTab, moveTabToLayoutPane,
     closeTabsToLeft, closeTabsToRight, closeOtherTabs,
     setActivePane, updateTabSession, reconnectTab,
     setTabDisconnected, markTabPoppedOut, isTabPoppedOut,
@@ -63,6 +66,7 @@ export default memo(function Panel({ pane }: PanelProps) {
     splitTerminalPane: s.splitTerminalPane,
     closeTerminalPane: s.closeTerminalPane,
     moveTab: s.moveTab,
+    moveTabToLayoutPane: s.moveTabToLayoutPane,
     closeTabsToLeft: s.closeTabsToLeft,
     closeTabsToRight: s.closeTabsToRight,
     closeOtherTabs: s.closeOtherTabs,
@@ -109,6 +113,22 @@ export default memo(function Panel({ pane }: PanelProps) {
         return { id: panel.id, label: `${t("pane")} ${index + 1}${activeTitle ? ` · ${activeTitle}` : ""}` };
       });
   }, [allPanels, rootPane, pane.id, t]);
+  const layoutMoveTargets = useMemo(() => {
+    return layouts
+      .filter((layout) => layout.id !== currentLayoutId)
+      .map((layout, layoutIndex) => ({
+        id: layout.id,
+        label: layout.name || `${t("layout")} ${layoutIndex + 1}`,
+        panes: collectPanels(layout.rootPane).map((panel, panelIndex) => {
+          const activeTitle = panel.tabs.find((tab) => tab.id === panel.activeTabId)?.title ?? "";
+          return {
+            id: panel.id,
+            label: `${t("pane")} ${panelIndex + 1}${activeTitle ? ` · ${activeTitle}` : ""}`,
+          };
+        }),
+      }))
+      .filter((layout) => layout.panes.length > 0);
+  }, [currentLayoutId, layouts, t]);
 
   // 全屏时 ESC 退出
   useEffect(() => {
@@ -276,6 +296,12 @@ export default memo(function Panel({ pane }: PanelProps) {
   const handleMoveTabToPane = useCallback(
     (tabId: string, targetPaneId: string) => moveTab(pane.id, targetPaneId, tabId),
     [pane.id, moveTab]
+  );
+
+  const handleMoveTabToLayoutPane = useCallback(
+    (tabId: string, targetLayoutId: string, targetPaneId: string) =>
+      moveTabToLayoutPane(pane.id, targetLayoutId, tabId, targetPaneId),
+    [pane.id, moveTabToLayoutPane]
   );
 
   const handleSplitTerminalRight = useCallback((tabId: string) => {
@@ -454,6 +480,8 @@ export default memo(function Panel({ pane }: PanelProps) {
             onSplitAndMoveDown={handleSplitAndMoveDown}
             moveTargets={moveTargets}
             onMoveTabToPane={handleMoveTabToPane}
+            layoutMoveTargets={layoutMoveTargets}
+            onMoveTabToLayoutPane={handleMoveTabToLayoutPane}
             onSplitTerminalRight={handleSplitTerminalRight}
             onSplitTerminalDown={handleSplitTerminalDown}
             onCloseTerminalPane={handleCloseTerminalPane}

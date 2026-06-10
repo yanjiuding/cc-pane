@@ -56,6 +56,17 @@ const DENSITY = {
 
 type Density = keyof typeof DENSITY;
 
+interface PaneMoveTarget {
+  id: string;
+  label: string;
+}
+
+interface LayoutMoveTarget {
+  id: string;
+  label: string;
+  panes: PaneMoveTarget[];
+}
+
 interface TabBarProps {
   paneId: string;
   tabs: Tab[];
@@ -71,8 +82,10 @@ interface TabBarProps {
   onRename: (tabId: string, newTitle: string) => void;
   onSplitAndMoveRight: (tabId: string) => void;
   onSplitAndMoveDown: (tabId: string) => void;
-  moveTargets: { id: string; label: string }[];
+  moveTargets: PaneMoveTarget[];
   onMoveTabToPane: (tabId: string, targetPaneId: string) => void;
+  layoutMoveTargets: LayoutMoveTarget[];
+  onMoveTabToLayoutPane: (tabId: string, targetLayoutId: string, targetPaneId: string) => void;
   onSplitTerminalRight: (tabId: string) => void;
   onSplitTerminalDown: (tabId: string) => void;
   onCloseTerminalPane: (tabId: string) => void;
@@ -111,6 +124,8 @@ function SortableTab({
   onSplitAndMoveDown,
   moveTargets,
   onMoveTabToPane,
+  layoutMoveTargets,
+  onMoveTabToLayoutPane,
   onSplitTerminalRight,
   onSplitTerminalDown,
   onCloseTerminalPane,
@@ -147,8 +162,10 @@ function SortableTab({
   onSplitDown: () => void;
   onSplitAndMoveRight: (tabId: string) => void;
   onSplitAndMoveDown: (tabId: string) => void;
-  moveTargets: { id: string; label: string }[];
+  moveTargets: PaneMoveTarget[];
   onMoveTabToPane: (tabId: string, targetPaneId: string) => void;
+  layoutMoveTargets: LayoutMoveTarget[];
+  onMoveTabToLayoutPane: (tabId: string, targetLayoutId: string, targetPaneId: string) => void;
   onSplitTerminalRight: (tabId: string) => void;
   onSplitTerminalDown: (tabId: string) => void;
   onCloseTerminalPane: (tabId: string) => void;
@@ -357,6 +374,43 @@ function SortableTab({
             </ContextMenuSubContent>
           </ContextMenuSub>
         )}
+        {layoutMoveTargets.length > 0 && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger inset>
+              <Send /> {t("sendToLayout")}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="w-56">
+              {layoutMoveTargets.map((layout) => {
+                if (layout.panes.length === 1) {
+                  const targetPane = layout.panes[0];
+                  return (
+                    <ContextMenuItem
+                      key={layout.id}
+                      onClick={() => onMoveTabToLayoutPane(tab.id, layout.id, targetPane.id)}
+                    >
+                      {layout.label}
+                    </ContextMenuItem>
+                  );
+                }
+                return (
+                  <ContextMenuSub key={layout.id}>
+                    <ContextMenuSubTrigger>{layout.label}</ContextMenuSubTrigger>
+                    <ContextMenuSubContent className="w-56">
+                      {layout.panes.map((targetPane) => (
+                        <ContextMenuItem
+                          key={targetPane.id}
+                          onClick={() => onMoveTabToLayoutPane(tab.id, layout.id, targetPane.id)}
+                        >
+                          {targetPane.label}
+                        </ContextMenuItem>
+                      ))}
+                    </ContextMenuSubContent>
+                  </ContextMenuSub>
+                );
+              })}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        )}
         {tab.contentType === "terminal" && (
           <>
             <ContextMenuSeparator />
@@ -430,6 +484,8 @@ export default memo(function TabBar({
   onSplitAndMoveDown,
   moveTargets,
   onMoveTabToPane,
+  layoutMoveTargets,
+  onMoveTabToLayoutPane,
   onSplitTerminalRight,
   onSplitTerminalDown,
   onCloseTerminalPane,
@@ -603,6 +659,8 @@ export default memo(function TabBar({
                 onSplitAndMoveDown={onSplitAndMoveDown}
                 moveTargets={moveTargets}
                 onMoveTabToPane={onMoveTabToPane}
+                layoutMoveTargets={layoutMoveTargets}
+                onMoveTabToLayoutPane={onMoveTabToLayoutPane}
                 onSplitTerminalRight={onSplitTerminalRight}
                 onSplitTerminalDown={onSplitTerminalDown}
                 onCloseTerminalPane={onCloseTerminalPane}

@@ -35,6 +35,8 @@ function renderTabBar({
   activeId = tabs[0]?.id ?? "",
   onRename = vi.fn(),
   onFullscreen = vi.fn(),
+  layoutMoveTargets = [],
+  onMoveTabToLayoutPane = vi.fn(),
   onEditWorkspaceEnvironment,
   canEditWorkspaceEnvironment,
 }: {
@@ -42,6 +44,8 @@ function renderTabBar({
   activeId?: string;
   onRename?: (tabId: string, newTitle: string) => void;
   onFullscreen?: (tabId: string) => void;
+  layoutMoveTargets?: { id: string; label: string; panes: { id: string; label: string }[] }[];
+  onMoveTabToLayoutPane?: (tabId: string, targetLayoutId: string, targetPaneId: string) => void;
   onEditWorkspaceEnvironment?: (tab: Tab) => void;
   canEditWorkspaceEnvironment?: (tab: Tab) => boolean;
 } = {}) {
@@ -63,6 +67,8 @@ function renderTabBar({
         onSplitAndMoveDown={vi.fn()}
         moveTargets={[]}
         onMoveTabToPane={vi.fn()}
+        layoutMoveTargets={layoutMoveTargets}
+        onMoveTabToLayoutPane={onMoveTabToLayoutPane}
         onSplitTerminalRight={vi.fn()}
         onSplitTerminalDown={vi.fn()}
         onCloseTerminalPane={vi.fn()}
@@ -156,6 +162,20 @@ describe("TabBar", () => {
     expect(onEditWorkspaceEnvironment).toHaveBeenCalledWith(tab);
   });
 
+  it("shows layout move targets in the tab context menu", async () => {
+    renderTabBar({
+      layoutMoveTargets: [{
+        id: "layout-2",
+        label: "布局 2",
+        panes: [{ id: "pane-2", label: "窗格 1 · Beta" }],
+      }],
+    });
+
+    fireEvent.contextMenu(screen.getByText("Alpha"));
+
+    expect(await screen.findByText("发送到布局")).toBeInTheDocument();
+  });
+
   it("uses a horizontally scrollable max-content tab strip for overflow", () => {
     renderTabBar({
       tabs: [
@@ -230,6 +250,8 @@ describe("TabBar", () => {
           onSplitAndMoveDown={vi.fn()}
           moveTargets={[]}
           onMoveTabToPane={vi.fn()}
+          layoutMoveTargets={[]}
+          onMoveTabToLayoutPane={vi.fn()}
           onSplitTerminalRight={vi.fn()}
           onSplitTerminalDown={vi.fn()}
           onCloseTerminalPane={vi.fn()}

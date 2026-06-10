@@ -184,6 +184,57 @@ describe("usePanesStore layouts", () => {
     expect(usePanesStore.getState().allPanelsAcrossLayouts()).toHaveLength(2);
   });
 
+  it("moveTabToLayoutPane 能把当前布局 tab 发送到隐藏布局窗格且不切换布局", () => {
+    const currentPaneId = usePanesStore.getState().rootPane.id;
+    usePanesStore.getState().addTab(currentPaneId, {
+      projectId: "current",
+      projectPath: "/tmp/current",
+    });
+    const tabToMove = panel(usePanesStore.getState().rootPane).tabs[1];
+    const hidden = makeLayout("layout-hidden", "隐藏", makeTerminalTab("hidden-tab"));
+    const hiddenPaneId = hidden.rootPane.id;
+    usePanesStore.setState((state) => {
+      state.layouts.push(hidden);
+    });
+
+    usePanesStore.getState().moveTabToLayoutPane(
+      currentPaneId,
+      "layout-hidden",
+      tabToMove.id,
+      hiddenPaneId,
+    );
+
+    const state = usePanesStore.getState();
+    expect(state.currentLayoutId).toBe("layout-1");
+    expect(state.activePaneId).toBe(currentPaneId);
+    expect(panel(state.rootPane).tabs.map((tab) => tab.id)).not.toContain(tabToMove.id);
+    expect(panel(hiddenLayout().rootPane).tabs.map((tab) => tab.id)).toEqual([
+      "hidden-tab",
+      tabToMove.id,
+    ]);
+    expect(panel(hiddenLayout().rootPane).activeTabId).toBe(tabToMove.id);
+    expect(hiddenLayout().activePaneId).toBe(hiddenPaneId);
+  });
+
+  it("moveTabToLayoutPane 未指定目标窗格时使用目标布局第一个窗格", () => {
+    const currentPaneId = usePanesStore.getState().rootPane.id;
+    usePanesStore.getState().addTab(currentPaneId, {
+      projectId: "current",
+      projectPath: "/tmp/current",
+    });
+    const tabToMove = panel(usePanesStore.getState().rootPane).tabs[1];
+    const hidden = makeLayout("layout-hidden", "隐藏", makeTerminalTab("hidden-tab"));
+    const hiddenPaneId = hidden.rootPane.id;
+    usePanesStore.setState((state) => {
+      state.layouts.push(hidden);
+    });
+
+    usePanesStore.getState().moveTabToLayoutPane(currentPaneId, "layout-hidden", tabToMove.id);
+
+    expect(panel(hiddenLayout().rootPane).tabs.map((tab) => tab.id)).toContain(tabToMove.id);
+    expect(hiddenLayout().activePaneId).toBe(hiddenPaneId);
+  });
+
   it("updateTabSession 和 clearRestoring 能回写隐藏布局 tab", () => {
     const tab = makeTerminalTab("hidden-tab");
     tab.restoring = true;

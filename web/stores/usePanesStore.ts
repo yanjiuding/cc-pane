@@ -665,6 +665,13 @@ interface PanesState {
   renameTab: (paneId: string, tabId: string, newTitle: string) => void;
   reorderTabs: (paneId: string, fromIndex: number, toIndex: number) => void;
   moveTab: (fromPaneId: string, toPaneId: string, tabId: string, toIndex?: number) => void;
+  moveTabToLayoutPane: (
+    fromPaneId: string,
+    toLayoutId: string,
+    tabId: string,
+    toPaneId?: string,
+    toIndex?: number
+  ) => void;
   splitAndMoveTab: (paneId: string, tabId: string, direction: SplitDirection) => void;
   closeTabsToLeft: (paneId: string, tabId: string) => void;
   closeTabsToRight: (paneId: string, tabId: string) => void;
@@ -1092,6 +1099,71 @@ export const usePanesStore = create<PanesState>()(
         }
       }
       notifyTerminalLayoutChanged("tab.move");
+    },
+
+    moveTabToLayoutPane: (fromPaneId, toLayoutId, tabId, toPaneId, toIndex?) => {
+      let moved = false;
+      let closeEmptyCurrentSource = false;
+
+      set((state) => {
+        syncWorkingCopyToCurrentLayout(state);
+
+        const targetLayout = state.layouts.find((layout) => layout.id === toLayoutId);
+        if (!targetLayout) return;
+
+        const targetTree = layoutTree(state, toLayoutId);
+        if (!targetTree) return;
+
+        const targetPanels = collectPanels(targetTree);
+        const targetPaneId = toPaneId ?? targetPanels[0]?.id;
+        if (!targetPaneId) return;
+
+        const targetPane = findPane(targetTree, targetPaneId);
+        if (targetPane?.type !== "panel") return;
+
+        const sourceLocation = findTabAcrossLayouts(state, tabId);
+        if (!sourceLocation || sourceLocation.panel.id !== fromPaneId) return;
+        if (sourceLocation.layoutId === toLayoutId && sourceLocation.panel.id === targetPane.id) return;
+
+        const tabIndex = sourceLocation.panel.tabs.findIndex((tab) => tab.id === tabId);
+        if (tabIndex === -1) return;
+
+        const [tab] = sourceLocation.panel.tabs.splice(tabIndex, 1);
+        const insertAt =
+          toIndex !== undefined && toIndex >= 0
+            ? Math.min(toIndex, targetPane.tabs.length)
+            : targetPane.tabs.length;
+        targetPane.tabs.splice(insertAt, 0, tab);
+        targetPane.activeTabId = tab.id;
+        targetLayout.activePaneId = targetPane.id;
+
+        if (toLayoutId === state.currentLayoutId) {
+          state.activePaneId = targetPane.id;
+        }
+
+        if (sourceLocation.panel.tabs.length > 0) {
+          const nextIndex = Math.min(tabIndex, sourceLocation.panel.tabs.length - 1);
+          sourceLocation.panel.activeTabId = sourceLocation.panel.tabs[nextIndex].id;
+          const sourceLayout = state.layouts.find((layout) => layout.id === sourceLocation.layoutId);
+          if (sourceLayout) {
+            sourceLayout.activePaneId = sourceLocation.panel.id;
+          }
+          if (sourceLocation.layoutId === state.currentLayoutId && toLayoutId !== state.currentLayoutId) {
+            state.activePaneId = sourceLocation.panel.id;
+          }
+        } else if (sourceLocation.layoutId === state.currentLayoutId) {
+          closeEmptyCurrentSource = true;
+        }
+
+        moved = true;
+      });
+
+      if (!moved) return;
+
+      if (closeEmptyCurrentSource) {
+        get().closePane(fromPaneId);
+      }
+      notifyTerminalLayoutChanged("tab.move-layout");
     },
 
     splitAndMoveTab: (paneId, tabId, direction) => {
