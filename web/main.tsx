@@ -10,13 +10,21 @@ import ReactDOM from "react-dom/client";
 import "@/i18n";
 import App from "./App";
 import "./assets/index.css";
-import { error as logError } from "@tauri-apps/plugin-log";
-import { errorToString } from "@/utils/errorUtils";
+import { recordFrontendCrash } from "@/utils/frontendCrashLog";
 
 // 全局未捕获错误处理（调试白屏用）
 window.addEventListener("error", (e) => {
   console.error("[GLOBAL ERROR]", e.error);
-  logError(`[GLOBAL ERROR] ${errorToString(e.error)}`).catch(() => {});
+  recordFrontendCrash({
+    source: "window-error",
+    error: e.error ?? e.message,
+    extra: {
+      message: e.message,
+      filename: e.filename,
+      lineno: e.lineno,
+      colno: e.colno,
+    },
+  }).catch(() => {});
   const root = document.getElementById("root");
   if (root && !root.hasChildNodes()) {
     root.innerHTML = `<pre style="color:red;padding:20px;font-size:13px;">${e.error?.stack || e.message}</pre>`;
@@ -25,7 +33,10 @@ window.addEventListener("error", (e) => {
 
 window.addEventListener("unhandledrejection", (e) => {
   console.error("[UNHANDLED REJECTION]", e.reason);
-  logError(`[UNHANDLED REJECTION] ${errorToString(e.reason)}`).catch(() => {});
+  recordFrontendCrash({
+    source: "unhandled-rejection",
+    error: e.reason,
+  }).catch(() => {});
 });
 
 async function renderRoot() {
@@ -72,7 +83,10 @@ async function renderRoot() {
 
 renderRoot().catch((e) => {
   console.error("[RENDER CRASH]", e);
-  logError(`[RENDER CRASH] ${errorToString(e)}`).catch(() => {});
+  recordFrontendCrash({
+    source: "render-root-crash",
+    error: e,
+  }).catch(() => {});
   const root = document.getElementById("root");
   if (root) {
     root.innerHTML = `<pre style="color:red;padding:20px;font-size:13px;">Render crash: ${e instanceof Error ? e.stack : e}</pre>`;

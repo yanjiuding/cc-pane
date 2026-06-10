@@ -380,6 +380,7 @@ impl Default for ShortcutSettings {
         bindings.insert("new-tab".to_string(), "Ctrl+T".to_string());
         bindings.insert("close-tab".to_string(), "Ctrl+W".to_string());
         bindings.insert("settings".to_string(), "Ctrl+,".to_string());
+        bindings.insert("toggle-layouts".to_string(), "Ctrl+Alt+L".to_string());
         bindings.insert("split-right".to_string(), "Ctrl+\\".to_string());
         bindings.insert("split-down".to_string(), "Ctrl+-".to_string());
         bindings.insert("focus-pane-left".to_string(), "Alt+Left".to_string());
@@ -530,6 +531,10 @@ mod tests {
             Some(&"Alt+Down".to_string())
         );
         assert_eq!(bindings.get("voice-input"), Some(&"Ctrl+Alt+M".to_string()));
+        assert_eq!(
+            bindings.get("toggle-layouts"),
+            Some(&"Ctrl+Alt+L".to_string())
+        );
     }
 
     #[test]

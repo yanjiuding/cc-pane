@@ -115,6 +115,36 @@ describe("ProjectListView", () => {
     expect(screen.getByText("SSH")).toBeVisible();
   });
 
+  it("运行时异常项目不会让项目列表渲染崩溃", () => {
+    const validProject = createTestWorkspaceProject({
+      alias: "valid-project",
+      path: "D:/workspace/valid-project",
+    });
+    const projects = [
+      validProject,
+      { id: "missing-path" },
+      null,
+    ] as unknown as ReturnType<typeof createTestWorkspaceProject>[];
+    const workspace = createTestWorkspace({ projects });
+
+    render(
+      <ProjectListView
+        projects={projects}
+        ws={workspace}
+        gitBranches={{}}
+        onOpenTerminal={vi.fn()}
+        onRemoveProject={vi.fn()}
+        onSetProjectAlias={vi.fn()}
+        onImportProject={vi.fn()}
+        onMigrateProject={vi.fn()}
+        onOpenWorktreeManager={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("valid-project")).toBeVisible();
+    expect(screen.getByText("已隐藏 2 个异常项目")).toBeVisible();
+  });
+
   it("项目菜单直接显示 CLI 入口", async () => {
     const workspace = createTestWorkspace({
       projects: [

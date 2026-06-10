@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/core";
 import { useUpdateStore } from "@/stores";
 import { logService } from "@/services";
 import { Button } from "@/components/ui/button";
@@ -85,8 +84,7 @@ export default function AboutSection() {
           size="sm"
           onClick={async () => {
             try {
-              const logDir = await logService.getLogDir();
-              await invoke("open_path_in_explorer", { path: logDir });
+              await logService.openLogDir();
             } catch (error) {
               console.error("[AboutSection] Failed to open log dir:", error);
             }

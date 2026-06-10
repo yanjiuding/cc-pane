@@ -27,6 +27,8 @@ import {
 } from "@/components/ui/dialog";
 import type { LayoutEntry } from "@/types";
 
+export const LAYOUT_BAR_TOGGLE_EVENT = "cc-panes:toggle-layout-selector";
+
 interface DeleteSummary {
   layout: LayoutEntry;
   sessionIds: string[];
@@ -97,7 +99,6 @@ export default function LayoutBar() {
   const createLayout = usePanesStore((s) => s.createLayout);
   const renameLayout = usePanesStore((s) => s.renameLayout);
   const deleteLayout = usePanesStore((s) => s.deleteLayout);
-  const appViewMode = useActivityBarStore((s) => s.appViewMode);
   const setAppViewMode = useActivityBarStore((s) => s.setAppViewMode);
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -113,7 +114,7 @@ export default function LayoutBar() {
   const [deleteSummary, setDeleteSummary] = useState<DeleteSummary | null>(null);
 
   const deletingLastLayout = layouts.length <= 1;
-  const active = appViewMode === "home" || open;
+  const active = open;
   const summaryItems = useMemo(() => {
     if (!deleteSummary) return [];
     return [
@@ -193,6 +194,21 @@ export default function LayoutBar() {
   useEffect(() => {
     return () => clearCloseTimer();
   }, []);
+
+  useEffect(() => {
+    function handleToggleSelector() {
+      if (open) {
+        closeSelector();
+        return;
+      }
+      openSelector();
+    }
+
+    window.addEventListener(LAYOUT_BAR_TOGGLE_EVENT, handleToggleSelector);
+    return () => {
+      window.removeEventListener(LAYOUT_BAR_TOGGLE_EVENT, handleToggleSelector);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -428,7 +444,7 @@ export default function LayoutBar() {
   return (
     <div
       ref={rootRef}
-      className="relative flex items-center justify-center pb-2 pt-0.5"
+      className="relative flex h-10 w-full items-center justify-center"
       onMouseEnter={openSelector}
       onMouseLeave={scheduleClose}
     >
@@ -437,7 +453,7 @@ export default function LayoutBar() {
         aria-label={t("layoutSwitcher")}
         aria-haspopup="dialog"
         aria-expanded={open}
-        className={`relative flex h-8 w-8 cursor-pointer items-center justify-center rounded-xl transition-all duration-200 hover:scale-105 ${
+        className={`relative flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl transition-all duration-200 ${
           active
             ? "text-[var(--primary-foreground)]"
             : "text-[var(--app-accent)] hover:bg-[var(--app-activity-item-hover)]"

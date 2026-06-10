@@ -1,5 +1,5 @@
 import {
-  FolderTree, History, Bot, ListTodo, Settings, Files, Server, Zap, Workflow,
+  Command, FolderTree, History, ListTodo, Settings, Files, Server, Zap, Workflow,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
@@ -69,7 +69,7 @@ export default function ActivityBar() {
   const appViewMode = useActivityBarStore((s) => s.appViewMode);
   const orchestrationOverlayOpen = useActivityBarStore((s) => s.orchestrationOverlayOpen);
   const toggleTodoMode = useActivityBarStore((s) => s.toggleTodoMode);
-  const toggleSelfChatMode = useActivityBarStore((s) => s.toggleSelfChatMode);
+  const toggleHomeMode = useActivityBarStore((s) => s.toggleHomeMode);
   const toggleProvidersMode = useActivityBarStore((s) => s.toggleProvidersMode);
   const openSettings = useDialogStore((s) => s.openSettings);
   const orchestrationFailed = useOrchestratorStore((s) =>
@@ -117,24 +117,21 @@ export default function ActivityBar() {
         WebkitAppRegion: "no-drag",
       } as React.CSSProperties}
     >
-      <LayoutBar />
-
-      {/* Separator */}
-      <div
-        className="w-6 h-px mx-auto mb-2"
-        style={{ background: "var(--app-activity-border)" }}
-      />
+      <div className="flex w-full flex-col items-center gap-2 pb-2">
+        <ActivityBarIcon
+          icon={<Command className="w-[22px] h-[22px]" strokeWidth={1.6} />}
+          label={t("home")}
+          active={appViewMode === "home"}
+          onClick={toggleHomeMode}
+        />
+        <div
+          className="h-px w-6"
+          style={{ background: "var(--app-activity-border)" }}
+        />
+      </div>
 
       {/* 视图图标 */}
       <div className="flex flex-col w-full gap-1.5">
-        {/* Self-Chat (AI 助手 — 置顶) */}
-        <ActivityBarIcon
-          icon={<Bot className="w-[22px] h-[22px]" strokeWidth={1.5} />}
-          label={t("selfChat", { ns: "common", defaultValue: "Self Chat" })}
-          active={appViewMode === "selfchat"}
-          onClick={toggleSelfChatMode}
-        />
-
         {viewItems.map((item) => (
           <ActivityBarIcon
             key={item.view}
@@ -164,7 +161,8 @@ export default function ActivityBar() {
       </div>
 
       {/* 底部设置 */}
-      <div className="mt-auto pb-2 w-full">
+      <div className="mt-auto flex w-full flex-col items-center gap-1.5 pb-2">
+        <LayoutBar />
         <ActivityBarIcon
           icon={<Settings className="w-[22px] h-[22px]" strokeWidth={1.5} />}
           label={t("settings", { ns: "common", defaultValue: "Settings" })}

@@ -114,10 +114,10 @@ describe("useSettingsStore", () => {
       expect(defaults.notification.enabled).toBe(true);
     });
 
-    it("快捷键绑定应有 24 个", () => {
+    it("快捷键绑定应有 25 个", () => {
       const defaults = useSettingsStore.getState().getDefaults();
       const bindingCount = Object.keys(defaults.shortcuts.bindings).length;
-      expect(bindingCount).toBe(24);
+      expect(bindingCount).toBe(25);
     });
 
     it("应包含关键快捷键定义", () => {
@@ -128,6 +128,7 @@ describe("useSettingsStore", () => {
       expect(bindings["new-tab"]).toBe("Ctrl+T");
       expect(bindings["close-tab"]).toBe("Ctrl+W");
       expect(bindings["settings"]).toBe("Ctrl+,");
+      expect(bindings["toggle-layouts"]).toBe("Ctrl+Alt+L");
       expect(bindings["split-right"]).toBe("Ctrl+\\");
       expect(bindings["focus-pane-left"]).toBe("Alt+Left");
       expect(bindings["focus-pane-right"]).toBe("Alt+Right");

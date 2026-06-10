@@ -7,7 +7,8 @@ import { writeText as tauriWriteText } from "@tauri-apps/plugin-clipboard-manage
 import { toast } from "sonner";
 import { terminalService, historyService, sessionRestoreService } from "@/services";
 import { ensureListeners } from "@/services/terminalService";
-import { getErrorMessage, toWslPath } from "@/utils";
+import { getErrorMessage } from "@/utils";
+import { pickCreateSessionResumeId } from "./terminalResume";
 import { devDebugLog } from "@/utils/devLogger";
 import {
   TERMINAL_LAYOUT_CHANGED_EVENT,
@@ -107,46 +108,6 @@ function resolveRuntimeKind(
   if (ssh) return "ssh";
   if (wsl) return "wsl";
   return "local";
-}
-
-function normalizeHistoryPath(path?: string | null): string {
-  if (!path) return "";
-  return (toWslPath(path) ?? path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
-}
-
-async function resolveResumeIdFromHistory(params: {
-  currentResumeId?: string;
-  projectId: string;
-  projectPath: string;
-  cliTool: string;
-  runtimeKind: string;
-}): Promise<string | undefined> {
-  if (params.currentResumeId) return params.currentResumeId;
-
-  try {
-    const records = await historyService.list(200);
-    const exact = records.find((record) => (
-      record.projectId === params.projectId
-      && !!record.resumeSessionId
-      && (record.cliTool ?? "none") === params.cliTool
-      && (record.runtimeKind ?? "local") === params.runtimeKind
-    ));
-    if (exact?.resumeSessionId) {
-      return exact.resumeSessionId;
-    }
-
-    const targetPath = normalizeHistoryPath(params.projectPath);
-    const byPath = records.find((record) => (
-      !!record.resumeSessionId
-      && normalizeHistoryPath(record.projectPath) === targetPath
-      && (record.cliTool ?? "none") === params.cliTool
-      && (record.runtimeKind ?? "local") === params.runtimeKind
-    ));
-    return byPath?.resumeSessionId;
-  } catch (error) {
-    console.warn("[TerminalView] Failed to resolve resume id from launch history:", error);
-    return undefined;
-  }
 }
 
 function writeTerminalReply(
@@ -1123,7 +1084,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
             }
 
             let sessionId: string;
-            let effectiveResumeId = props.resumeId;
+            let effectiveResumeId = pickCreateSessionResumeId(props);
 
             if (props.sessionId) {
               debugLog("session.attach-existing", {
@@ -1160,17 +1121,10 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
                 return;
               }
 
-              // Create a brand-new backend session. Agent resume IDs must come
-              // from the tab/snapshot/history chain, not directory-level legacy state.
+              // Create a brand-new backend session. Resume id comes only from the
+              // tab/snapshot/props chain (never directory-level launch history).
               const cliTool = resolveCliTool(props.cliTool, props.launchClaude);
               const runtimeKind = resolveRuntimeKind(props.ssh, props.wsl);
-              effectiveResumeId = await resolveResumeIdFromHistory({
-                currentResumeId: effectiveResumeId,
-                projectId: props.projectId,
-                projectPath: props.projectPath,
-                cliTool,
-                runtimeKind,
-              });
 
               console.info(
                 `[TerminalView] Creating new session: project=${props.projectPath}, launchClaude=${props.launchClaude ?? false}, resumeId=${effectiveResumeId ?? "none"}`
@@ -1398,13 +1352,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
               const cliTool = resolveCliTool(props.cliTool, props.launchClaude);
               const runtimeKind = resolveRuntimeKind(props.ssh, props.wsl);
-              const effectiveResumeId = await resolveResumeIdFromHistory({
-                currentResumeId: props.resumeId,
-                projectId: props.projectId,
-                projectPath: props.projectPath,
-                cliTool,
-                runtimeKind,
-              });
+              const effectiveResumeId = pickCreateSessionResumeId(props);
 
               if (isUnmountedRef.current) return;
 
@@ -1461,9 +1409,6 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
                     backfillStartTime,
                   ).catch(console.error);
                 }
-              }
-              if (effectiveResumeId && effectiveResumeId !== props.resumeId) {
-                usePanesStore.getState().updateTabAgentResumeId(sessionId, effectiveResumeId);
               }
 
               // Clear restoring state once the deferred session is live.

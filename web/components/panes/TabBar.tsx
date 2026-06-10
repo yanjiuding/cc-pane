@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
-import { X, Plus, PanelRight, PanelBottom, Pin, Pencil, FolderTree, ExternalLink, ChevronLeft, ChevronRight, Settings2 } from "lucide-react";
+import { X, Plus, PanelRight, PanelBottom, Pin, Pencil, FolderTree, ExternalLink, ChevronLeft, ChevronRight, Settings2, Send } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -8,6 +8,9 @@ import {
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { useTerminalStatusStore } from "@/stores";
@@ -68,6 +71,8 @@ interface TabBarProps {
   onRename: (tabId: string, newTitle: string) => void;
   onSplitAndMoveRight: (tabId: string) => void;
   onSplitAndMoveDown: (tabId: string) => void;
+  moveTargets: { id: string; label: string }[];
+  onMoveTabToPane: (tabId: string, targetPaneId: string) => void;
   onSplitTerminalRight: (tabId: string) => void;
   onSplitTerminalDown: (tabId: string) => void;
   onCloseTerminalPane: (tabId: string) => void;
@@ -104,6 +109,8 @@ function SortableTab({
   onSplitDown,
   onSplitAndMoveRight,
   onSplitAndMoveDown,
+  moveTargets,
+  onMoveTabToPane,
   onSplitTerminalRight,
   onSplitTerminalDown,
   onCloseTerminalPane,
@@ -140,6 +147,8 @@ function SortableTab({
   onSplitDown: () => void;
   onSplitAndMoveRight: (tabId: string) => void;
   onSplitAndMoveDown: (tabId: string) => void;
+  moveTargets: { id: string; label: string }[];
+  onMoveTabToPane: (tabId: string, targetPaneId: string) => void;
   onSplitTerminalRight: (tabId: string) => void;
   onSplitTerminalDown: (tabId: string) => void;
   onCloseTerminalPane: (tabId: string) => void;
@@ -219,7 +228,6 @@ function SortableTab({
         style={active ? {
           background: 'transparent',
           color: activeTabFg ?? 'var(--app-text-primary)',
-          borderTop: '2px solid var(--app-accent)',
           fontWeight: 600,
         } : {
           color: 'var(--notch-tab-inactive-fg)',
@@ -335,6 +343,20 @@ function SortableTab({
             </ContextMenuItem>
           </>
         )}
+        {moveTargets.length > 0 && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger inset>
+              <Send /> {t("sendToPane")}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {moveTargets.map((target) => (
+                <ContextMenuItem key={target.id} onClick={() => onMoveTabToPane(tab.id, target.id)}>
+                  {target.label}
+                </ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        )}
         {tab.contentType === "terminal" && (
           <>
             <ContextMenuSeparator />
@@ -406,6 +428,8 @@ export default memo(function TabBar({
   onRename,
   onSplitAndMoveRight,
   onSplitAndMoveDown,
+  moveTargets,
+  onMoveTabToPane,
   onSplitTerminalRight,
   onSplitTerminalDown,
   onCloseTerminalPane,
@@ -577,6 +601,8 @@ export default memo(function TabBar({
                 onSplitDown={onSplitDown}
                 onSplitAndMoveRight={onSplitAndMoveRight}
                 onSplitAndMoveDown={onSplitAndMoveDown}
+                moveTargets={moveTargets}
+                onMoveTabToPane={onMoveTabToPane}
                 onSplitTerminalRight={onSplitTerminalRight}
                 onSplitTerminalDown={onSplitTerminalDown}
                 onCloseTerminalPane={onCloseTerminalPane}

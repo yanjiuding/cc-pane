@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { Terminal, FolderTree, Bot, Settings } from "lucide-react";
+import { Terminal, FolderTree, Settings } from "lucide-react";
 import { useActivityBarStore } from "@/stores/useActivityBarStore";
 import { useDialogStore } from "@/stores";
 
@@ -19,7 +19,6 @@ export default function HomeQuickActions({ onNewTerminal }: HomeQuickActionsProp
   const { t } = useTranslation("home");
   const setAppViewMode = useActivityBarStore((s) => s.setAppViewMode);
   const toggleView = useActivityBarStore((s) => s.toggleView);
-  const toggleSelfChatMode = useActivityBarStore((s) => s.toggleSelfChatMode);
   const openSettings = useDialogStore((s) => s.openSettings);
 
   const actions: QuickAction[] = [
@@ -39,12 +38,6 @@ export default function HomeQuickActions({ onNewTerminal }: HomeQuickActionsProp
       },
     },
     {
-      icon: <Bot className="w-5 h-5" />,
-      labelKey: "aiAssistant",
-      color: "var(--chart-2)",
-      onClick: toggleSelfChatMode,
-    },
-    {
       icon: <Settings className="w-5 h-5" />,
       labelKey: "settings",
       color: "var(--app-text-tertiary)",
@@ -53,7 +46,7 @@ export default function HomeQuickActions({ onNewTerminal }: HomeQuickActionsProp
   ];
 
   return (
-    <div className="grid grid-cols-4 gap-3">
+    <div className="grid grid-cols-3 gap-3">
       {actions.map((action) => (
         <button
           key={action.labelKey}

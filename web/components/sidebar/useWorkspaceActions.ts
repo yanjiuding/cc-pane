@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -25,10 +25,15 @@ export function useWorkspaceActions({ onOpenTerminal }: UseWorkspaceActionsParam
   const updateProjectAlias = useWorkspacesStore((s) => s.updateProjectAlias);
   const updateWorkspaceAlias = useWorkspacesStore((s) => s.updateWorkspaceAlias);
   const expandedWorkspaceId = useWorkspacesStore((s) => s.expandedWorkspaceId);
+  const expandedWorkspace = useWorkspacesStore((s) =>
+    s.workspaces.find((workspace) => workspace.id === s.expandedWorkspaceId)
+  );
 
   // Git 分支 & Worktree 缓存
   const [gitBranches, setGitBranches] = useState<Record<string, string | null>>({});
   const [worktreeCache, setWorktreeCache] = useState<Record<string, WorktreeInfo[]>>({});
+  const requestedGitBranches = useRef(new Set<string>());
+  const requestedWorktrees = useRef(new Set<string>());
 
   // Dialog 状态
   const [newWorkspaceOpen, setNewWorkspaceOpen] = useState(false);
@@ -102,25 +107,31 @@ export function useWorkspaceActions({ onOpenTerminal }: UseWorkspaceActionsParam
   }, []);
 
   useEffect(() => {
-    if (!expandedWorkspaceId) return;
-    const currentWorkspaces = useWorkspacesStore.getState().workspaces;
-    const ws = currentWorkspaces.find((w) => w.id === expandedWorkspaceId);
-    if (!ws) return;
-    for (const project of ws.projects) {
-      setGitBranches((prev) => {
-        if (project.path in prev) return prev;
-        fetchGitBranch(project.path).then((branch) => {
-          setGitBranches((p) => ({ ...p, [project.path]: branch }));
+    if (!expandedWorkspaceId || !expandedWorkspace) return;
+    const projects = Array.isArray(expandedWorkspace.projects)
+      ? expandedWorkspace.projects
+      : [];
+
+    for (const project of projects) {
+      if (!project || typeof project.path !== "string" || project.path.trim() === "") {
+        continue;
+      }
+      const projectPath = project.path;
+      if (!(projectPath in gitBranches) && !requestedGitBranches.current.has(projectPath)) {
+        requestedGitBranches.current.add(projectPath);
+        void fetchGitBranch(projectPath).then((branch) => {
+          setGitBranches((prev) => {
+            if (projectPath in prev && prev[projectPath] === branch) return prev;
+            return { ...prev, [projectPath]: branch };
+          });
         });
-        return prev;
-      });
-      setWorktreeCache((prev) => {
-        if (project.path in prev) return prev;
-        fetchWorktrees(project.path);
-        return prev;
-      });
+      }
+      if (!(projectPath in worktreeCache) && !requestedWorktrees.current.has(projectPath)) {
+        requestedWorktrees.current.add(projectPath);
+        void fetchWorktrees(projectPath);
+      }
     }
-  }, [expandedWorkspaceId, fetchGitBranch, fetchWorktrees]);
+  }, [expandedWorkspace, expandedWorkspaceId, fetchGitBranch, fetchWorktrees, gitBranches, worktreeCache]);
 
   // ============ 工作空间操作 ============
 

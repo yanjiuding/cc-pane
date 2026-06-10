@@ -37,6 +37,20 @@ interface ProjectListViewProps {
   onOpenInFileBrowser?: (path: string) => void;
 }
 
+function isRenderableWorkspaceProject(project: unknown): project is WorkspaceProject {
+  return typeof project === "object"
+    && project !== null
+    && typeof (project as WorkspaceProject).id === "string"
+    && typeof (project as WorkspaceProject).path === "string"
+    && (project as WorkspaceProject).path.trim() !== "";
+}
+
+function normalizeProjects(projects: WorkspaceProject[]): WorkspaceProject[] {
+  if (!Array.isArray(projects)) return [];
+  const renderableProjects = projects.filter(isRenderableWorkspaceProject);
+  return renderableProjects.length === projects.length ? projects : renderableProjects;
+}
+
 function getSshDisplayName(ssh: SshConnectionInfo): string {
   const host = ssh.user ? `${ssh.user}@${ssh.host}` : ssh.host;
   return `${host}:${ssh.remotePath}`;
@@ -78,7 +92,12 @@ export default function ProjectListView({
   const onOpenTodo = useDialogStore((s) => s.openTodo);
   const [projectSpecs, setProjectSpecs] = useState<Record<string, SpecEntry[]>>({});
   const isWindows = detectAppPlatform() === "windows";
-  const defaultEnvironment = getWorkspaceDefaultEnvironment(ws);
+  const safeProjects = normalizeProjects(projects);
+  const invalidProjectCount = Array.isArray(projects)
+    ? projects.length - safeProjects.length
+    : 0;
+  const workspace = safeProjects === projects ? ws : { ...ws, projects: safeProjects };
+  const defaultEnvironment = getWorkspaceDefaultEnvironment(workspace);
 
   const handleLoadSpecs = useCallback(async (projectPath: string) => {
     try {
@@ -147,18 +166,26 @@ export default function ProjectListView({
 
   return (
     <div className="flex flex-col gap-1 px-3 pb-3 pt-2">
-      {projects.map((project) => {
+      {invalidProjectCount > 0 ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
+          {t("invalidProjectsSkipped", {
+            count: invalidProjectCount,
+            defaultValue: `已隐藏 ${invalidProjectCount} 个异常项目`,
+          })}
+        </div>
+      ) : null}
+      {safeProjects.map((project) => {
         const isSsh = !!project.ssh;
         const projectKind = getWorkspaceProjectKind(project);
         const canLaunchWsl = isWindows
           && !resolveWorkspaceProjectLaunchOptions({
-            workspace: ws,
+            workspace,
             project,
             machines: sshMachines,
             environment: "wsl",
           }).issue;
         const canLaunchSsh = !resolveWorkspaceProjectLaunchOptions({
-          workspace: ws,
+          workspace,
           project,
           machines: sshMachines,
           environment: "ssh",
@@ -170,7 +197,7 @@ export default function ProjectListView({
           environment?: WorkspaceLaunchEnvironment,
         ) => {
           const { options, issue } = resolveWorkspaceProjectLaunchOptions({
-            workspace: ws,
+            workspace,
             project,
             cliTool,
             environment,
@@ -262,7 +289,7 @@ export default function ProjectListView({
                       <ContextMenuItem onClick={() => handleCopyPath(project.path)}>
                         {t("absolutePath")}
                       </ContextMenuItem>
-                      <ContextMenuItem onClick={() => handleCopyPath(getRelativePath(project.path, ws.path))}>
+                      <ContextMenuItem onClick={() => handleCopyPath(getRelativePath(project.path, workspace.path))}>
                         {t("relativePath")}
                       </ContextMenuItem>
                     </ContextMenuSubContent>
@@ -271,11 +298,11 @@ export default function ProjectListView({
                   <ContextMenuItem onClick={() => onOpenHistory(project.path)}>
                     <Clock /> {t("fileHistory")}
                   </ContextMenuItem>
-                  <ContextMenuItem onClick={() => onOpenWorktreeManager(project, ws)}>
+                  <ContextMenuItem onClick={() => onOpenWorktreeManager(project, workspace)}>
                     <GitBranch /> {t("worktreeManager")}
                   </ContextMenuItem>
                   {isWindows && (
-                    <ContextMenuItem onClick={() => onMigrateProject(ws, project)}>
+                    <ContextMenuItem onClick={() => onMigrateProject(workspace, project)}>
                       <MonitorSmartphone /> Migrate To WSL
                     </ContextMenuItem>
                   )}
@@ -312,11 +339,11 @@ export default function ProjectListView({
                   <ContextMenuSeparator />
                 </>
               )}
-              <ContextMenuItem onClick={() => onSetProjectAlias(ws, project)}>
+              <ContextMenuItem onClick={() => onSetProjectAlias(workspace, project)}>
                 <Pencil /> {t("setAlias")}
               </ContextMenuItem>
               <ContextMenuSeparator />
-              <ContextMenuItem variant="destructive" onClick={() => onRemoveProject(ws, project)}>
+              <ContextMenuItem variant="destructive" onClick={() => onRemoveProject(workspace, project)}>
                 <Trash2 /> {t("removeProject")}
               </ContextMenuItem>
             </ContextMenuContent>
@@ -328,7 +355,7 @@ export default function ProjectListView({
       {/* 导入项目按钮 */}
       <div
         className="flex items-center justify-center gap-1 p-1.5 mt-1 text-[11px] rounded-lg cursor-pointer transition-all border border-dashed group border-[var(--app-border)] text-[var(--app-text-tertiary)] hover:border-[var(--app-accent)] hover:text-[var(--app-accent)] hover:bg-[var(--app-active-bg)]"
-        onClick={() => onImportProject(ws)}
+        onClick={() => onImportProject(workspace)}
       >
         <Plus size={12} className="transition-transform group-hover:rotate-90" />
         <span>{t("importProject")}</span>

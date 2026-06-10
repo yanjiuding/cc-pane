@@ -10,6 +10,7 @@ import { PaneContainer } from "@/components/panes";
 import DndPaneProvider from "@/components/panes/DndPaneProvider";
 import { FileEditorPanel } from "@/components/editor";
 import SettingsPanel from "@/components/SettingsPanel";
+import { LAYOUT_BAR_TOGGLE_EVENT } from "@/components/LayoutBar";
 import JournalPanel from "@/components/JournalPanel";
 import LocalHistoryPanel from "@/components/LocalHistoryPanel";
 import SessionCleanerPanel from "@/components/SessionCleanerPanel";
@@ -518,6 +519,11 @@ function MainApp() {
       id: "settings",
       label: i18n.t("settings", { ns: "shortcuts" }),
       handler: () => useDialogStore.getState().openSettings(),
+    });
+    register({
+      id: "toggle-layouts",
+      label: i18n.t("toggle-layouts", { ns: "shortcuts" }),
+      handler: () => window.dispatchEvent(new Event(LAYOUT_BAR_TOGGLE_EVENT)),
     });
     register({
       id: "split-right",

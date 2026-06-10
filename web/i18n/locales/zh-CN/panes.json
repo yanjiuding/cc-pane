@@ -35,6 +35,8 @@
   "searchClose": "关闭 (Esc)",
   "splitAndMoveRight": "面板 · 移至右侧",
   "splitAndMoveDown": "面板 · 移至下方",
+  "sendToPane": "发送到窗格",
+  "pane": "窗格",
   "closeTabsToLeft": "关闭左侧标签",
   "closeTabsToRight": "关闭右侧标签",
   "closeOtherTabs": "关闭其他标签",

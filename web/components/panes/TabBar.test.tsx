@@ -61,6 +61,8 @@ function renderTabBar({
         onRename={onRename}
         onSplitAndMoveRight={vi.fn()}
         onSplitAndMoveDown={vi.fn()}
+        moveTargets={[]}
+        onMoveTabToPane={vi.fn()}
         onSplitTerminalRight={vi.fn()}
         onSplitTerminalDown={vi.fn()}
         onCloseTerminalPane={vi.fn()}
@@ -226,6 +228,8 @@ describe("TabBar", () => {
           onRename={vi.fn()}
           onSplitAndMoveRight={vi.fn()}
           onSplitAndMoveDown={vi.fn()}
+          moveTargets={[]}
+          onMoveTabToPane={vi.fn()}
           onSplitTerminalRight={vi.fn()}
           onSplitTerminalDown={vi.fn()}
           onCloseTerminalPane={vi.fn()}

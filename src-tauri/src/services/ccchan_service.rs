@@ -7,7 +7,7 @@ use crate::models::{CliTool, LaunchProviderSelection};
 use crate::services::{ProviderService, SettingsService, TerminalService};
 use crate::utils::{AppError, AppPaths, AppResult};
 use cc_cli_adapters::{
-    no_window_command, ClaudeAdapter, CliAdapterContext, CliProvider, CliToolAdapter,
+    no_window_command, ClaudeAdapter, CliAdapterContext, CliProvider, CliToolAdapter, CodexAdapter,
 };
 use cc_panes_core::events::SessionNotifier;
 use serde::{Deserialize, Serialize};
@@ -42,12 +42,20 @@ enum ChatSessionState {
         claude_session_id: Option<String>,
         provider_id: Option<String>,
     },
+    CodexStructured {
+        session_id: String,
+        chat_dir: PathBuf,
+        codex_thread_id: Option<String>,
+        provider_id: Option<String>,
+    },
 }
 
 impl ChatSessionState {
     fn session_id(&self) -> &str {
         match self {
-            Self::Terminal { session_id } | Self::ClaudeStructured { session_id, .. } => session_id,
+            Self::Terminal { session_id }
+            | Self::ClaudeStructured { session_id, .. }
+            | Self::CodexStructured { session_id, .. } => session_id,
         }
     }
 }
@@ -59,11 +67,27 @@ struct ClaudeCommandSpec {
     env_remove: Vec<String>,
 }
 
+#[derive(Debug, Clone)]
+struct CodexCommandSpec {
+    command: String,
+    args: Vec<String>,
+    env_remove: Vec<String>,
+    env_inject: HashMap<String, String>,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 struct ParsedClaudeLine {
     text: Option<String>,
     status: Option<&'static str>,
     session_id: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ParsedCodexLine {
+    text: Option<String>,
+    status: Option<&'static str>,
+    thread_id: Option<String>,
     error: Option<String>,
 }
 
@@ -250,6 +274,9 @@ impl CCChanService {
         if cli_tool == CliTool::Claude {
             return self.start_structured_claude_chat(chat_dir);
         }
+        if cli_tool == CliTool::Codex {
+            return self.start_structured_codex_chat(chat_dir);
+        }
 
         let chat_dir_str = chat_dir.to_string_lossy().to_string();
         let default_provider_id = self
@@ -337,6 +364,24 @@ impl CCChanService {
                 }
                 Ok(())
             }
+            Some(ChatSessionState::CodexStructured {
+                session_id: stored_id,
+                chat_dir,
+                codex_thread_id,
+                provider_id,
+            }) if stored_id == session_id => {
+                let next_codex_thread_id = self.run_structured_codex_turn(
+                    session_id,
+                    &chat_dir,
+                    codex_thread_id.as_deref(),
+                    provider_id.as_deref(),
+                    text,
+                )?;
+                if let Some(next_id) = next_codex_thread_id {
+                    self.update_structured_codex_thread_id(session_id, next_id)?;
+                }
+                Ok(())
+            }
             _ => Err(AppError::from(format!(
                 "ccchan chat session '{session_id}' is not active"
             ))),
@@ -376,6 +421,15 @@ impl CCChanService {
                 info!(session_id, "ccchan structured chat stopped");
                 Ok(())
             }
+            Some(ChatSessionState::CodexStructured { .. }) => {
+                self.emit_chat_status(
+                    session_id,
+                    "exited",
+                    Some("Codex CLI chat 已停止。点“重启 CLI”重新连接。"),
+                );
+                info!(session_id, "ccchan structured Codex chat stopped");
+                Ok(())
+            }
         }
     }
 
@@ -391,6 +445,10 @@ impl CCChanService {
             .clone();
         match session {
             Some(ChatSessionState::ClaudeStructured {
+                session_id: stored_id,
+                ..
+            }) if stored_id == session_id => Ok(true),
+            Some(ChatSessionState::CodexStructured {
                 session_id: stored_id,
                 ..
             }) if stored_id == session_id => Ok(true),
@@ -433,6 +491,40 @@ impl CCChanService {
             session_id = %session_id,
             provider_id = provider_id.as_deref().unwrap_or("none"),
             "ccchan structured Claude chat session created"
+        );
+        self.emit_chat_status(&session_id, "ready", None);
+        Ok(session_id)
+    }
+
+    fn start_structured_codex_chat(&self, chat_dir: PathBuf) -> AppResult<String> {
+        let session_id = format!("ccchan-codex-{}", Uuid::new_v4());
+        let provider_id = self
+            .provider_service
+            .get_default_provider()
+            .map(|provider| provider.id);
+
+        self.build_structured_codex_command(
+            &session_id,
+            &chat_dir,
+            None,
+            provider_id.as_deref(),
+            None,
+        )?;
+
+        let mut stored = self
+            .chat_session
+            .lock()
+            .map_err(|_| AppError::from("ccchan chat session lock poisoned"))?;
+        *stored = Some(ChatSessionState::CodexStructured {
+            session_id: session_id.clone(),
+            chat_dir,
+            codex_thread_id: None,
+            provider_id: provider_id.clone(),
+        });
+        info!(
+            session_id = %session_id,
+            provider_id = provider_id.as_deref().unwrap_or("none"),
+            "ccchan structured Codex chat session created"
         );
         self.emit_chat_status(&session_id, "ready", None);
         Ok(session_id)
@@ -541,6 +633,110 @@ impl CCChanService {
         Ok(next_claude_session_id)
     }
 
+    fn run_structured_codex_turn(
+        &self,
+        session_id: &str,
+        chat_dir: &Path,
+        resume_id: Option<&str>,
+        provider_id: Option<&str>,
+        text: &str,
+    ) -> AppResult<Option<String>> {
+        self.emit_chat_status(session_id, "starting", None);
+        let spec = self.build_structured_codex_command(
+            session_id,
+            chat_dir,
+            resume_id,
+            provider_id,
+            Some(text),
+        )?;
+        let mut command = no_window_command(&spec.command);
+        command
+            .args(&spec.args)
+            .current_dir(chat_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        for key in &spec.env_remove {
+            command.env_remove(key);
+        }
+        for (key, value) in self.structured_codex_env_vars(session_id, provider_id) {
+            command.env(key, value);
+        }
+        for (key, value) in spec.env_inject {
+            command.env(key, value);
+        }
+
+        info!(
+            session_id,
+            resume_id = resume_id.unwrap_or("none"),
+            "ccchan structured Codex turn starting"
+        );
+        let mut child = command.spawn().map_err(|error| {
+            AppError::from(format!("Failed to start Codex structured chat: {error}"))
+        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| AppError::from("Codex structured chat stdout is unavailable"))?;
+        let mut stderr = child.stderr.take();
+        let stderr_reader = std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut stderr) = stderr.take() {
+                let _ = stderr.read_to_string(&mut text);
+            }
+            text
+        });
+
+        let mut next_thread_id = resume_id.map(str::to_string);
+        let mut last_error: Option<String> = None;
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            let line = line.map_err(|error| {
+                AppError::from(format!("Failed to read Codex structured output: {error}"))
+            })?;
+            let Some(parsed) = parse_codex_stream_line(&line) else {
+                continue;
+            };
+            if let Some(thread_id) = parsed.thread_id {
+                next_thread_id = Some(thread_id);
+            }
+            if let Some(status) = parsed.status {
+                self.emit_chat_status(session_id, status, None);
+            }
+            if let Some(error) = parsed.error {
+                last_error = Some(error);
+            }
+            if let Some(text) = parsed.text {
+                self.emit_chat_output(session_id, &text);
+            }
+        }
+
+        let status = child.wait().map_err(|error| {
+            AppError::from(format!("Failed to wait for Codex structured chat: {error}"))
+        })?;
+        let stderr_text = stderr_reader.join().unwrap_or_default();
+        if !status.success() {
+            let exit_message = status.code().map(|code| format!("exit {code}"));
+            let message = first_non_empty([
+                last_error.as_deref(),
+                Some(stderr_text.trim()),
+                exit_message.as_deref(),
+            ])
+            .unwrap_or_else(|| "Codex structured chat failed".to_string());
+            self.emit_chat_status(session_id, "error", Some(&message));
+            return Err(AppError::from(message));
+        }
+
+        if let Some(error) = last_error {
+            self.emit_chat_status(session_id, "error", Some(&error));
+            return Err(AppError::from(error));
+        }
+
+        self.emit_chat_status(session_id, "ready", None);
+        Ok(next_thread_id)
+    }
+
     fn build_structured_claude_command(
         &self,
         session_id: &str,
@@ -588,6 +784,55 @@ impl CCChanService {
         })
     }
 
+    fn build_structured_codex_command(
+        &self,
+        session_id: &str,
+        chat_dir: &Path,
+        resume_id: Option<&str>,
+        provider_id: Option<&str>,
+        prompt: Option<&str>,
+    ) -> AppResult<CodexCommandSpec> {
+        let provider = provider_id
+            .and_then(|id| self.provider_service.get_provider(id))
+            .map(to_cli_provider);
+        let adapter = CodexAdapter::new();
+        let ctx = CliAdapterContext {
+            session_id: session_id.to_string(),
+            project_path: chat_dir.to_string_lossy().to_string(),
+            workspace_path: None,
+            provider,
+            resume_id: resume_id.map(str::to_string),
+            skip_mcp: true,
+            yolo_mode: false,
+            append_system_prompt: Some(CCCHAN_HELPER_PROMPT.to_string()),
+            initial_prompt: prompt.map(str::to_string),
+            orchestrator_port: None,
+            orchestrator_token: None,
+            launch_id: None,
+            data_dir: self.app_paths.data_dir().to_path_buf(),
+            shared_mcp_urls: HashMap::new(),
+            allowed_mcp_server_ids: Vec::new(),
+            disable_unlisted_mcp_servers: false,
+        };
+        let result = adapter
+            .build_command(&ctx)
+            .map_err(|error| AppError::from(error.to_string()))?;
+        let mut args = vec![
+            "exec".to_string(),
+            "--json".to_string(),
+            "--color".to_string(),
+            "never".to_string(),
+            "--skip-git-repo-check".to_string(),
+        ];
+        args.extend(result.args);
+        Ok(CodexCommandSpec {
+            command: result.command,
+            args,
+            env_remove: result.env_remove,
+            env_inject: result.env_inject,
+        })
+    }
+
     fn structured_claude_env_vars(
         &self,
         session_id: &str,
@@ -604,6 +849,30 @@ impl CCChanService {
             .entry("COLORTERM".to_string())
             .or_insert_with(|| "truecolor".to_string());
         env_vars.insert("CC_PANES_CLI_TOOL".to_string(), "claude".to_string());
+        env_vars.insert("CC_PANES_RUNTIME_KIND".to_string(), "local".to_string());
+        env_vars.insert(
+            "CC_PANES_CCCHAN_SESSION_ID".to_string(),
+            session_id.to_string(),
+        );
+        env_vars
+    }
+
+    fn structured_codex_env_vars(
+        &self,
+        session_id: &str,
+        provider_id: Option<&str>,
+    ) -> HashMap<String, String> {
+        let mut env_vars = self.settings_service.get_proxy_env_vars();
+        if let Some(provider_id) = provider_id {
+            env_vars.extend(self.provider_service.get_env_vars(Some(provider_id)));
+        }
+        env_vars
+            .entry("TERM".to_string())
+            .or_insert_with(|| "xterm-256color".to_string());
+        env_vars
+            .entry("COLORTERM".to_string())
+            .or_insert_with(|| "truecolor".to_string());
+        env_vars.insert("CC_PANES_CLI_TOOL".to_string(), "codex".to_string());
         env_vars.insert("CC_PANES_RUNTIME_KIND".to_string(), "local".to_string());
         env_vars.insert(
             "CC_PANES_CCCHAN_SESSION_ID".to_string(),
@@ -629,6 +898,28 @@ impl CCChanService {
         {
             if stored_id == session_id {
                 *stored_claude_session_id = Some(claude_session_id);
+            }
+        }
+        Ok(())
+    }
+
+    fn update_structured_codex_thread_id(
+        &self,
+        session_id: &str,
+        codex_thread_id: String,
+    ) -> AppResult<()> {
+        let mut stored = self
+            .chat_session
+            .lock()
+            .map_err(|_| AppError::from("ccchan chat session lock poisoned"))?;
+        if let Some(ChatSessionState::CodexStructured {
+            session_id: stored_id,
+            codex_thread_id: stored_codex_thread_id,
+            ..
+        }) = stored.as_mut()
+        {
+            if stored_id == session_id {
+                *stored_codex_thread_id = Some(codex_thread_id);
             }
         }
         Ok(())
@@ -750,6 +1041,17 @@ impl CCChanService {
                 info!(
                     session_id = %session_id,
                     "ccchan replaced previous structured Claude chat session"
+                );
+            }
+            ChatSessionState::CodexStructured { session_id, .. } => {
+                self.emit_chat_status(
+                    &session_id,
+                    "exited",
+                    Some("Codex CLI chat 已被新会话替换。"),
+                );
+                info!(
+                    session_id = %session_id,
+                    "ccchan replaced previous structured Codex chat session"
                 );
             }
         }
@@ -1075,6 +1377,57 @@ fn parse_claude_stream_line(line: &str) -> Option<ParsedClaudeLine> {
     Some(parsed)
 }
 
+fn parse_codex_stream_line(line: &str) -> Option<ParsedCodexLine> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let value: Value = serde_json::from_str(trimmed).ok()?;
+    let event_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let mut parsed = ParsedCodexLine {
+        thread_id: stream_thread_id(&value).map(str::to_string),
+        ..ParsedCodexLine::default()
+    };
+
+    match event_type {
+        "thread.started" => {}
+        "turn.started" => {
+            parsed.status = Some("thinking");
+        }
+        "turn.completed" => {
+            parsed.status = Some("ready");
+        }
+        "turn.failed" | "error" => {
+            parsed.error = extract_codex_error(&value);
+        }
+        "item.completed" | "item.updated" | "item.failed" => {
+            if let Some(item) = value.get("item") {
+                parsed.text = extract_codex_item_text(item);
+                parsed.error = extract_codex_error(item);
+            }
+        }
+        "agent_message" | "message" => {
+            parsed.text = extract_codex_item_text(&value);
+        }
+        _ => {}
+    }
+
+    if parsed.text.as_deref().unwrap_or_default().is_empty() {
+        parsed.text = None;
+    }
+    if parsed.status.is_none()
+        && parsed.text.is_none()
+        && parsed.thread_id.is_none()
+        && parsed.error.is_none()
+    {
+        return None;
+    }
+    Some(parsed)
+}
+
 fn extract_assistant_text(value: &Value) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(content) = value.pointer("/message/content") {
@@ -1101,13 +1454,60 @@ fn extract_assistant_text(value: &Value) -> Option<String> {
     Some(parts.join(""))
 }
 
+fn extract_codex_item_text(value: &Value) -> Option<String> {
+    let item_type = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let role = value
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(
+        item_type,
+        "agent_message" | "message" | "assistant_message" | ""
+    ) || (!role.is_empty() && role != "assistant")
+    {
+        return None;
+    }
+
+    if let Some(text) = value.get("text").and_then(Value::as_str) {
+        return Some(text.to_string());
+    }
+    if let Some(text) = value.pointer("/message/content").and_then(Value::as_str) {
+        return Some(text.to_string());
+    }
+    if let Some(content) = value.get("content") {
+        let mut parts = Vec::new();
+        collect_text_content(content, &mut parts);
+        if !parts.is_empty() {
+            return Some(parts.join(""));
+        }
+    }
+    None
+}
+
+fn extract_codex_error(value: &Value) -> Option<String> {
+    [
+        "/error/message",
+        "/error",
+        "/message",
+        "/item/error/message",
+        "/item/error",
+        "/item/message",
+    ]
+    .iter()
+    .find_map(|pointer| value.pointer(pointer).and_then(Value::as_str))
+    .map(str::to_string)
+}
+
 fn collect_text_content(content: &Value, parts: &mut Vec<String>) {
     match content {
         Value::String(text) => parts.push(text.clone()),
         Value::Array(items) => {
             for item in items {
                 let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
-                if item_type == "text" || item_type.is_empty() {
+                if matches!(item_type, "text" | "output_text" | "") {
                     if let Some(text) = item.get("text").and_then(Value::as_str) {
                         parts.push(text.to_string());
                     }
@@ -1142,6 +1542,13 @@ fn stream_session_id(value: &Value) -> Option<&str> {
     value
         .get("session_id")
         .or_else(|| value.get("sessionId"))
+        .and_then(Value::as_str)
+}
+
+fn stream_thread_id(value: &Value) -> Option<&str> {
+    value
+        .get("thread_id")
+        .or_else(|| value.get("threadId"))
         .and_then(Value::as_str)
 }
 
@@ -1222,5 +1629,37 @@ mod tests {
 
         assert_eq!(parsed.error.as_deref(), Some("boom"));
         assert_eq!(parsed.text, None);
+    }
+
+    #[test]
+    fn parses_codex_thread_id_and_agent_message() {
+        let thread = parse_codex_stream_line(
+            r#"{"type":"thread.started","thread_id":"019eb100-092d-7aa3-9fb4-600e0c3ef5ab"}"#,
+        )
+        .expect("thread line should parse");
+        assert_eq!(
+            thread.thread_id.as_deref(),
+            Some("019eb100-092d-7aa3-9fb4-600e0c3ef5ab")
+        );
+        assert_eq!(thread.text, None);
+
+        let message = parse_codex_stream_line(
+            r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"OK"}}"#,
+        )
+        .expect("agent message should parse");
+        assert_eq!(message.text.as_deref(), Some("OK"));
+        assert_eq!(message.thread_id, None);
+    }
+
+    #[test]
+    fn parses_codex_status_and_error() {
+        let started = parse_codex_stream_line(r#"{"type":"turn.started"}"#)
+            .expect("turn started should parse");
+        assert_eq!(started.status, Some("thinking"));
+
+        let failed =
+            parse_codex_stream_line(r#"{"type":"turn.failed","error":{"message":"Codex failed"}}"#)
+                .expect("turn failed should parse");
+        assert_eq!(failed.error.as_deref(), Some("Codex failed"));
     }
 }

@@ -137,6 +137,33 @@ describe("WorkspaceItem", () => {
     });
   });
 
+  it("projects 运行时缺失时仍渲染工作空间并显示 0", () => {
+    renderWorkspaceItem("local", false, {
+      projects: undefined as unknown as Workspace["projects"],
+    });
+
+    expect(screen.getByText("workspace-alpha")).toBeVisible();
+    expect(screen.getByText("0")).toBeVisible();
+  });
+
+  it("兼容旧版常用启动项配置且不触发渲染循环", async () => {
+    useSettingsStore.setState({
+      settings: createTestSettings({
+        general: {
+          ...createTestSettings().general,
+          launchFavorites: ["terminal-default", "claude-local", "codex-local"],
+        },
+      }),
+      loading: false,
+    });
+
+    renderWorkspaceItem("local");
+    fireEvent.contextMenu(screen.getByRole("button", { name: /workspace-alpha/i }));
+
+    expect((await screen.findAllByRole("menuitem", { name: "Claude Code" })).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole("menuitem", { name: "Codex CLI" }).length).toBeGreaterThan(0);
+  });
+
   it("shows the workspace environment entry directly in the workspace context menu", async () => {
     renderWorkspaceItem("local");
 

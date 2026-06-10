@@ -1,4 +1,4 @@
-import { useCallback, useState, type ButtonHTMLAttributes } from "react";
+import { useCallback, useMemo, useState, type ButtonHTMLAttributes } from "react";
 import { useTranslation } from "react-i18next";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
@@ -47,6 +47,7 @@ import type {
   ProjectCliHookStatus,
   Workspace,
   WorkspaceLaunchEnvironment,
+  WorkspaceProject,
 } from "@/types";
 import AddSshProjectDialog from "./AddSshProjectDialog";
 import {
@@ -77,6 +78,20 @@ interface WorkspaceItemProps {
   dragHandleProps?: ButtonHTMLAttributes<HTMLButtonElement>;
 }
 
+function isRenderableWorkspaceProject(project: unknown): project is WorkspaceProject {
+  return typeof project === "object"
+    && project !== null
+    && typeof (project as WorkspaceProject).id === "string"
+    && typeof (project as WorkspaceProject).path === "string"
+    && (project as WorkspaceProject).path.trim() !== "";
+}
+
+function normalizeWorkspaceProjects(ws: Workspace): WorkspaceProject[] {
+  if (!Array.isArray(ws.projects)) return [];
+  const projects = ws.projects.filter(isRenderableWorkspaceProject);
+  return projects.length === ws.projects.length ? ws.projects : projects;
+}
+
 export default function WorkspaceItem({
   ws,
   expanded,
@@ -96,34 +111,37 @@ export default function WorkspaceItem({
   dragHandleProps,
 }: WorkspaceItemProps) {
   const { t } = useTranslation(["sidebar", "common"]);
+  const projects = normalizeWorkspaceProjects(ws);
+  const workspace = projects === ws.projects ? ws : { ...ws, projects };
   const providerList = useProvidersStore((s) => s.providers);
   const settings = useSettingsStore((s) => s.settings);
-  const favoriteLaunchIds = useSettingsStore((s) => normalizeSidebarFavoriteLaunchActionIds(
-    s.settings?.general.launchFavorites ?? getDefaultSidebarFavoriteLaunchActionIds(),
-  ));
+  const rawFavoriteLaunchIds = useSettingsStore((s) => s.settings?.general.launchFavorites);
+  const favoriteLaunchIds = useMemo(() => normalizeSidebarFavoriteLaunchActionIds(
+    rawFavoriteLaunchIds ?? getDefaultSidebarFavoriteLaunchActionIds(),
+  ), [rawFavoriteLaunchIds]);
   const saveSettings = useSettingsStore((s) => s.saveSettings);
   const sshMachines = useSshMachinesStore((s) => s.machines);
   const launchProfiles = useLaunchProfilesStore((s) => s.profiles);
   const [hookGroups, setHookGroups] = useState<ProjectCliHookGroupStatus[]>([]);
   const [sshDialogOpen, setSshDialogOpen] = useState(false);
 
-  const displayName = ws.alias || ws.name;
-  const rootProject = ws.projects.find((project) => !project.ssh);
-  const rootPath = ws.path || rootProject?.path;
-  const showWslBadge = hasWorkspaceWslPath(ws);
-  const defaultEnvironment = getWorkspaceDefaultEnvironment(ws);
-  const boundProvider = ws.providerId
-    ? providerList.find((provider) => provider.id === ws.providerId)
+  const displayName = workspace.alias || workspace.name;
+  const rootProject = projects.find((project) => !project.ssh);
+  const rootPath = workspace.path || rootProject?.path;
+  const showWslBadge = hasWorkspaceWslPath(workspace);
+  const defaultEnvironment = getWorkspaceDefaultEnvironment(workspace);
+  const boundProvider = workspace.providerId
+    ? providerList.find((provider) => provider.id === workspace.providerId)
     : undefined;
   const isWindows = detectAppPlatform() === "windows";
   const canLaunchWsl = isWindows
     && !resolveWorkspaceLaunchOptions({
-      workspace: ws,
+      workspace,
       machines: sshMachines,
       environment: "wsl",
     }).issue;
   const canLaunchSsh = !resolveWorkspaceLaunchOptions({
-    workspace: ws,
+    workspace,
     machines: sshMachines,
     environment: "ssh",
   }).issue;
@@ -158,7 +176,7 @@ export default function WorkspaceItem({
     launchProfileId?: string,
   ) => {
     const { options, issue } = resolveWorkspaceLaunchOptions({
-      workspace: ws,
+      workspace,
       cliTool,
       launchProfileId,
       machines: sshMachines,
@@ -167,8 +185,8 @@ export default function WorkspaceItem({
     if (!options || issue) {
       const fallbackEnvironment =
         environment
-        ?? resolveCliEnvironmentDefault(ws, cliTool)
-        ?? getWorkspaceDefaultEnvironment(ws);
+        ?? resolveCliEnvironmentDefault(workspace, cliTool)
+        ?? getWorkspaceDefaultEnvironment(workspace);
       toast.error(
         formatLaunchIssue(issue ?? {
           environment: fallbackEnvironment,
@@ -178,7 +196,7 @@ export default function WorkspaceItem({
       return;
     }
     onOpenTerminal(options);
-  }, [formatLaunchIssue, onOpenTerminal, sshMachines, ws]);
+  }, [formatLaunchIssue, onOpenTerminal, sshMachines, workspace]);
 
   const profileDisplayName = useCallback((profile: Pick<LaunchProfile, "name" | "alias">) => {
     return profile.alias || profile.name;
@@ -202,13 +220,13 @@ export default function WorkspaceItem({
   const renderCliLaunchMenuItem = useCallback((item: SidebarCliLaunchItem, keyPrefix: string) => {
     const effectiveEnvironment =
       item.environment
-      ?? resolveCliEnvironmentDefault(ws, item.cliTool)
+      ?? resolveCliEnvironmentDefault(workspace, item.cliTool)
       ?? defaultEnvironment;
-    const boundProfile = ws.launchProfileId
-      ? launchProfiles.find((profile) => profile.id === ws.launchProfileId)
+    const boundProfile = workspace.launchProfileId
+      ? launchProfiles.find((profile) => profile.id === workspace.launchProfileId)
       : undefined;
-    const boundProfileName = ws.launchProfileId
-      ? profileDisplayName(boundProfile ?? { name: ws.launchProfileId, alias: null })
+    const boundProfileName = workspace.launchProfileId
+      ? profileDisplayName(boundProfile ?? { name: workspace.launchProfileId, alias: null })
       : t("launchProfileUnbound", { defaultValue: "未绑定" });
     const boundProfileMatchesTarget = boundProfile
       ? profileMatchesCli(boundProfile, item.cliTool) && profileMatchesRuntime(boundProfile, effectiveEnvironment)
@@ -222,12 +240,12 @@ export default function WorkspaceItem({
     const incompatibleRuntimeProfileCount = launchProfiles
       .filter((profile) => profileMatchesCli(profile, item.cliTool))
       .filter((profile) => !profileMatchesRuntime(profile, effectiveEnvironment)).length;
-    const defaultActionLabel = ws.launchProfileId && boundProfileMatchesTarget
+    const defaultActionLabel = workspace.launchProfileId && boundProfileMatchesTarget
       ? t("launchProfileUseWorkspaceBinding", {
         profile: boundProfileName,
         defaultValue: `使用工作空间绑定：${boundProfileName}`,
       })
-      : ws.launchProfileId
+      : workspace.launchProfileId
         ? t("launchProfileUseDefaultBindingMismatch", {
           profile: boundProfileName,
           runtime: runtimeLabel(effectiveEnvironment),
@@ -262,7 +280,7 @@ export default function WorkspaceItem({
               >
                 <Terminal /> {profileDisplayName(profile)}
                 <span className="ml-auto text-[11px] opacity-70">
-                  {profile.id === ws.launchProfileId
+                  {profile.id === workspace.launchProfileId
                     ? t("launchProfileBoundBadge", { defaultValue: "已绑定" })
                     : runtimeLabel(profile.targetRuntime ?? null)}
                 </span>
@@ -285,7 +303,7 @@ export default function WorkspaceItem({
         </ContextMenuSubContent>
       </ContextMenuSub>
     );
-  }, [defaultEnvironment, launchProfiles, openWorkspace, profileDisplayName, profileMatchesCli, profileMatchesRuntime, runtimeLabel, t, ws]);
+  }, [defaultEnvironment, launchProfiles, openWorkspace, profileDisplayName, profileMatchesCli, profileMatchesRuntime, runtimeLabel, t, workspace]);
 
   const fetchHookStatuses = useCallback(async () => {
     if (!rootPath) return;
@@ -372,12 +390,12 @@ export default function WorkspaceItem({
                 : "border border-transparent text-[var(--app-text-primary)] hover:bg-[var(--app-hover)]"
             }`}
             style={expanded ? { background: "var(--app-hover)" } : undefined}
-            onClick={() => onExpand(ws.id)}
+            onClick={() => onExpand(workspace.id)}
             onKeyDown={(event) => {
               if (event.target !== event.currentTarget) return;
               if (event.key === "Enter" || event.key === " ") {
                 event.preventDefault();
-                onExpand(ws.id);
+                onExpand(workspace.id);
               }
             }}
           >
@@ -417,7 +435,7 @@ export default function WorkspaceItem({
               className="text-[11px] font-medium tabular-nums leading-none min-w-[22px] text-center px-2 py-1 rounded-full text-[var(--app-text-tertiary)] group-hover:text-[var(--app-text-secondary)] transition-colors"
               style={{ background: "color-mix(in srgb, var(--app-text-primary) 8%, transparent)" }}
             >
-              {ws.projects.length}
+              {projects.length}
             </span>
           </div>
         </ContextMenuTrigger>
@@ -511,7 +529,7 @@ export default function WorkspaceItem({
             </>
           ) : null}
 
-          <ContextMenuItem onClick={() => onOpenEnvironment(ws)}>
+          <ContextMenuItem onClick={() => onOpenEnvironment(workspace)}>
             <Settings2 /> {t("workspaceEnv.edit", { defaultValue: "编辑运行环境" })}
           </ContextMenuItem>
 
@@ -534,13 +552,13 @@ export default function WorkspaceItem({
               <Folder /> {t("importProject")}
             </ContextMenuSubTrigger>
             <ContextMenuSubContent>
-              <ContextMenuItem onClick={() => onImportProject(ws)}>
+              <ContextMenuItem onClick={() => onImportProject(workspace)}>
                 {t("importFromDir")}
               </ContextMenuItem>
-              <ContextMenuItem onClick={() => onScanImport(ws)}>
+              <ContextMenuItem onClick={() => onScanImport(workspace)}>
                 <FolderSearch /> {t("scanImportDirectory")}
               </ContextMenuItem>
-              <ContextMenuItem onClick={() => onGitClone(ws)}>
+              <ContextMenuItem onClick={() => onGitClone(workspace)}>
                 <GitBranch /> {t("cloneFromGit")}
               </ContextMenuItem>
               <ContextMenuSeparator />
@@ -557,21 +575,21 @@ export default function WorkspaceItem({
               <Settings2 /> {t("settings", { ns: "common" })}
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="w-52">
-              <ContextMenuItem onClick={() => onSetPath(ws)}>
+              <ContextMenuItem onClick={() => onSetPath(workspace)}>
                 {t("setWorkspacePath")}
               </ContextMenuItem>
-              {ws.path ? (
-                <ContextMenuItem onClick={() => onClearPath(ws)}>
+              {workspace.path ? (
+                <ContextMenuItem onClick={() => onClearPath(workspace)}>
                   {t("clearWorkspacePath")}
                 </ContextMenuItem>
               ) : null}
 
               <ContextMenuSeparator />
 
-              <ContextMenuItem onClick={() => onSetAlias(ws)}>
+              <ContextMenuItem onClick={() => onSetAlias(workspace)}>
                 {t("setAlias")}
               </ContextMenuItem>
-              <ContextMenuItem onClick={() => onRename(ws)}>
+              <ContextMenuItem onClick={() => onRename(workspace)}>
                 {t("renameWorkspace")}
               </ContextMenuItem>
 
@@ -616,7 +634,7 @@ export default function WorkspaceItem({
 
           <ContextMenuSeparator />
 
-          <ContextMenuItem variant="destructive" onClick={() => onDelete(ws)}>
+          <ContextMenuItem variant="destructive" onClick={() => onDelete(workspace)}>
             <Trash2 /> {t("deleteWorkspace")}
           </ContextMenuItem>
         </ContextMenuContent>
@@ -631,7 +649,7 @@ export default function WorkspaceItem({
       <AddSshProjectDialog
         open={sshDialogOpen}
         onOpenChange={setSshDialogOpen}
-        workspaceName={ws.name}
+        workspaceName={workspace.name}
       />
     </div>
   );

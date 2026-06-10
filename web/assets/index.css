@@ -254,7 +254,7 @@
   --app-activity-border: rgba(255, 255, 255, 0.05);
   --app-activity-item-hover: rgba(255, 255, 255, 0.05);
   --app-activity-item-active: rgba(47, 129, 247, 0.12);
-  --app-activity-item-active-shadow: inset 2px 0 0 var(--app-accent);
+  --app-activity-item-active-shadow: none;
   --app-active-gradient-from: rgba(47, 129, 247, 0.20);
   --app-active-gradient-to: rgba(47, 129, 247, 0.05);
   --app-tab-highlight: rgba(255, 255, 255, 0.15);

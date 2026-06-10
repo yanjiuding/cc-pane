@@ -1,7 +1,9 @@
 import { Component, type ReactNode, type ErrorInfo } from "react";
-import { AlertTriangle, RotateCcw } from "lucide-react";
+import { AlertTriangle, FolderOpen, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import i18n from "@/i18n";
+import { logService } from "@/services/logService";
+import { recordFrontendCrash } from "@/utils/frontendCrashLog";
 
 interface Props {
   children: ReactNode;
@@ -15,21 +17,69 @@ interface Props {
 interface State {
   hasError: boolean;
   error: Error | null;
+  crashLogDir: string | null;
+  crashLogStatus: "idle" | "pending" | "written" | "failed";
 }
 
 export default class ErrorBoundary extends Component<Props, State> {
-  state: State = { hasError: false, error: null };
+  state: State = {
+    hasError: false,
+    error: null,
+    crashLogDir: null,
+    crashLogStatus: "idle",
+  };
+
+  private mounted = true;
 
   static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error };
+    return {
+      hasError: true,
+      error,
+      crashLogDir: null,
+      crashLogStatus: "pending",
+    };
+  }
+
+  componentWillUnmount() {
+    this.mounted = false;
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("[ErrorBoundary]", error, info.componentStack);
+    recordFrontendCrash({
+      source: "react-error-boundary",
+      error,
+      componentStack: info.componentStack ?? undefined,
+    })
+      .then(({ logDir, written }) => {
+        if (!this.mounted) return;
+        this.setState({
+          crashLogDir: logDir,
+          crashLogStatus: written ? "written" : "failed",
+        });
+      })
+      .catch((logError) => {
+        console.error("[ErrorBoundary] Failed to record frontend crash:", logError);
+        if (!this.mounted) return;
+        this.setState({ crashLogStatus: "failed" });
+      });
   }
 
   handleReset = () => {
-    this.setState({ hasError: false, error: null });
+    this.setState({
+      hasError: false,
+      error: null,
+      crashLogDir: null,
+      crashLogStatus: "idle",
+    });
+  };
+
+  handleOpenLogDir = async () => {
+    try {
+      await logService.openLogDir();
+    } catch (error) {
+      console.error("[ErrorBoundary] Failed to open log dir:", error);
+    }
   };
 
   render() {
@@ -47,11 +97,31 @@ export default class ErrorBoundary extends Component<Props, State> {
             <p className="text-xs text-muted-foreground max-w-md break-all">
               {this.state.error?.message}
             </p>
+            <p className="mt-2 text-xs text-muted-foreground max-w-md">
+              {this.state.crashLogStatus === "pending" && i18n.t("errorLogWriting")}
+              {this.state.crashLogStatus === "failed" && i18n.t("errorLogFailed")}
+              {this.state.crashLogStatus === "written" && (
+                <>
+                  {i18n.t("errorLogWritten")}
+                  {this.state.crashLogDir && (
+                    <span className="block mt-1 font-mono break-all">
+                      {this.state.crashLogDir}
+                    </span>
+                  )}
+                </>
+              )}
+            </p>
           </div>
-          <Button size="sm" variant="outline" onClick={this.handleReset}>
-            <RotateCcw size={14} className="mr-1" />
-            {i18n.t("retry")}
-          </Button>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <Button size="sm" variant="outline" onClick={this.handleReset}>
+              <RotateCcw size={14} className="mr-1" />
+              {i18n.t("retry")}
+            </Button>
+            <Button size="sm" variant="outline" onClick={this.handleOpenLogDir}>
+              <FolderOpen size={14} className="mr-1" />
+              {i18n.t("settings:openLogDir")}
+            </Button>
+          </div>
         </div>
       );
     }

@@ -16,6 +16,7 @@ const actionI18nKeys: Record<string, string> = {
   "new-tab": "new-tab",
   "close-tab": "close-tab",
   settings: "settings",
+  "toggle-layouts": "toggle-layouts",
   "split-right": "split-right",
   "split-down": "split-down",
   "focus-pane-left": "focus-pane-left",

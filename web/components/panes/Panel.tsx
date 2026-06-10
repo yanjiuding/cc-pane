@@ -39,6 +39,7 @@ export default memo(function Panel({ pane }: PanelProps) {
   // Data 选择器：值变化时触发重渲染
   const activePaneId = usePanesStore((s) => s.activePaneId);
   const rootPane = usePanesStore((s) => s.rootPane);
+  const allPanels = usePanesStore((s) => s.allPanels);
   const workspaces = useWorkspacesStore((s) => s.workspaces);
   const openWorkspaceEnvironment = useDialogStore((s) => s.openWorkspaceEnvironment);
 
@@ -46,6 +47,7 @@ export default memo(function Panel({ pane }: PanelProps) {
   const {
     selectTab, closeTab, togglePinTab, renameTab, addTab,
     splitRight, splitDown, splitAndMoveTab, splitTerminalPane, closeTerminalPane,
+    moveTab,
     closeTabsToLeft, closeTabsToRight, closeOtherTabs,
     setActivePane, updateTabSession, reconnectTab,
     setTabDisconnected, markTabPoppedOut, isTabPoppedOut,
@@ -60,6 +62,7 @@ export default memo(function Panel({ pane }: PanelProps) {
     splitAndMoveTab: s.splitAndMoveTab,
     splitTerminalPane: s.splitTerminalPane,
     closeTerminalPane: s.closeTerminalPane,
+    moveTab: s.moveTab,
     closeTabsToLeft: s.closeTabsToLeft,
     closeTabsToRight: s.closeTabsToRight,
     closeOtherTabs: s.closeOtherTabs,
@@ -96,6 +99,16 @@ export default memo(function Panel({ pane }: PanelProps) {
     [pane.tabs, pane.activeTabId]
   );
   const tabNumbers = useMemo(() => computeGlobalTabNumbers(rootPane), [rootPane]);
+  const moveTargets = useMemo(() => {
+    const panels = allPanels();
+    return panels
+      .map((p, i) => ({ panel: p, index: i }))
+      .filter(({ panel }) => panel.id !== pane.id)
+      .map(({ panel, index }) => {
+        const activeTitle = panel.tabs.find((tb) => tb.id === panel.activeTabId)?.title ?? "";
+        return { id: panel.id, label: `${t("pane")} ${index + 1}${activeTitle ? ` · ${activeTitle}` : ""}` };
+      });
+  }, [allPanels, rootPane, pane.id, t]);
 
   // 全屏时 ESC 退出
   useEffect(() => {
@@ -258,6 +271,11 @@ export default memo(function Panel({ pane }: PanelProps) {
   const handleSplitAndMoveDown = useCallback(
     (tabId: string) => splitAndMoveTab(pane.id, tabId, "down"),
     [pane.id, splitAndMoveTab]
+  );
+
+  const handleMoveTabToPane = useCallback(
+    (tabId: string, targetPaneId: string) => moveTab(pane.id, targetPaneId, tabId),
+    [pane.id, moveTab]
   );
 
   const handleSplitTerminalRight = useCallback((tabId: string) => {
@@ -434,6 +452,8 @@ export default memo(function Panel({ pane }: PanelProps) {
             onFullscreen={handleFullscreen}
             onSplitAndMoveRight={handleSplitAndMoveRight}
             onSplitAndMoveDown={handleSplitAndMoveDown}
+            moveTargets={moveTargets}
+            onMoveTabToPane={handleMoveTabToPane}
             onSplitTerminalRight={handleSplitTerminalRight}
             onSplitTerminalDown={handleSplitTerminalDown}
             onCloseTerminalPane={handleCloseTerminalPane}
