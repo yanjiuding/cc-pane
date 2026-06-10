@@ -5,6 +5,8 @@ import { defineConfig } from "vitepress";
 // - 用 rewrites 把 guide/README.md 提升为站点首页（/）
 export default defineConfig({
   lang: "zh-CN",
+  // 部署到 GitHub Pages 项目站点 wuxiran.github.io/cc-pane/，子路径需设 base
+  base: "/cc-pane/",
   title: "CC-Panes 使用手册",
   description: "CC-Panes · 多实例分屏 AI 编排工作台 · 用户使用手册",
   cleanUrls: true,
