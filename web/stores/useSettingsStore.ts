@@ -5,6 +5,7 @@ import { handleErrorSilent } from "@/utils";
 import { getDefaultSidebarFavoriteLaunchActionIds } from "@/components/sidebar/launchMenu";
 import { DEFAULT_CCCHAN_SETTINGS } from "./useCCChanStore";
 import type { CCChanSettings } from "@/ccchan/types";
+import type { LayoutSwitcherSettings } from "@/types";
 
 const defaultCloseToTray = () => {
   if (typeof navigator === "undefined") {
@@ -23,10 +24,20 @@ interface SettingsState {
 
 type AppSettingsWithCCChan = AppSettings & { ccchan: CCChanSettings };
 
+const DEFAULT_LAYOUT_SWITCHER_SETTINGS: LayoutSwitcherSettings = {
+  windowX: null,
+  windowY: null,
+  pinned: false,
+};
+
 function withCCChanSettings(settings: AppSettings): AppSettingsWithCCChan {
   const maybeWithCCChan = settings as Partial<AppSettingsWithCCChan>;
   return {
     ...settings,
+    layoutSwitcher: {
+      ...DEFAULT_LAYOUT_SWITCHER_SETTINGS,
+      ...settings.layoutSwitcher,
+    },
     ccchan: {
       ...DEFAULT_CCCHAN_SETTINGS,
       ...maybeWithCCChan.ccchan,
@@ -84,6 +95,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       rendererMode: "auto",
       shell: null,
       disableConptySanitize: null,
+      resumeIdBackfillEnabled: null,
     },
     shortcuts: {
       bindings: {
@@ -112,6 +124,15 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         "switch-tab-7": "Ctrl+7",
         "switch-tab-8": "Ctrl+8",
         "switch-tab-9": "Ctrl+9",
+        "switch-layout-1": "Alt+1",
+        "switch-layout-2": "Alt+2",
+        "switch-layout-3": "Alt+3",
+        "switch-layout-4": "Alt+4",
+        "switch-layout-5": "Alt+5",
+        "switch-layout-6": "Alt+6",
+        "switch-layout-7": "Alt+7",
+        "switch-layout-8": "Alt+8",
+        "switch-layout-9": "Alt+9",
       },
     },
     general: {
@@ -148,5 +169,6 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       enableItn: false,
       maxRecordSeconds: 60,
     },
+    layoutSwitcher: DEFAULT_LAYOUT_SWITCHER_SETTINGS,
   }),
 }));

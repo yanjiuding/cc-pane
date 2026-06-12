@@ -239,6 +239,9 @@ pub struct CliAdapterContext {
     pub workspace_path: Option<String>,
     pub provider: Option<CliProvider>,
     pub resume_id: Option<String>,
+    /// CC-Panes 预先发号的会话 id（仅新会话）。Claude 通过 `--session-id` 使用，
+    /// 使 resume id 在启动前即确定，替代事后扫目录反查。
+    pub issued_session_id: Option<String>,
     pub skip_mcp: bool,
     /// 本次启动是否启用 YOLO 模式（绕过 CLI 权限确认/沙箱提示）。
     pub yolo_mode: bool,
@@ -293,6 +296,111 @@ pub struct CliCommandResult {
     pub env_remove: Vec<String>,
     /// 需要注入的环境变量
     pub env_inject: HashMap<String, String>,
+}
+
+// ============ 日志脱敏 ============
+
+/// 启动参数日志脱敏：掩码 token 值、截断 prompt 类长参数。
+/// 记录 CLI 启动命令时必须经过此函数，避免 initial prompt / system prompt /
+/// MCP token 落入应用日志。
+pub fn redact_args_for_log(args: &[String]) -> Vec<String> {
+    args.iter()
+        .map(|arg| redact_cli_text_for_log(arg))
+        .collect()
+}
+
+/// 单段文本脱敏：token 掩码 + developer_instructions 整体替换 + 超长截断。
+pub fn redact_cli_text_for_log(text: &str) -> String {
+    let masked = mask_token_values(text);
+    if let Some(rest) = masked.strip_prefix("developer_instructions=") {
+        return format!(
+            "developer_instructions=<redacted {} chars>",
+            rest.chars().count()
+        );
+    }
+    let char_count = masked.chars().count();
+    if char_count > 120 {
+        let prefix: String = masked.chars().take(60).collect();
+        return format!("{prefix}…<{char_count} chars>");
+    }
+    masked
+}
+
+/// 掩码文本中所有 `token=<value>`（大小写不敏感）。
+/// 裸值掩码到 `&`/引号/空白 为止；引号值（`token='x'` / `token="x"`）掩码引号内内容。
+pub fn mask_token_values(text: &str) -> String {
+    const NEEDLE: &str = "token=";
+    let lower = text.to_lowercase();
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    while let Some(rel) = lower[cursor..].find(NEEDLE) {
+        let value_start = cursor + rel + NEEDLE.len();
+        out.push_str(&text[cursor..value_start]);
+        let tail = &text[value_start..];
+        cursor = match tail.chars().next() {
+            Some(quote @ ('\'' | '"')) => {
+                let inner = &tail[1..];
+                let inner_len = inner.find(quote).unwrap_or(inner.len());
+                out.push(quote);
+                if inner_len > 0 {
+                    out.push_str("***");
+                }
+                // 闭引号（如有）随剩余文本一起拷贝
+                value_start + 1 + inner_len
+            }
+            _ => {
+                let value_len = tail
+                    .find(|c: char| c == '&' || c == '"' || c == '\'' || c.is_whitespace())
+                    .unwrap_or(tail.len());
+                if value_len > 0 {
+                    out.push_str("***");
+                }
+                value_start + value_len
+            }
+        };
+    }
+    out.push_str(&text[cursor..]);
+    out
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::*;
+
+    #[test]
+    fn masks_token_values_case_insensitive() {
+        assert_eq!(
+            mask_token_values("http://127.0.0.1:9000/mcp?token=secret123&launchId=abc"),
+            "http://127.0.0.1:9000/mcp?token=***&launchId=abc"
+        );
+        assert_eq!(
+            mask_token_values("export CC_PANES_API_TOKEN='secret'"),
+            "export CC_PANES_API_TOKEN='***'"
+        );
+    }
+
+    #[test]
+    fn truncates_long_prompt_args() {
+        let prompt = "你".repeat(300);
+        let redacted = redact_cli_text_for_log(&prompt);
+        assert!(redacted.contains("<300 chars>"));
+        assert!(redacted.chars().count() < 80);
+    }
+
+    #[test]
+    fn redacts_developer_instructions_entirely() {
+        let arg = "developer_instructions=do something secret";
+        assert_eq!(
+            redact_cli_text_for_log(arg),
+            "developer_instructions=<redacted 19 chars>"
+        );
+    }
+
+    #[test]
+    fn keeps_short_plain_args() {
+        assert_eq!(redact_cli_text_for_log("--resume"), "--resume");
+        assert_eq!(redact_cli_text_for_log("read-only"), "read-only");
+    }
 }
 
 // ============ Registry ============

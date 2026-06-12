@@ -149,6 +149,16 @@ impl CodexAdapter {
         args.push("--dangerously-bypass-approvals-and-sandbox".to_string());
     }
 
+    /// 注入 `tui.terminal_title`：让 Codex 把会话 thread-id 写进终端标题（OSC 序列），
+    /// CC-Panes 从 PTY 输出中解析它获得确定性 resume id（替代扫目录猜测）。
+    /// 保留默认观感项（activity + project），thread-id 追加在末尾。
+    /// 注意：`-c` 是整体覆盖，会暂时盖掉用户自定义的 terminal_title items，
+    /// 仅影响 CC-Panes 启动的会话的窗口标题显示。
+    pub(crate) fn push_terminal_title_override(args: &mut Vec<String>) {
+        args.push("-c".to_string());
+        args.push(r#"tui.terminal_title=["activity","project","thread-id"]"#.to_string());
+    }
+
     fn push_mcp_overrides(&self, args: &mut Vec<String>, ctx: &CliAdapterContext) {
         if let (Some(port), Some(token)) = (ctx.orchestrator_port, ctx.orchestrator_token.as_ref())
         {
@@ -707,6 +717,9 @@ impl CliToolAdapter for CodexAdapter {
 
         Self::push_mcp_isolation_overrides(&mut args, ctx);
 
+        // 标题带 thread-id：resume 与新会话都注入（resume 后活跃线程 id 同样经标题回报）
+        Self::push_terminal_title_override(&mut args);
+
         if ctx.yolo_mode {
             Self::push_yolo_mode_arg(&mut args);
         }
@@ -721,6 +734,14 @@ impl CliToolAdapter for CodexAdapter {
         if let Some(ref prompt) = ctx.initial_prompt {
             args.push(prompt.clone());
         }
+
+        info!(
+            session_id = %ctx.session_id,
+            command = %codex_cmd,
+            resume_id = ?ctx.resume_id,
+            args = ?crate::redact_args_for_log(&args),
+            "codex: build_command result"
+        );
 
         Ok(CliCommandResult {
             command: codex_cmd,

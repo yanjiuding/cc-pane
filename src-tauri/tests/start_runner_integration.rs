@@ -13,7 +13,8 @@ use std::time::Duration;
 
 fn platform_sleep_command() -> String {
     if cfg!(target_os = "windows") {
-        "powershell -NoProfile -Command \"Start-Sleep -Seconds 5\" & exit".to_string()
+        // `;` 在 pwsh 与 Windows PowerShell 5.1 中均为语句分隔符（`&` 在 5.1 是语法错误）
+        "powershell -NoProfile -Command \"Start-Sleep -Seconds 5\"; exit".to_string()
     } else {
         "sleep 5; exit".to_string()
     }

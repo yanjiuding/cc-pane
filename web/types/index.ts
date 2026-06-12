@@ -82,6 +82,7 @@ export type {
   SearchScope,
   ScreenshotSettings,
   VoiceSettings,
+  LayoutSwitcherSettings,
   EnvironmentInfo,
 } from "./settings";
 export { BUSY_STATUSES, isBusyStatus } from "./settings";

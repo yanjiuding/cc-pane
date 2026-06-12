@@ -787,10 +787,14 @@ impl CliToolAdapter for ClaudeAdapter {
         let path = Self::resolve_claude_path()?;
         let mut args = Vec::new();
 
-        // Resume
+        // Resume（claude --resume 复用原会话 id，无需重新发号/捕获）
         if let Some(ref rid) = ctx.resume_id {
             args.push("--resume".to_string());
             args.push(rid.clone());
+        } else if let Some(ref issued) = ctx.issued_session_id {
+            // 新会话由 CC-Panes 发号，启动前即确定 resume id
+            args.push("--session-id".to_string());
+            args.push(issued.clone());
         }
 
         // 多目录模式：workspace_path 存在时 project_path 作为 --add-dir
@@ -846,7 +850,7 @@ impl CliToolAdapter for ClaudeAdapter {
         info!(
             session_id = %ctx.session_id,
             command = %command,
-            args = ?args,
+            args = ?crate::redact_args_for_log(&args),
             "claude: build_command result"
         );
 

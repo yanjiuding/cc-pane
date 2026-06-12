@@ -136,6 +136,22 @@ export default function TerminalSection({ value, onChange }: TerminalSectionProp
           {t("rendererHint")}
         </p>
       </div>
+
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={value.resumeIdBackfillEnabled ?? false}
+            onChange={(e) => update("resumeIdBackfillEnabled", e.target.checked)}
+            className="w-4 h-4 cursor-pointer"
+            style={{ accentColor: "var(--app-accent)" }}
+          />
+          <Label>{t("resumeIdBackfill")}</Label>
+        </div>
+        <p className="text-[11px]" style={{ color: "var(--app-text-tertiary)" }}>
+          {t("resumeIdBackfillHint")}
+        </p>
+      </div>
     </div>
   );
 }

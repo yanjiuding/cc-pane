@@ -43,6 +43,9 @@ pub mod events {
     pub const TERMINAL_STATUS: &str = "terminal-status";
     pub const WORKSPACES_CHANGED: &str = "workspaces-changed";
     pub const SESSION_KILLED: &str = "session-killed";
+    /// 会话的 agent resume id 已确定性获得（Claude 发号 / Codex OSC 标题捕获）。
+    /// 后端监听此事件写入 launch_history 并转发 history-updated 给前端。
+    pub const TERMINAL_RESUME_ID_DETECTED: &str = "terminal-resume-id-detected";
 }
 
 /// 终端默认值

@@ -53,6 +53,8 @@ export interface TerminalPaneLeaf {
   sessionId: string | null;
   /** Agent conversation resume id, e.g. Claude/Codex resume UUID. */
   resumeId?: string;
+  /** resumeId 的来源：issued / osc-title / hook / backfill / rescue / manual */
+  resumeIdSource?: string;
   workspaceName?: string;
   providerId?: string;
   providerSelection?: LaunchProviderSelection;
@@ -90,6 +92,8 @@ export interface Tab {
   minimized?: boolean;
   /** Agent conversation resume id, e.g. Claude/Codex resume UUID. */
   resumeId?: string;
+  /** resumeId 的来源：issued / osc-title / hook / backfill / rescue / manual */
+  resumeIdSource?: string;
   workspaceName?: string;
   providerId?: string;
   providerSelection?: LaunchProviderSelection;

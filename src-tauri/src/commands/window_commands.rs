@@ -1,11 +1,19 @@
-use crate::utils::{AppPaths, AppResult};
+use crate::models::settings::LayoutSwitcherSettings;
+use crate::services::SettingsService;
+use crate::utils::{AppError, AppPaths, AppResult};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tauri::{LogicalSize, State, WebviewWindow};
+use tauri::{
+    AppHandle, LogicalSize, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+};
 use tracing::debug;
 
 /// 弹出窗口数据共享存储：label -> tabData JSON
 pub type PopupDataStore = Mutex<HashMap<String, String>>;
+
+const LAYOUT_SWITCHER_WINDOW_LABEL: &str = "layout-switcher";
+const LAYOUT_SWITCHER_WIDTH: f64 = 280.0;
+const LAYOUT_SWITCHER_HEIGHT: f64 = 420.0;
 
 /// 关闭窗口
 #[tauri::command]
@@ -132,6 +140,69 @@ pub async fn create_popup_terminal_window(
     Ok(())
 }
 
+/// 打开布局切换浮窗。动态创建窗口，避免修改 tauri.conf.json。
+#[tauri::command]
+pub async fn open_layout_switcher_window(app: AppHandle) -> AppResult<()> {
+    debug!("cmd::open_layout_switcher_window");
+    if let Some(window) = app.get_webview_window(LAYOUT_SWITCHER_WINDOW_LABEL) {
+        window
+            .show()
+            .map_err(|error| AppError::from(error.to_string()))?;
+        window
+            .set_always_on_top(true)
+            .map_err(|error| AppError::from(error.to_string()))?;
+        window
+            .set_focus()
+            .map_err(|error| AppError::from(error.to_string()))?;
+        return Ok(());
+    }
+
+    let settings_service = app
+        .try_state::<Arc<SettingsService>>()
+        .ok_or_else(|| AppError::from("SettingsService is not registered"))?;
+    let settings = settings_service.get_settings().layout_switcher;
+    let (x, y) = resolve_layout_switcher_position(&app, settings.window_x, settings.window_y);
+
+    WebviewWindowBuilder::new(
+        &app,
+        LAYOUT_SWITCHER_WINDOW_LABEL,
+        WebviewUrl::App("index.html?mode=layout-switcher".into()),
+    )
+    .title("Layouts")
+    .decorations(false)
+    .resizable(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .inner_size(LAYOUT_SWITCHER_WIDTH, LAYOUT_SWITCHER_HEIGHT)
+    .position(x, y)
+    .focused(true)
+    .build()
+    .map_err(|error| AppError::from(format!("Failed to create layout switcher window: {error}")))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_layout_switcher_state(
+    settings_service: State<'_, Arc<SettingsService>>,
+) -> AppResult<LayoutSwitcherSettings> {
+    Ok(settings_service.get_settings().layout_switcher)
+}
+
+#[tauri::command]
+pub fn save_layout_switcher_state(
+    settings_service: State<'_, Arc<SettingsService>>,
+    x: Option<f64>,
+    y: Option<f64>,
+    pinned: bool,
+) -> AppResult<()> {
+    let mut app_settings = settings_service.get_settings();
+    app_settings.layout_switcher.window_x = x;
+    app_settings.layout_switcher.window_y = y;
+    app_settings.layout_switcher.pinned = pinned;
+    settings_service.update_settings(app_settings)?;
+    Ok(())
+}
+
 /// 弹出窗口获取 tabData（one-shot：取后删除）
 #[tauri::command]
 pub fn get_popup_tab_data(
@@ -161,4 +232,81 @@ pub fn get_app_cwd(app_paths: State<'_, Arc<AppPaths>>) -> AppResult<String> {
         // Release 模式：使用数据目录（含提取的 .claude/）
         Ok(app_paths.data_dir().to_string_lossy().to_string())
     }
+}
+
+fn resolve_layout_switcher_position(
+    app: &AppHandle,
+    saved_x: Option<f64>,
+    saved_y: Option<f64>,
+) -> (f64, f64) {
+    let fallback = app
+        .get_webview_window("main")
+        .and_then(|main| {
+            let position = main.outer_position().ok()?;
+            let scale = main.scale_factor().ok()?;
+            let x = position.x as f64 / scale + 24.0;
+            let y = position.y as f64 / scale + 120.0;
+            Some((x, y))
+        })
+        .unwrap_or((80.0, 80.0));
+
+    clamp_layout_switcher_position(
+        app,
+        saved_x.unwrap_or(fallback.0),
+        saved_y.unwrap_or(fallback.1),
+    )
+}
+
+fn clamp_layout_switcher_position(app: &AppHandle, x: f64, y: f64) -> (f64, f64) {
+    const SAFE_MARGIN: f64 = 8.0;
+    const HALF_OFF_TOLERANCE: f64 = 40.0;
+
+    let Ok(monitors) = app.available_monitors() else {
+        return (80.0, 80.0);
+    };
+    if monitors.is_empty() {
+        return (80.0, 80.0);
+    }
+
+    let already_visible = monitors.iter().any(|monitor| {
+        let (lx, ly, lw, lh) = monitor_logical_rect(monitor);
+        x + HALF_OFF_TOLERANCE > lx
+            && x < lx + lw - HALF_OFF_TOLERANCE
+            && y + HALF_OFF_TOLERANCE > ly
+            && y < ly + lh - HALF_OFF_TOLERANCE
+    });
+    if already_visible {
+        return (x, y);
+    }
+
+    let mut best: Option<(f64, f64, f64)> = None;
+    for monitor in &monitors {
+        let (lx, ly, lw, lh) = monitor_logical_rect(monitor);
+        let cx = x.clamp(
+            lx + SAFE_MARGIN,
+            (lx + lw - LAYOUT_SWITCHER_WIDTH - SAFE_MARGIN).max(lx + SAFE_MARGIN),
+        );
+        let cy = y.clamp(
+            ly + SAFE_MARGIN,
+            (ly + lh - LAYOUT_SWITCHER_HEIGHT - SAFE_MARGIN).max(ly + SAFE_MARGIN),
+        );
+        let dist = (cx - x).powi(2) + (cy - y).powi(2);
+        if best.is_none_or(|candidate| dist < candidate.0) {
+            best = Some((dist, cx, cy));
+        }
+    }
+
+    best.map(|(_, cx, cy)| (cx, cy)).unwrap_or((80.0, 80.0))
+}
+
+fn monitor_logical_rect(monitor: &tauri::Monitor) -> (f64, f64, f64, f64) {
+    let scale = monitor.scale_factor();
+    let position = monitor.position();
+    let size = monitor.size();
+    (
+        position.x as f64 / scale,
+        position.y as f64 / scale,
+        size.width as f64 / scale,
+        size.height as f64 / scale,
+    )
 }

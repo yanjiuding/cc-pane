@@ -733,6 +733,7 @@ impl TerminalService {
         env_vars: &HashMap<String, String>,
         provider_env: &HashMap<String, String>,
         resume_id: Option<&str>,
+        issued_session_id: Option<&str>,
         append_system_prompt: Option<&str>,
         initial_prompt: Option<&str>,
         skip_mcp: bool,
@@ -781,6 +782,10 @@ impl TerminalService {
             if let Some(resume_id) = resume_id {
                 cli_args.push("--resume".to_string());
                 cli_args.push(resume_id.to_string());
+            } else if let Some(issued) = issued_session_id {
+                // 新会话由 CC-Panes 发号（与本地 claude.rs build_command 一致）
+                cli_args.push("--session-id".to_string());
+                cli_args.push(issued.to_string());
             }
             if workspace_remote_path.is_some()
                 && workspace_remote_path != Some(wsl.remote_path.as_str())
@@ -864,6 +869,7 @@ impl TerminalService {
         _env_vars: &HashMap<String, String>,
         _provider_env: &HashMap<String, String>,
         _resume_id: Option<&str>,
+        _issued_session_id: Option<&str>,
         _append_system_prompt: Option<&str>,
         _initial_prompt: Option<&str>,
         _skip_mcp: bool,
@@ -1057,6 +1063,10 @@ impl TerminalService {
             codex_args.push(wsl.remote_path.clone());
         }
         push_codex_developer_instructions_arg(&mut codex_args, append_system_prompt);
+        // 标题带 thread-id：CC-Panes 从 PTY 输出的 OSC 标题序列解析确定性 resume id
+        // （与本地 codex.rs push_terminal_title_override 保持一致）
+        codex_args.push("-c".to_string());
+        codex_args.push(r#"tui.terminal_title=["activity","project","thread-id"]"#.to_string());
         if yolo_mode {
             push_codex_yolo_mode_arg(&mut codex_args);
         }
@@ -1074,6 +1084,31 @@ impl TerminalService {
             Self::shell_escape(codex_path),
             escaped_codex_args
         ));
+
+        // 日志脱敏：exec 行含 MCP token / developer_instructions / prompt
+        let final_exec_log = {
+            let mut text = cc_cli_adapters::mask_token_values(
+                remote_parts.last().map(String::as_str).unwrap_or(""),
+            );
+            for secret in [append_system_prompt, initial_prompt].into_iter().flatten() {
+                if !secret.is_empty() {
+                    text = text.replace(secret, "<prompt>");
+                }
+            }
+            if text.chars().count() > 600 {
+                let prefix: String = text.chars().take(600).collect();
+                text = format!("{prefix}…");
+            }
+            text
+        };
+        info!(
+            session_id = %session_id,
+            distro = %wsl.distro,
+            remote_path = %wsl.remote_path,
+            resume_id = ?resume_id,
+            final_exec = %final_exec_log,
+            "codex(wsl): build_wsl_command result"
+        );
 
         self.build_wsl_script_command(wsl, session_id, "codex", remote_parts)
     }

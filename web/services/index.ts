@@ -3,12 +3,14 @@ export { terminalService } from "./terminalService";
 export { usageStatsService } from "./usageStatsService";
 export { historyService } from "./historyService";
 export { claudeService } from "./claudeService";
+export { codexService } from "./codexService";
 export { localHistoryService } from "./localHistoryService";
 export { projectCliHooksService } from "./projectCliHooksService";
 export { journalService } from "./journalService";
 export { worktreeService } from "./worktreeService";
 export * as workspaceService from "./workspaceService";
 export { settingsService } from "./settingsService";
+export { layoutSwitcherService } from "./layoutSwitcherService";
 export { providerService } from "./providerService";
 export { launchProfileService } from "./launchProfileService";
 export { todoService } from "./todoService";
@@ -19,6 +21,7 @@ export { mcpService } from "./mcpService";
 export { planService } from "./planService";
 export type { LaunchRecord, SessionState } from "./historyService";
 export type { ClaudeSession } from "./claudeService";
+export type { CodexSession } from "./codexService";
 export type {
   FileVersion,
   HistoryConfig,

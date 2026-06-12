@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo, memo } from "react";
-import { X, Plus, PanelRight, PanelBottom, Pin, Pencil, FolderTree, ExternalLink, ChevronLeft, ChevronRight, Settings2, Send } from "lucide-react";
+import { X, Plus, PanelRight, PanelBottom, Pin, Pencil, FolderTree, ExternalLink, ChevronLeft, ChevronRight, Settings2, Send, Link2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -16,6 +16,7 @@ import {
 import { useTerminalStatusStore } from "@/stores";
 import StatusIndicator from "@/components/StatusIndicator";
 import InlineRename from "@/components/ui/InlineRename";
+import SessionBindDialog from "@/components/panes/SessionBindDialog";
 import { computeTabNumbers } from "@/lib/tabNumbering";
 import type { Tab, TerminalStatusType } from "@/types";
 import type { TFunction } from "i18next";
@@ -140,6 +141,7 @@ function SortableTab({
   getStatus,
   registerTabNode,
   displayNumber,
+  onOpenSessionBind,
   t,
 }: {
   tab: Tab;
@@ -181,6 +183,7 @@ function SortableTab({
   getStatus: (sessionId: string | null) => TerminalStatusType | null;
   registerTabNode: (tabId: string, node: HTMLDivElement | null) => void;
   displayNumber?: string;
+  onOpenSessionBind: (tab: Tab) => void;
   t: TFunction<"panes">;
 }) {
   const {
@@ -253,6 +256,35 @@ function SortableTab({
         onDoubleClick={isEditing ? undefined : () => onFullscreen(tab.id)}
       >
         <StatusIndicator status={getStatus(tab.sessionId ?? null)} size={d.statusSize} />
+        {/* 会话绑定标志：绿=已确定 resume id（重启可恢复），灰=未绑定（点击手动绑定） */}
+        {tab.contentType === "terminal" && tab.cliTool && tab.cliTool !== "none" && (
+          <button
+            type="button"
+            title={
+              tab.resumeId
+                ? t("sessionBindBoundTooltip", {
+                    id: tab.resumeId.slice(0, 8),
+                    source: tab.resumeIdSource ?? "?",
+                  })
+                : t("sessionBindUnboundTooltip")
+            }
+            className="shrink-0 flex items-center cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenSessionBind(tab);
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
+          >
+            <Link2
+              size={d.pinSize}
+              style={{
+                color: tab.resumeId ? "#16a34a" : "var(--app-text-tertiary)",
+                opacity: tab.resumeId ? 0.95 : 0.5,
+              }}
+            />
+          </button>
+        )}
         {tab.pinned && (
           <Pin size={d.pinSize} className="shrink-0 opacity-60 rotate-45" style={{ color: "var(--app-accent)" }} onDoubleClick={(e) => e.stopPropagation()} />
         )}
@@ -504,6 +536,7 @@ export default memo(function TabBar({
 
   const [editingTabId, setEditingTabId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
+  const [sessionBindTab, setSessionBindTab] = useState<Tab | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const tabNodeRefs = useRef(new Map<string, HTMLDivElement>());
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -676,6 +709,7 @@ export default memo(function TabBar({
                 getStatus={getStatus}
                 registerTabNode={registerTabNode}
                 displayNumber={tabNumbers.get(tab.id)}
+                onOpenSessionBind={setSessionBindTab}
                 t={t}
               />
             ))}
@@ -701,6 +735,13 @@ export default memo(function TabBar({
           <ChevronRight className="h-3.5 w-3.5" />
         </button>
       )}
+      <SessionBindDialog
+        tab={sessionBindTab}
+        open={sessionBindTab !== null}
+        onOpenChange={(open) => {
+          if (!open) setSessionBindTab(null);
+        }}
+      />
     </div>
   );
 });

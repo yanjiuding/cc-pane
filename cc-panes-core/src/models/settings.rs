@@ -27,6 +27,8 @@ pub struct AppSettings {
     pub voice: VoiceSettings,
     #[serde(default)]
     pub ccchan: CCChanSettings,
+    #[serde(default)]
+    pub layout_switcher: LayoutSwitcherSettings,
 }
 
 impl AppSettings {
@@ -79,6 +81,10 @@ pub struct TerminalSettings {
     /// 禁用 ConPTY 输出 sanitize（默认 true，即禁用 sanitize，因为 dwFlags=0 已解决根本问题）
     #[serde(default)]
     pub disable_conpty_sanitize: Option<bool>,
+    /// 启用旧版 resume id backfill（扫目录按 mtime 猜测，已被确定性绑定取代）。
+    /// 默认 false；仅排障时打开。过渡一两个版本后整套 backfill 将移除。
+    #[serde(default)]
+    pub resume_id_backfill_enabled: Option<bool>,
 }
 
 impl TerminalSettings {
@@ -285,6 +291,17 @@ pub struct CCChanSettings {
     pub window_y: Option<f64>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayoutSwitcherSettings {
+    #[serde(default)]
+    pub window_x: Option<f64>,
+    #[serde(default)]
+    pub window_y: Option<f64>,
+    #[serde(default)]
+    pub pinned: bool,
+}
+
 impl CCChanSettings {
     pub fn merge_missing_defaults(&mut self) {
         if !matches!(self.ai_engine.as_str(), "claude" | "codex") {
@@ -368,6 +385,7 @@ impl Default for TerminalSettings {
             renderer_mode: default_terminal_renderer_mode(),
             shell: None,
             disable_conpty_sanitize: None,
+            resume_id_backfill_enabled: None,
         }
     }
 }
@@ -393,6 +411,9 @@ impl Default for ShortcutSettings {
         bindings.insert("voice-input".to_string(), "Ctrl+Alt+M".to_string());
         for i in 1..=9 {
             bindings.insert(format!("switch-tab-{}", i), format!("Ctrl+{}", i));
+        }
+        for i in 1..=9 {
+            bindings.insert(format!("switch-layout-{}", i), format!("Alt+{}", i));
         }
         Self { bindings }
     }
@@ -534,6 +555,22 @@ mod tests {
         assert_eq!(
             bindings.get("toggle-layouts"),
             Some(&"Ctrl+Alt+L".to_string())
+        );
+        assert_eq!(bindings.get("switch-layout-1"), Some(&"Alt+1".to_string()));
+        assert_eq!(bindings.get("switch-layout-9"), Some(&"Alt+9".to_string()));
+    }
+
+    #[test]
+    fn merge_missing_defaults_adds_switch_layout_bindings_for_legacy_settings() {
+        let mut settings = ShortcutSettings {
+            bindings: HashMap::from([("toggle-sidebar".to_string(), "Ctrl+B".to_string())]),
+        };
+
+        settings.merge_missing_defaults();
+
+        assert_eq!(
+            settings.bindings.get("switch-layout-3"),
+            Some(&"Alt+3".to_string())
         );
     }
 

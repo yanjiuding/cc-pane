@@ -53,6 +53,9 @@
   "newLayout": "New Layout",
   "layouts": "Layouts",
   "layoutSwitcher": "Layouts",
+  "layoutSwitcherTitle": "Layout Switcher",
+  "pinLayoutPanel": "Pin Layout Panel",
+  "closeLayoutSwitcher": "Close Layout Window",
   "renameLayout": "Rename Layout",
   "deleteLayout": "Delete Layout",
   "cannotDeleteLastLayout": "The last layout cannot be deleted",
@@ -76,5 +79,17 @@
   "voiceEmptyAudio": "No audio was recorded",
   "voiceEmptyTranscript": "Transcript is empty",
   "voiceInserted": "Inserted into terminal",
-  "voiceFailed": "Voice input failed: {{error}}"
+  "voiceFailed": "Voice input failed: {{error}}",
+  "sessionBindTitle": "Session Binding",
+  "sessionBindCurrent": "Bound to {{id}}… (source: {{source}}). This conversation will be restored after restart.",
+  "sessionBindNone": "No session id bound. This tab will open a fresh conversation after restart; pick a past session below to bind manually.",
+  "sessionBindLoading": "Loading past sessions…",
+  "sessionBindEmpty": "No past sessions found for this project.",
+  "sessionBindBoundMark": "current",
+  "sessionBindNoDescription": "(no description)",
+  "sessionBindManualPlaceholder": "Paste a session UUID to bind manually",
+  "sessionBindAction": "Bind",
+  "sessionBindUnbind": "Unbind",
+  "sessionBindBoundTooltip": "Bound to session {{id}}… (source: {{source}}); restorable after restart. Click to inspect/rebind",
+  "sessionBindUnboundTooltip": "No session id bound; restart opens a new conversation. Click to bind manually"
 }

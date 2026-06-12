@@ -155,6 +155,69 @@ describe("usePanesStore layouts", () => {
     expect(useFullscreenStore.getState().isFullscreen).toBe(false);
   });
 
+  it("switchLayoutByIndex 按布局列表顺序切换", () => {
+    const layout2 = makeLayout("layout-2", "布局 2", makeTerminalTab("tab-2"));
+    usePanesStore.setState((state) => {
+      state.layouts.push(layout2);
+    });
+
+    usePanesStore.getState().switchLayoutByIndex(1);
+
+    expect(usePanesStore.getState().currentLayoutId).toBe("layout-2");
+  });
+
+  it("switchLayoutByIndex 越界索引静默忽略", () => {
+    const before = usePanesStore.getState().currentLayoutId;
+
+    expect(() => usePanesStore.getState().switchLayoutByIndex(8)).not.toThrow();
+
+    expect(usePanesStore.getState().currentLayoutId).toBe(before);
+  });
+
+  it("reorderLayouts 重排布局顺序且不切换当前工作副本", () => {
+    const currentRoot = usePanesStore.getState().rootPane;
+    const layout2 = makeLayout("layout-2", "布局 2", makeTerminalTab("tab-2"));
+    const layout3 = makeLayout("layout-3", "布局 3", makeTerminalTab("tab-3"));
+    usePanesStore.setState((state) => {
+      state.layouts.push(layout2, layout3);
+    });
+
+    usePanesStore.getState().reorderLayouts(0, 2);
+
+    const state = usePanesStore.getState();
+    expect(state.layouts.map((layout) => layout.id)).toEqual(["layout-2", "layout-3", "layout-1"]);
+    expect(state.currentLayoutId).toBe("layout-1");
+    expect(state.rootPane).toBe(currentRoot);
+  });
+
+  it("reorderLayouts 越界和同位置静默忽略", () => {
+    const layout2 = makeLayout("layout-2", "布局 2", makeTerminalTab("tab-2"));
+    const layout3 = makeLayout("layout-3", "布局 3", makeTerminalTab("tab-3"));
+    usePanesStore.setState((state) => {
+      state.layouts.push(layout2, layout3);
+    });
+    const before = usePanesStore.getState().layouts.map((layout) => layout.id);
+
+    expect(() => usePanesStore.getState().reorderLayouts(0, 5)).not.toThrow();
+    expect(() => usePanesStore.getState().reorderLayouts(-1, 0)).not.toThrow();
+    expect(() => usePanesStore.getState().reorderLayouts(1, 1)).not.toThrow();
+
+    expect(usePanesStore.getState().layouts.map((layout) => layout.id)).toEqual(before);
+  });
+
+  it("reorderLayouts 后 switchLayoutByIndex 按新顺序切换", () => {
+    const layout2 = makeLayout("layout-2", "布局 2", makeTerminalTab("tab-2"));
+    const layout3 = makeLayout("layout-3", "布局 3", makeTerminalTab("tab-3"));
+    usePanesStore.setState((state) => {
+      state.layouts.push(layout2, layout3);
+    });
+
+    usePanesStore.getState().reorderLayouts(2, 0);
+    usePanesStore.getState().switchLayoutByIndex(0);
+
+    expect(usePanesStore.getState().currentLayoutId).toBe("layout-3");
+  });
+
   it("deleteLayout 删除当前布局时切到相邻布局，最后一个布局拒绝删除", () => {
     const layout2 = makeLayout("layout-2", "布局 2", makeTerminalTab("tab-2"));
     const layout3 = makeLayout("layout-3", "布局 3", makeTerminalTab("tab-3"));

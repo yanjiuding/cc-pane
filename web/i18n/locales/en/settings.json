@@ -10,7 +10,6 @@
   "about": "About",
   "saved": "Settings saved",
   "resetDone": "Defaults restored (click Save to apply)",
-
   "generalTitle": "General Settings",
   "closeToTray": "Minimize to tray on close",
   "autoStart": "Start on boot",
@@ -31,7 +30,6 @@
   "selectDataDir": "Select Data Directory",
   "migrationConfirm": "Migrate data from\n{{from}}\nto\n{{to}}\n\nCurrent data size: {{size}}\nRestart required after migration.\n\nProceed?",
   "resetMigrationConfirm": "Migrate data from\n{{from}}\nback to default location\n{{to}}\n\nRestart required after migration.\n\nProceed?",
-
   "terminalTitle": "Terminal Settings",
   "fontSize": "Font Size",
   "fontFamily": "Font Family",
@@ -51,7 +49,6 @@
   "rendererDom": "DOM fallback",
   "rendererHint": "Auto tries WebGL on Chromium/WebView2 and falls back when the host or addon cannot support it.",
   "shellAutoDetect": "Auto-detect if empty",
-
   "voiceTitle": "Voice Input",
   "voiceDesc": "Record from any terminal pane and insert the transcript into that pane without auto-submitting.",
   "voiceEnable": "Enable voice input",
@@ -76,12 +73,10 @@
   "voiceEnableItn": "Enable ITN for numbers, dates, and formatting",
   "voiceLimitHint": "This uses the Qwen-ASR OpenAI-compatible sync API for short recordings; the backend rejects audio over 10 MB.",
   "voiceMimoHint": "Xiaomi MiMo uses the open-platform audio understanding API. CC-Panes converts recordings to WAV locally and sends Base64 audio; use mimo-v2.5 or mimo-v2-omni.",
-
   "shortcutsTitle": "Keyboard Shortcuts",
   "shortcutsHint": "Click a shortcut then press a new key combination to change it, press Esc to cancel",
   "pressNewKey": "Press new shortcut...",
   "shortcutConflict": "Shortcut {{combo}} is already used by \"{{label}}\"",
-
   "proxyTitle": "Proxy Settings",
   "enableProxy": "Enable Proxy",
   "proxyType": "Proxy Type",
@@ -95,7 +90,6 @@
   "testConnection": "Test Connection",
   "proxyTestSuccess": "Proxy connection test succeeded",
   "proxyTestFailed": "Proxy test failed: {{error}}",
-
   "notificationTitle": "Notification Settings",
   "enableNotification": "Enable Notifications",
   "notifyOnExit": "Notify on task exit",
@@ -118,7 +112,6 @@
   "providerAdded": "Provider added",
   "providerDeleted": "Provider deleted",
   "setAsDefault": "Set as default",
-
   "aboutTitle": "About",
   "appName": "App Name",
   "version": "Version",
@@ -130,7 +123,6 @@
   "openLogDir": "Open Log Directory",
   "updateAvailable": "New version v{{version}} available, click to update",
   "newVersionAvailable": "New version v{{version}} available",
-
   "mcpTitle": "MCP Server Config",
   "mcpAdd": "Add",
   "mcpNoServers": "No MCP Server configured",
@@ -145,12 +137,10 @@
   "mcpArgsPlaceholder": "e.g. -y @anthropic/mcp-server",
   "mcpEnv": "Environment Variables (one per line, format KEY=VALUE)",
   "mcpEnvPlaceholder": "API_KEY=sk-xxx\nDEBUG=true",
-
   "defaultBadge": "Default",
   "setAsDefaultBtn": "Set as default",
   "editBtn": "Edit",
   "deleteBtn": "Delete",
-
   "providerTypeAnthropicLabel": "Anthropic Direct",
   "providerTypeAnthropicDesc": "Use Anthropic official API",
   "providerTypeBedrockLabel": "AWS Bedrock",
@@ -173,7 +163,6 @@
   "providerTypeOpenCodeDesc": "Use OpenCode with OpenAI-compatible API",
   "providerTypeCursorLabel": "Cursor",
   "providerTypeCursorDesc": "Use Cursor CLI API key",
-
   "nameRequired": "Name is required",
   "operationFailed": "Operation failed: {{error}}",
   "deleteFailed": "Delete failed: {{error}}",
@@ -190,16 +179,13 @@
   "file": "File",
   "openDir": "Open Directory",
   "editSettings": "Edit settings",
-
   "defaultCliTool": "Default CLI Tool",
   "defaultCliToolDesc": "Default CLI tool for self-dialogue, session resume, and other scenarios",
-
   "searchScope": "Search Scope",
   "searchScopeDesc": "Controls the range of file search indexing",
   "searchScopeWorkspace": "Workspace Only",
   "searchScopeFullDisk": "Full Disk",
   "searchScopeFullDiskHint": "Full disk search requires more memory, initial indexing may take a few minutes",
-
   "screenshot": "Screenshot",
   "screenshotTitle": "Screenshot Settings",
   "screenshotDesc": "Capture a screen region and copy the file path to clipboard for Claude Code to reference.",
@@ -211,13 +197,11 @@
   "screenshotSaved": "Screenshot saved, path copied to clipboard",
   "screenshotFailed": "Screenshot failed: {{error}}",
   "screenshotCancelled": "Screenshot cancelled",
-
   "presetCategoryOfficial": "Official Direct",
   "presetCategoryCloud": "Cloud Providers",
   "presetCategoryProxyIntl": "International Proxy",
   "presetCategoryDomestic": "Domestic Providers",
   "presetCategoryOpenAI": "OpenAI Compatible",
-
   "tabClaude": "Claude",
   "tabCodex": "Codex",
   "tabGemini": "Gemini",
@@ -226,7 +210,6 @@
   "tabOpenCode": "OpenCode",
   "tabCursor": "Cursor",
   "cliNotInstalled": "Not installed",
-
   "presetAnthropicName": "Anthropic",
   "presetAnthropicDesc": "Official Anthropic API",
   "presetBedrockName": "AWS Bedrock",
@@ -239,7 +222,6 @@
   "presetOneAPIDesc": "Self-hosted API gateway",
   "presetOpenAIName": "OpenAI",
   "presetOpenAIDesc": "OpenAI API (for Codex CLI)",
-
   "presetRequestyName": "Requesty",
   "presetRequestyDesc": "AI model routing gateway",
   "presetDeepSeekName": "DeepSeek",
@@ -264,16 +246,13 @@
   "presetOpenCodeOpenRouterDesc": "OpenRouter for OpenCode",
   "presetCursorName": "Cursor",
   "presetCursorDesc": "Official Cursor CLI API key",
-
   "fromPreset": "From Preset",
   "manualConfig": "Manual",
   "getApiKey": "Get API Key",
-
   "selectPresetOrCustom": "Select a preset or create a custom configuration",
   "orCustom": "or",
   "emptyTitle": "No API Provider",
   "emptyDesc": "Add a Provider to connect Claude Code, Codex and other AI tools",
-
   "jsonConfig": "JSON Config",
   "envPreview": "Environment Variables Preview",
   "formatBtn": "Format",
@@ -284,9 +263,10 @@
   "jsonConfigFileContent": "Config File Content",
   "jsonFileSaved": "Config file saved",
   "jsonFileSaveFailed": "Failed to save config file: {{error}}",
-
   "launch": "Launch",
   "duplicate": "Duplicate",
   "duplicated": "Duplicated",
-  "editGlobalConfig": "Edit Global Config"
+  "editGlobalConfig": "Edit Global Config",
+  "resumeIdBackfill": "Enable legacy resume id backfill (troubleshooting)",
+  "resumeIdBackfillHint": "Legacy mechanism that guesses resume ids by scanning session directories. Superseded by deterministic binding (Claude issued id / Codex title capture). Keep off unless troubleshooting."
 }

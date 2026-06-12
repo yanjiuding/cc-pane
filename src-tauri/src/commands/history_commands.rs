@@ -118,6 +118,17 @@ pub fn update_launch_session_id(
     Ok(service.update_session_id(id, &resume_session_id)?)
 }
 
+/// 标记启动记录的 resume id 来源（manual 手动绑定等）
+#[tauri::command]
+pub fn update_launch_resume_source(
+    service: State<'_, Arc<LaunchHistoryService>>,
+    id: i64,
+    source: String,
+) -> AppResult<()> {
+    debug!(id = id, source = %source, "cmd::update_launch_resume_source");
+    Ok(service.update_resume_source(id, &source)?)
+}
+
 /// 更新已有会话记录的时间戳（resume 去重），返回记录 ID
 #[tauri::command]
 pub fn touch_launch_by_session(

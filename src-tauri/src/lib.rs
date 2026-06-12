@@ -104,6 +104,7 @@ use commands::{
     get_history_config,
     get_journal_index,
     get_launch_profile,
+    get_layout_switcher_state,
     // 日志命令
     get_log_dir,
     get_mcp_server,
@@ -167,6 +168,7 @@ use commands::{
     list_all_claude_sessions,
     list_claude_sessions,
     list_cli_tools,
+    list_codex_sessions,
     // Local History - 删除文件 + 压缩
     list_deleted_files,
     // Local History - 目录级历史 + 最近更改
@@ -201,6 +203,7 @@ use commands::{
     maximize_window,
     migrate_data_dir,
     minimize_window,
+    open_layout_switcher_window,
     open_path_in_explorer,
     prepare_session_context,
     preview_launch_profile_resolution,
@@ -253,6 +256,7 @@ use commands::{
     runner_register_for_session,
     runner_register_implicit_instance,
     runner_upsert_profile,
+    save_layout_switcher_state,
     save_skill,
     save_spec_content,
     // Session Restore 命令
@@ -288,6 +292,7 @@ use commands::{
     update_history_config,
     update_launch_last_prompt,
     update_launch_profile,
+    update_launch_resume_source,
     update_launch_session_id,
     update_memory,
     update_project_alias,
@@ -1177,6 +1182,33 @@ pub fn run() {
                 ws_svc.start_watcher(tauri_emitter);
             }
 
+            // ---- 确定性 resume id 绑定：监听 terminal-resume-id-detected ----
+            // Claude 发号 / Codex OSC 标题捕获到的 resume id 经此落库并转发前端。
+            {
+                use tauri::Listener;
+                let app_handle = app.handle().clone();
+                let lh_svc = app.state::<Arc<LaunchHistoryService>>().inner().clone();
+                app.listen(
+                    cc_panes_core::constants::events::TERMINAL_RESUME_ID_DETECTED,
+                    move |event| {
+                        match serde_json::from_str::<services::ResumeIdDetectedPayload>(
+                            event.payload(),
+                        ) {
+                            Ok(payload) => {
+                                let app_handle = app_handle.clone();
+                                let lh_svc = lh_svc.clone();
+                                tauri::async_runtime::spawn(services::bind_resume_id(
+                                    app_handle, lh_svc, payload,
+                                ));
+                            }
+                            Err(error) => {
+                                warn!(error = %error, "terminal-resume-id-detected: invalid payload");
+                            }
+                        }
+                    },
+                );
+            }
+
             // ---- 一次性补救历史遗留的 Codex 记录（resume_session_id 为 null）----
             // 本修复前经 orchestrator 启动的 Codex 从未回填 resume id，导致旧会话 reload 不能恢复。
             // 用 marker 文件确保只跑一次；后台 spawn，不阻塞启动。
@@ -1562,6 +1594,9 @@ pub fn run() {
             get_app_cwd,
             create_popup_terminal_window,
             get_popup_tab_data,
+            open_layout_switcher_window,
+            get_layout_switcher_state,
+            save_layout_switcher_state,
             show_ccchan,
             hide_ccchan,
             resize_ccchan_for_bubble,
@@ -1588,6 +1623,7 @@ pub fn run() {
             // Claude 会话命令
             list_claude_sessions,
             list_all_claude_sessions,
+            list_codex_sessions,
             scan_broken_sessions,
             clean_session_file,
             clean_all_broken_sessions,
@@ -1599,6 +1635,7 @@ pub fn run() {
             delete_launch_history,
             read_session_state,
             update_launch_session_id,
+            update_launch_resume_source,
             update_launch_last_prompt,
             touch_launch_by_session,
             detect_claude_session,

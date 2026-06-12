@@ -25,23 +25,24 @@ export default function InlineRename({
 }: InlineRenameProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const onConfirmRef = useRef(onConfirm);
+  const initialValueRef = useRef(value);
+  const focusDelayRef = useRef(focusDelayMs);
 
   useEffect(() => {
     onConfirmRef.current = onConfirm;
   }, [onConfirm]);
 
   useEffect(() => {
-    const initialValue = value;
     const timer = window.setTimeout(() => {
       const input = inputRef.current;
       if (!input) return;
       input.focus();
-      if (input.value === initialValue) {
+      if (input.value === initialValueRef.current) {
         input.select();
       }
-    }, focusDelayMs);
+    }, focusDelayRef.current);
     return () => window.clearTimeout(timer);
-  }, [focusDelayMs, value]);
+  }, []);
 
   useEffect(() => {
     if (!confirmOnOutsidePointerDown) return;

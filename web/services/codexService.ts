@@ -1,0 +1,27 @@
+import { invoke } from "@tauri-apps/api/core";
+
+/** Codex 会话（结构与后端 codex_session_service::CodexSession 对应） */
+export interface CodexSession {
+  id: string;
+  project_path: string;
+  modified_at: number;
+  file_path: string;
+  description: string;
+}
+
+export const codexService = {
+  /**
+   * 获取项目的 Codex 会话列表（runtimeKind=wsl 时扫 WSL 内 ~/.codex/sessions）
+   */
+  async listSessions(
+    projectPath: string,
+    runtimeKind?: string,
+    wslDistro?: string,
+  ): Promise<CodexSession[]> {
+    return invoke<CodexSession[]>("list_codex_sessions", {
+      projectPath,
+      runtimeKind,
+      wslDistro,
+    });
+  },
+};

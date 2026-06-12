@@ -104,6 +104,25 @@ impl LaunchHistoryService {
         self.repo.update_session_id(id, resume_session_id)
     }
 
+    /// 标记 resume id 的来源（issued / osc-title / backfill / rescue / manual）
+    pub fn update_resume_source(&self, id: i64, source: &str) -> Result<(), String> {
+        self.repo.update_resume_source(id, source)
+    }
+
+    /// 按 pty_session_id 写入 resume id 及来源（OSC 标题捕获等确定性通道）
+    pub fn update_resume_session_with_source_by_pty(
+        &self,
+        pty_session_id: &str,
+        resume_session_id: &str,
+        source: &str,
+    ) -> Result<Option<i64>, String> {
+        self.repo.update_resume_session_with_source_by_pty(
+            pty_session_id,
+            resume_session_id,
+            source,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn update_session_started(
         &self,

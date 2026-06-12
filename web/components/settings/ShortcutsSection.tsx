@@ -40,6 +40,11 @@ export default function ShortcutsSection({ value, onChange }: ShortcutsSectionPr
     if (switchTabMatch) {
       return t("shortcuts:switch-tab", { index: switchTabMatch[1] });
     }
+    // switch-layout-N -> use the parameterized key "switch-layout" with index
+    const switchLayoutMatch = action.match(/^switch-layout-(\d+)$/);
+    if (switchLayoutMatch) {
+      return t("shortcuts:switch-layout", { index: switchLayoutMatch[1] });
+    }
     // Other actions use the static mapping
     if (action in actionI18nKeys) {
       return t(`shortcuts:${actionI18nKeys[action]}` as "shortcuts:toggle-sidebar");

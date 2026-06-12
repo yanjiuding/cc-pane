@@ -108,6 +108,7 @@ export function createTestSettings(overrides?: Partial<AppSettings>): AppSetting
       rendererMode: "auto",
       shell: null,
       disableConptySanitize: null,
+      resumeIdBackfillEnabled: null,
     },
     shortcuts: { bindings: {} },
     general: {
@@ -143,6 +144,11 @@ export function createTestSettings(overrides?: Partial<AppSettings>): AppSetting
       language: null,
       enableItn: false,
       maxRecordSeconds: 60,
+    },
+    layoutSwitcher: {
+      windowX: null,
+      windowY: null,
+      pinned: false,
     },
     ...overrides,
   };

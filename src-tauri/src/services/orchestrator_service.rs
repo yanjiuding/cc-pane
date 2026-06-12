@@ -6430,6 +6430,9 @@ async fn handle_session_started(
 
     match update_result {
         Ok(Some(record_id)) => {
+            let _ = state
+                .launch_history_service
+                .update_resume_source(record_id, "hook");
             let _ = state.app_handle.emit(
                 "history-updated",
                 serde_json::json!({
@@ -6438,6 +6441,7 @@ async fn handle_session_started(
                     "launchId": req.launch_id,
                     "ptySessionId": req.pty_session_id,
                     "resumeSessionId": req.resume_session_id,
+                    "resumeSource": "hook",
                 }),
             );
             (

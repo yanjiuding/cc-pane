@@ -11,6 +11,7 @@ import DndPaneProvider from "@/components/panes/DndPaneProvider";
 import { FileEditorPanel } from "@/components/editor";
 import SettingsPanel from "@/components/SettingsPanel";
 import { LAYOUT_BAR_TOGGLE_EVENT } from "@/components/LayoutBar";
+import LayoutSwitcherWindow from "@/components/LayoutSwitcherWindow";
 import JournalPanel from "@/components/JournalPanel";
 import LocalHistoryPanel from "@/components/LocalHistoryPanel";
 import SessionCleanerPanel from "@/components/SessionCleanerPanel";
@@ -51,6 +52,7 @@ import { useTodoReminders } from "@/hooks/useTodoReminders";
 import { useWorkspaceWatcher } from "@/hooks/useWorkspaceWatcher";
 import { useOrchestratorListener } from "@/hooks/useOrchestratorListener";
 import useOrchestratorSync from "@/hooks/useOrchestratorSync";
+import useLayoutSwitcherSync from "@/hooks/useLayoutSwitcherSync";
 import { historyService, terminalService, localHistoryService, checkUpdateSilent, markTabReclaimed as popupMarkReclaimed, getPoppedTabs, sessionRestoreService } from "@/services";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke } from "@tauri-apps/api/core";
@@ -60,6 +62,7 @@ import { isTauriReady, waitForTauri } from "@/utils";
 import { playNotificationSound } from "@/utils/notificationSound";
 import { findPaneFocusTarget, readPaneFocusRects, type PaneFocusDirection } from "@/utils/paneFocus";
 import { registerGlobalApi } from "@/utils/globalApi";
+import { logRestoreReport } from "@/utils/restoreReport";
 import i18n from "@/i18n";
 import type { OpenTerminalOptions, SavedSession, TerminalPaneLeaf, TerminalPaneNode } from "@/types";
 
@@ -92,6 +95,9 @@ export default function App() {
   const params = new URLSearchParams(window.location.search);
   if (params.get("mode") === "popup") {
     return <PopupTerminalWindow />;
+  }
+  if (params.get("mode") === "layout-switcher") {
+    return <LayoutSwitcherWindow />;
   }
 
   return (
@@ -161,6 +167,9 @@ function MainApp() {
   // fix(M4) review: Orchestrator 同步提升到 App 顶层，全局只挂一次。
   useOrchestratorSync();
 
+  // Layout switcher 浮窗与主窗布局状态同步。
+  useLayoutSwitcherSync();
+
   // 后端桌面通知成功发出时，播放应用内提示音补足系统通知静音场景。
   useEffect(() => {
     let cancelled = false;
@@ -221,14 +230,25 @@ function MainApp() {
     if (!isTauriReady()) return;
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    listen<{ ptySessionId?: string; resumeSessionId?: string }>("history-updated", (event) => {
+    listen<{ ptySessionId?: string; resumeSessionId?: string; resumeSource?: string }>("history-updated", (event) => {
       if (cancelled) return;
       const payload = event.payload ?? {};
       if (payload.ptySessionId && payload.resumeSessionId) {
-        usePanesStore.getState().updateTabAgentResumeId(
-          payload.ptySessionId,
-          payload.resumeSessionId,
-        );
+        // 绑定事件可能早于 create_terminal 返回（tab.sessionId 尚未写入）到达，
+        // 未命中 tab 时带退避重试，避免 issued/osc-title 绑定丢失
+        const { ptySessionId, resumeSessionId, resumeSource } = payload;
+        const applyBinding = (attempt: number) => {
+          if (cancelled) return;
+          const found = usePanesStore.getState().updateTabAgentResumeId(
+            ptySessionId,
+            resumeSessionId,
+            resumeSource,
+          );
+          if (!found && attempt < 6) {
+            setTimeout(() => applyBinding(attempt + 1), 500 * (attempt + 1));
+          }
+        };
+        applyBinding(0);
       }
       window.dispatchEvent(new CustomEvent("cc-panes:history-updated"));
     }).then((fn) => {
@@ -329,6 +349,8 @@ function MainApp() {
       useResourceStatsStore.getState().init();
       useEnvironmentStore.getState().init();
       useLaunchProfilesStore.getState().load().catch(console.error);
+      // 重启恢复报告：把各 tab 的 resumeId 绑定状态写入应用日志（[restore-report]）
+      logRestoreReport().catch(console.error);
       // 应用启动后静默检查更新（仅写入 store，不弹窗）
       checkUpdateSilent().catch(console.error);
       // [暂时禁用] macOS 下 Dialog 按钮不可点击，暂停 onboarding 引导
@@ -610,6 +632,13 @@ function MainApp() {
           const s = usePanesStore.getState();
           if (s.activePaneId) s.switchToTab(s.activePaneId, i - 1);
         },
+      });
+    }
+    for (let i = 1; i <= 9; i++) {
+      register({
+        id: `switch-layout-${i}`,
+        label: i18n.t("switch-layout", { ns: "shortcuts", index: i }),
+        handler: () => usePanesStore.getState().switchLayoutByIndex(i - 1),
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

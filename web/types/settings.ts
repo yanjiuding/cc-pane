@@ -8,6 +8,7 @@ export interface AppSettings {
   notification: NotificationSettings;
   screenshot: ScreenshotSettings;
   voice: VoiceSettings;
+  layoutSwitcher: LayoutSwitcherSettings;
 }
 
 /** 代理设置 */
@@ -44,6 +45,8 @@ export interface TerminalSettings {
   shell: string | null;
   /** 禁用 ConPTY 输出 sanitize（默认 true） */
   disableConptySanitize: boolean | null;
+  /** 启用旧版 resume id backfill（扫目录猜测，默认 false；已被确定性绑定取代，仅排障用） */
+  resumeIdBackfillEnabled: boolean | null;
 }
 
 /** Shell 信息 */
@@ -120,6 +123,13 @@ export interface VoiceSettings {
   language: string | null;
   enableItn: boolean;
   maxRecordSeconds: number;
+}
+
+/** 布局浮窗设置 */
+export interface LayoutSwitcherSettings {
+  windowX: number | null;
+  windowY: number | null;
+  pinned: boolean;
 }
 
 /** 数据目录信息 */

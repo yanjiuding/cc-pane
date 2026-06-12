@@ -29,6 +29,7 @@ struct Migration {
 /// V18 = usage_stats + usage_scan_state
 /// V19 = usage_stats per-source-path schema
 /// V20 = runner registry (runner_profiles + runner_instances + port_claims)
+/// V21 = launch_history 添加 resume_source（resume id 来源：issued/osc-title/backfill/rescue/manual）
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -439,6 +440,13 @@ const MIGRATIONS: &[Migration] = &[
                 ON port_claims(port);
             CREATE INDEX IF NOT EXISTS idx_port_claims_instance
                 ON port_claims(instance_id);
+        ",
+    },
+    Migration {
+        version: 21,
+        description: "launch_history: add resume_source (issued/osc-title/backfill/rescue/manual)",
+        up_sql: "
+            ALTER TABLE launch_history ADD COLUMN resume_source TEXT;
         ",
     },
 ];

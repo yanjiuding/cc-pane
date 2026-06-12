@@ -92,3 +92,7 @@ vite.config.js
 
 # VitePress 构建缓存（dist/ 已在上方忽略构建产物）
 docs/.vitepress/cache/
+
+# Dev 调试日志与本地 plan（不入库）
+.dev-*.log
+.claude/plans/

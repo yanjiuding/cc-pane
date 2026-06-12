@@ -161,6 +161,13 @@ pub async fn run_launch_history_backfill(
     workspace_path: Option<String>,
     after_ts: String,
 ) {
+    if !backfill_enabled(&app_handle) {
+        debug!(
+            launch_id = %launch_id,
+            "launch-backfill: skipped (legacy backfill disabled; resume id comes from issued/osc-title binding)"
+        );
+        return;
+    }
     for attempt in 0..15 {
         if let Ok(Some(record)) = service.find_by_launch_id(&launch_id) {
             if record.resume_session_id.is_some() {
@@ -245,6 +252,7 @@ pub async fn run_launch_history_backfill(
                 return;
             }
         };
+        let _ = service.update_resume_source(record_id, "backfill");
         if let Ok(Some(last_prompt)) = extract_last_prompt(
             &cli_tool,
             Some(&runtime_kind),
@@ -262,16 +270,34 @@ pub async fn run_launch_history_backfill(
                 "launchId": launch_id,
                 "ptySessionId": pty_session_id,
                 "resumeSessionId": resume_session_id,
+                "resumeSource": "backfill",
             }),
         );
-        debug!(
+        info!(
             launch_id = %launch_id,
             pty_session_id = %pty_session_id,
+            resume_session_id = %resume_session_id,
+            attempt,
             "launch-backfill: filled resume_session_id"
         );
 
         return;
     }
+}
+
+/// 旧版 backfill 总开关（settings.terminal.resumeIdBackfillEnabled，默认关闭）。
+/// 确定性绑定（Claude 发号 / Codex OSC 标题）上线后 backfill 仅作排障兜底。
+fn backfill_enabled(app_handle: &AppHandle) -> bool {
+    use tauri::Manager;
+    app_handle
+        .try_state::<Arc<cc_panes_core::services::SettingsService>>()
+        .map(|svc| {
+            svc.get_settings()
+                .terminal
+                .resume_id_backfill_enabled
+                .unwrap_or(false)
+        })
+        .unwrap_or(false)
 }
 
 /// 一次性补救历史遗留的 Codex 记录：launch_history 里 `cli_tool==codex` 且
@@ -284,6 +310,10 @@ pub async fn rescue_null_codex_records(
     service: Arc<LaunchHistoryService>,
 ) -> RescueNullCodexSummary {
     let mut summary = RescueNullCodexSummary::default();
+    if !backfill_enabled(&app_handle) {
+        info!("rescue_null_codex_records: skipped (legacy backfill disabled)");
+        return summary;
+    }
     let records = match service.list(2000) {
         Ok(records) => records,
         Err(error) => {
@@ -329,6 +359,7 @@ pub async fn rescue_null_codex_records(
                     continue;
                 }
 
+                let _ = service.update_resume_source(record.id, "rescue");
                 summary.rescued += 1;
                 let _ = app_handle.emit(
                     "history-updated",
@@ -337,6 +368,7 @@ pub async fn rescue_null_codex_records(
                         "recordId": record.id,
                         "ptySessionId": record.pty_session_id,
                         "resumeSessionId": resume_session_id,
+                        "resumeSource": "rescue",
                     }),
                 );
             }

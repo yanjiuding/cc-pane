@@ -133,6 +133,7 @@ function createTab(opts: CreateTabOptions): Tab {
     projectPath,
     sessionId: terminalLeaf.sessionId,
     resumeId: terminalLeaf.resumeId,
+    resumeIdSource: terminalLeaf.resumeIdSource,
     workspaceName: terminalLeaf.workspaceName,
     providerId: terminalLeaf.providerId,
     providerSelection: terminalLeaf.providerSelection,
@@ -204,6 +205,7 @@ function syncTabTerminalState(tab: Tab): void {
       id: generateId("terminal-pane"),
       sessionId: tab.sessionId ?? null,
       resumeId: tab.resumeId,
+      resumeIdSource: tab.resumeIdSource,
       workspaceName: tab.workspaceName,
       providerId: tab.providerId,
       providerSelection: tab.providerSelection,
@@ -234,6 +236,7 @@ function syncTabTerminalState(tab: Tab): void {
   tab.activeTerminalPaneId = activeLeaf.id;
   tab.sessionId = activeLeaf.sessionId;
   tab.resumeId = activeLeaf.resumeId;
+  tab.resumeIdSource = activeLeaf.resumeIdSource;
   tab.workspaceName = activeLeaf.workspaceName;
   tab.providerId = activeLeaf.providerId;
   tab.providerSelection = activeLeaf.providerSelection;
@@ -649,6 +652,8 @@ interface PanesState {
   renameLayout: (id: string, name: string) => void;
   deleteLayout: (id: string) => void;
   switchLayout: (id: string) => void;
+  switchLayoutByIndex: (index: number) => void;
+  reorderLayouts: (fromIndex: number, toIndex: number) => void;
   listLayouts: () => LayoutEntry[];
 
   // Pane layout
@@ -700,7 +705,10 @@ interface PanesState {
   markTabPoppedOut: (tabId: string) => void;
   markTabReclaimed: (tabId: string) => void;
   isTabPoppedOut: (tabId: string) => boolean;
-  updateTabAgentResumeId: (ptySessionId: string, agentResumeId: string) => void;
+  /** 返回是否命中某个 tab（事件可能早于 tab.sessionId 写入到达，未命中时调用方应重试） */
+  updateTabAgentResumeId: (ptySessionId: string, agentResumeId: string, resumeIdSource?: string) => boolean;
+  /** 手动绑定/换绑某个 tab 的会话 resume id（SessionBindDialog 用，source=manual） */
+  setTabResumeBinding: (tabId: string, resumeId: string | undefined, resumeIdSource?: string) => void;
   /** @deprecated Use updateTabAgentResumeId; kept for persisted callers and older UI code. */
   updateTabClaudeSession: (ptySessionId: string, claudeSessionId: string) => void;
   setTabDisconnected: (paneId: string, tabId: string, disconnected: boolean, terminalPaneId?: string) => void;
@@ -845,6 +853,22 @@ export const usePanesStore = create<PanesState>()(
       });
       useFullscreenStore.getState().exitFullscreen();
       notifyTerminalLayoutChanged("layout.switch");
+    },
+
+    switchLayoutByIndex: (index) => {
+      const target = get().layouts[index];
+      if (!target) return;
+      get().switchLayout(target.id);
+    },
+
+    reorderLayouts: (fromIndex, toIndex) => {
+      set((state) => {
+        if (fromIndex < 0 || fromIndex >= state.layouts.length) return;
+        if (toIndex < 0 || toIndex >= state.layouts.length) return;
+        if (fromIndex === toIndex) return;
+        const [moved] = state.layouts.splice(fromIndex, 1);
+        state.layouts.splice(toIndex, 0, moved);
+      });
     },
 
     listLayouts: () => projectedLayouts(get()),
@@ -1533,7 +1557,8 @@ export const usePanesStore = create<PanesState>()(
       notifyTerminalLayoutChanged("terminal.resize");
     },
 
-    updateTabAgentResumeId: (ptySessionId, agentResumeId) => {
+    updateTabAgentResumeId: (ptySessionId, agentResumeId, resumeIdSource) => {
+      let found = false;
       set((state) => {
         const update = (node: PaneNode): boolean => {
           if (node.type === "panel") {
@@ -1542,12 +1567,14 @@ export const usePanesStore = create<PanesState>()(
                 for (const leaf of collectTerminalLeaves(tab.terminalRootPane)) {
                   if (leaf.sessionId === ptySessionId) {
                     leaf.resumeId = agentResumeId;
+                    if (resumeIdSource) leaf.resumeIdSource = resumeIdSource;
                     syncTabTerminalState(tab);
                     return true;
                   }
                 }
               } else if (tab.sessionId === ptySessionId) {
                 tab.resumeId = agentResumeId;
+                if (resumeIdSource) tab.resumeIdSource = resumeIdSource;
                 return true;
               }
             }
@@ -1559,13 +1586,39 @@ export const usePanesStore = create<PanesState>()(
           return false;
         };
         eachLayoutTree(state, (_layout, tree) => {
-          update(tree);
+          if (update(tree)) {
+            found = true;
+          }
         });
       });
+      return found;
     },
 
     updateTabClaudeSession: (ptySessionId, claudeSessionId) => {
       get().updateTabAgentResumeId(ptySessionId, claudeSessionId);
+    },
+
+    setTabResumeBinding: (tabId, resumeId, resumeIdSource) => {
+      set((state) => {
+        const location = findTabAcrossLayouts(state, tabId);
+        if (!location || location.tab.contentType !== "terminal") return;
+        const tab = location.tab;
+        if (tab.terminalRootPane) {
+          const leaves = collectTerminalLeaves(tab.terminalRootPane);
+          const activeLeaf =
+            (tab.activeTerminalPaneId
+              ? leaves.find((leaf) => leaf.id === tab.activeTerminalPaneId)
+              : null) ?? leaves[0];
+          if (activeLeaf) {
+            activeLeaf.resumeId = resumeId;
+            activeLeaf.resumeIdSource = resumeId ? resumeIdSource : undefined;
+          }
+          syncTabTerminalState(tab);
+        } else {
+          tab.resumeId = resumeId;
+          tab.resumeIdSource = resumeId ? resumeIdSource : undefined;
+        }
+      });
     },
 
     openProjectInPane: (paneId, opts) => {

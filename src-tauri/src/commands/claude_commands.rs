@@ -24,6 +24,25 @@ pub fn list_all_claude_sessions() -> AppResult<Vec<ClaudeSession>> {
     claude_session_service::list_all_sessions(20).map_err(|e| e.into())
 }
 
+/// 列出项目的 Codex 会话历史（手动绑定面板用；runtime_kind=wsl 时扫 WSL 内 ~/.codex/sessions）
+#[tauri::command]
+pub fn list_codex_sessions(
+    project_path: String,
+    runtime_kind: Option<String>,
+    wsl_distro: Option<String>,
+) -> AppResult<Vec<crate::services::codex_session_service::CodexSession>> {
+    let result = if runtime_kind.as_deref() == Some("wsl") {
+        crate::services::codex_session_service::list_wsl_sessions(
+            &project_path,
+            10,
+            wsl_distro.as_deref(),
+        )
+    } else {
+        crate::services::codex_session_service::list_sessions(&project_path, 10)
+    };
+    result.map_err(|e| e.into())
+}
+
 // ============ 会话清理功能 ============
 
 #[derive(Debug, Serialize, Clone)]

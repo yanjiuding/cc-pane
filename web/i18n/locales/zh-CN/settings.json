@@ -10,7 +10,6 @@
   "about": "关于",
   "saved": "设置已保存",
   "resetDone": "已恢复默认设置（需点击保存生效）",
-
   "generalTitle": "通用设置",
   "closeToTray": "关闭窗口时最小化到托盘",
   "autoStart": "开机自启",
@@ -31,7 +30,6 @@
   "selectDataDir": "选择数据目录",
   "migrationConfirm": "将数据从\n{{from}}\n迁移到\n{{to}}\n\n当前数据大小: {{size}}\n迁移完成后需要重启应用生效。\n\n确定开始迁移？",
   "resetMigrationConfirm": "将数据从\n{{from}}\n迁移回默认位置\n{{to}}\n\n迁移完成后需要重启应用生效。\n\n确定开始迁移？",
-
   "terminalTitle": "终端设置",
   "fontSize": "字号",
   "fontFamily": "字体",
@@ -51,7 +49,6 @@
   "rendererDom": "DOM 降级",
   "rendererHint": "自动模式会在 Chromium/WebView2 上尝试 WebGL，宿主或插件不支持时会降级。",
   "shellAutoDetect": "留空则自动检测",
-
   "voiceTitle": "语音输入",
   "voiceDesc": "每个终端窗格可录音，识别完成后把文字写入对应终端，不自动提交。",
   "voiceEnable": "启用语音输入",
@@ -76,12 +73,10 @@
   "voiceEnableItn": "启用 ITN（数字、日期等格式规整）",
   "voiceLimitHint": "当前使用 Qwen-ASR OpenAI 兼容同步接口，适合短语音；后端会拒绝超过 10MB 的音频。",
   "voiceMimoHint": "小米 MiMo 使用开放平台音频理解接口，录音会在本地转成 WAV 后以 Base64 发送；建议使用 mimo-v2.5 或 mimo-v2-omni。",
-
   "shortcutsTitle": "快捷键设置",
   "shortcutsHint": "点击快捷键后按下新组合键进行修改，按 Esc 取消",
   "pressNewKey": "按下新快捷键...",
   "shortcutConflict": "快捷键 {{combo}} 已被「{{label}}」使用",
-
   "proxyTitle": "代理设置",
   "enableProxy": "启用代理",
   "proxyType": "代理类型",
@@ -95,7 +90,6 @@
   "testConnection": "测试连接",
   "proxyTestSuccess": "代理连接测试成功",
   "proxyTestFailed": "代理测试失败: {{error}}",
-
   "notificationTitle": "通知设置",
   "enableNotification": "启用通知",
   "notifyOnExit": "任务退出时通知",
@@ -118,7 +112,6 @@
   "providerAdded": "Provider 已添加",
   "providerDeleted": "Provider 已删除",
   "setAsDefault": "已设为默认",
-
   "aboutTitle": "关于",
   "appName": "应用名称",
   "version": "版本",
@@ -130,7 +123,6 @@
   "openLogDir": "打开日志目录",
   "updateAvailable": "发现新版本 v{{version}}，点击更新",
   "newVersionAvailable": "新版本 v{{version}} 已可用",
-
   "mcpTitle": "MCP Server 配置",
   "mcpAdd": "添加",
   "mcpNoServers": "暂无 MCP Server 配置",
@@ -145,12 +137,10 @@
   "mcpArgsPlaceholder": "如 -y @anthropic/mcp-server",
   "mcpEnv": "环境变量（每行一个，格式 KEY=VALUE）",
   "mcpEnvPlaceholder": "API_KEY=sk-xxx\nDEBUG=true",
-
   "defaultBadge": "默认",
   "setAsDefaultBtn": "设为默认",
   "editBtn": "编辑",
   "deleteBtn": "删除",
-
   "providerTypeAnthropicLabel": "Anthropic 直连",
   "providerTypeAnthropicDesc": "使用 Anthropic 官方 API",
   "providerTypeBedrockLabel": "AWS Bedrock",
@@ -173,7 +163,6 @@
   "providerTypeOpenCodeDesc": "使用 OpenCode（OpenAI 兼容 API）",
   "providerTypeCursorLabel": "Cursor",
   "providerTypeCursorDesc": "使用 Cursor CLI API Key",
-
   "nameRequired": "请输入名称",
   "operationFailed": "操作失败: {{error}}",
   "deleteFailed": "删除失败: {{error}}",
@@ -190,16 +179,13 @@
   "file": "文件",
   "openDir": "打开目录",
   "editSettings": "编辑 settings",
-
   "defaultCliTool": "默认 CLI 工具",
   "defaultCliToolDesc": "自我对话、会话恢复等场景使用的默认 CLI 工具",
-
   "searchScope": "搜索范围",
   "searchScopeDesc": "控制文件搜索的索引范围",
   "searchScopeWorkspace": "仅工作空间",
   "searchScopeFullDisk": "全盘",
   "searchScopeFullDiskHint": "全盘搜索需要更多内存，首次索引可能需要几分钟",
-
   "screenshot": "截图",
   "screenshotTitle": "截图设置",
   "screenshotDesc": "截取屏幕区域并复制文件路径到剪贴板，供 Claude Code 引用图片。",
@@ -211,13 +197,11 @@
   "screenshotSaved": "截图已保存，路径已复制到剪贴板",
   "screenshotFailed": "截图失败: {{error}}",
   "screenshotCancelled": "截图已取消",
-
   "presetCategoryOfficial": "官方直连",
   "presetCategoryCloud": "云厂商",
   "presetCategoryProxyIntl": "国际代理",
   "presetCategoryDomestic": "国内供应商",
   "presetCategoryOpenAI": "OpenAI 兼容",
-
   "tabClaude": "Claude",
   "tabCodex": "Codex",
   "tabGemini": "Gemini",
@@ -226,7 +210,6 @@
   "tabOpenCode": "OpenCode",
   "tabCursor": "Cursor",
   "cliNotInstalled": "未安装",
-
   "presetAnthropicName": "Anthropic",
   "presetAnthropicDesc": "Anthropic 官方 API",
   "presetBedrockName": "AWS Bedrock",
@@ -239,7 +222,6 @@
   "presetOneAPIDesc": "自建 API 网关",
   "presetOpenAIName": "OpenAI",
   "presetOpenAIDesc": "OpenAI API（适用于 Codex CLI）",
-
   "presetRequestyName": "Requesty",
   "presetRequestyDesc": "AI 模型路由网关",
   "presetDeepSeekName": "DeepSeek",
@@ -264,16 +246,13 @@
   "presetOpenCodeOpenRouterDesc": "通过 OpenRouter 使用 OpenCode",
   "presetCursorName": "Cursor",
   "presetCursorDesc": "Cursor CLI 官方 API Key",
-
   "fromPreset": "从预设创建",
   "manualConfig": "手动配置",
   "getApiKey": "获取 API Key",
-
   "selectPresetOrCustom": "选择预设或自定义配置",
   "orCustom": "或者",
   "emptyTitle": "没有 API Provider",
   "emptyDesc": "添加 Provider 来连接 Claude Code、Codex 等 AI 工具",
-
   "jsonConfig": "JSON 配置",
   "envPreview": "环境变量预览",
   "formatBtn": "格式化",
@@ -284,9 +263,10 @@
   "jsonConfigFileContent": "配置文件内容",
   "jsonFileSaved": "配置文件已保存",
   "jsonFileSaveFailed": "保存配置文件失败: {{error}}",
-
   "launch": "启用",
   "duplicate": "复制",
   "duplicated": "已复制",
-  "editGlobalConfig": "编辑通用配置"
+  "editGlobalConfig": "编辑通用配置",
+  "resumeIdBackfill": "启用旧版 Resume ID 回填（排障用）",
+  "resumeIdBackfillHint": "旧机制：扫会话目录按时间猜测 resume id，已被确定性绑定（Claude 发号 / Codex 标题捕获）取代。默认关闭，仅排障时打开。"
 }

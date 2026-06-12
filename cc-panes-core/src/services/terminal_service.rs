@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+mod osc_resume_capture;
 mod wsl_codex;
 
 use self::wsl_codex::{strip_wsl_proxy_env_vars, windows_path_to_wsl, WSL_PROXY_ENV_KEYS};
@@ -1158,6 +1159,12 @@ impl TerminalService {
         ssh: Option<&SshConnectionInfo>,
         wsl: Option<&WslLaunchInfo>,
     ) -> Result<String> {
+        // 归一化前端遗留哨兵："new"/空串都视为「新会话」（避免 `--resume new`，
+        // 并让 Claude 发号分支正确生效）
+        let resume_id = resume_id.filter(|rid| {
+            let trimmed = rid.trim();
+            !trimmed.is_empty() && trimmed != "new"
+        });
         let is_ssh = ssh.is_some();
         let resolved_workspace = workspace_name.and_then(|name| {
             self.workspace_service
@@ -1264,6 +1271,10 @@ impl TerminalService {
         })?;
         let settings_service = self.settings_service.clone();
         let session_id = Uuid::new_v4().to_string();
+        // Claude 新会话由 CC-Panes 发号（claude --session-id），启动前即确定 resume id。
+        // resume 场景 claude 复用原 id，无需发号；其他 CLI 走各自的捕获通道。
+        let issued_session_id = (cli_tool == CliTool::Claude && resume_id.is_none())
+            .then(|| Uuid::new_v4().to_string());
 
         // 注入终端环境变量（macOS Release .app 从 Finder 启动时不继承终端环境）
         env_vars
@@ -1544,6 +1555,7 @@ impl TerminalService {
                         &env_vars,
                         &provider_vars,
                         resume_id,
+                        issued_session_id.as_deref(),
                         launch_append_system_prompt.as_deref(),
                         initial_prompt,
                         effective_skip_mcp,
@@ -1556,6 +1568,7 @@ impl TerminalService {
                     &env_vars,
                     &provider_vars,
                     resume_id,
+                    issued_session_id.as_deref(),
                     launch_append_system_prompt.as_deref(),
                     initial_prompt,
                     effective_skip_mcp,
@@ -1630,6 +1643,7 @@ impl TerminalService {
                     workspace_path: workspace_path.map(|s| s.to_string()),
                     provider: provider.clone(),
                     resume_id: resume_id.map(|s| s.to_string()),
+                    issued_session_id: issued_session_id.clone(),
                     skip_mcp: effective_skip_mcp,
                     yolo_mode: effective_yolo_mode,
                     append_system_prompt: effective_prompt,
@@ -1663,6 +1677,18 @@ impl TerminalService {
         let command_for_log = command.clone();
         let cwd_for_log = cwd.display().to_string();
 
+        // resume 启动诊断上下文：会话短时间内退出时输出取证 WARN
+        // （绑定的 resume id 失效会表现为 CLI 启动即报错退出）。
+        // 命令行经脱敏（token 掩码 + prompt 截断）后才允许进日志。
+        let resume_diag = resume_id.map(|rid| {
+            let redacted = cc_cli_adapters::redact_args_for_log(&args).join(" ");
+            let mut command_line = format!("{} {}", command, redacted);
+            if command_line.chars().count() > 500 {
+                command_line = command_line.chars().take(500).collect();
+            }
+            (rid.to_string(), cli_tool.as_id().to_string(), command_line)
+        });
+
         let config = PtyConfig {
             cols,
             rows,
@@ -1694,6 +1720,24 @@ impl TerminalService {
                 return Err(e);
             }
         };
+        // Claude 发号成功：广播确定性 resume id（后端监听写 launch_history 并转发前端）
+        if let Some(ref issued) = issued_session_id {
+            let _ = emitter.emit(
+                EV::TERMINAL_RESUME_ID_DETECTED,
+                serde_json::json!({
+                    "sessionId": session_id,
+                    "resumeSessionId": issued,
+                    "source": "issued",
+                    "cliTool": cli_tool.as_id(),
+                    "runtimeKind": runtime_kind,
+                    "launchId": launch_id,
+                    "projectPath": project_path,
+                    "workspacePath": workspace_path,
+                    "wslDistro": wsl.and_then(|w| w.distro.clone()),
+                }),
+            );
+        }
+
         let mut reader = spawn_result.reader;
         let writer = spawn_result.writer;
         let process = spawn_result.process;
@@ -1817,6 +1861,22 @@ impl TerminalService {
             }
         });
 
+        // Codex 会话：从 PTY 输出的 OSC 标题序列捕获确定性 thread-id
+        // （配合 build_command 注入的 tui.terminal_title=["...","thread-id"]）
+        let mut osc_capture = (cli_tool == CliTool::Codex).then(|| {
+            osc_resume_capture::OscResumeCapture::new(
+                osc_resume_capture::OscCaptureContext {
+                    session_id: session_id.clone(),
+                    runtime_kind: runtime_kind.to_string(),
+                    launch_id: launch_id.map(str::to_string),
+                    project_path: project_path.to_string(),
+                    workspace_path: workspace_path.map(str::to_string),
+                    wsl_distro: wsl.and_then(|w| w.distro.clone()),
+                },
+                emitter.clone(),
+            )
+        });
+
         // 启动读取线程（含状态检测 + UTF-8 安全）
         let sid = session_id.clone();
         let read_emitter = emitter.clone();
@@ -1917,6 +1977,11 @@ impl TerminalService {
                         // 再次检查取消标志，避免 emit 已死 session 的事件
                         if read_cancelled.load(Ordering::Relaxed) {
                             break;
+                        }
+
+                        // Codex OSC 标题捕获（done 后仅一次原子读，开销可忽略）
+                        if let Some(capture) = osc_capture.as_mut() {
+                            capture.scan(&data);
                         }
 
                         // 更新状态
@@ -2061,6 +2126,9 @@ impl TerminalService {
         let sessions_for_wait = Arc::clone(&self.sessions);
         let dead_buffers_for_wait = Arc::clone(&self.dead_buffers);
         let wait_pid = session_pid;
+        let wait_resume_diag = resume_diag;
+        let wait_output_buffer = output_buffer.clone();
+        let wait_spawned_at = Instant::now();
         let wait_state_machine = self
             .state_machine
             .lock()
@@ -2078,6 +2146,42 @@ impl TerminalService {
                 Err(_) => -1,
             };
             info!(session_id = %sid, exit_code, "PTY process exited");
+
+            // resume 启动失败取证：resume 会话在 120s 内退出（ConPTY exit code 不可靠，
+            // 时间窗 + 错误特征匹配是主信号）。tail 可能含用户 prompt/模型输出，
+            // 仅在命中错误特征或非零退出时记录，且限 20 行。
+            if let Some((resume_id, cli_tool_id, command_line)) = wait_resume_diag.as_ref() {
+                let elapsed = wait_spawned_at.elapsed();
+                if exit_code != 0 || elapsed < std::time::Duration::from_secs(120) {
+                    let tail = wait_output_buffer
+                        .lock()
+                        .map(|buf| buf.get_recent(20))
+                        .unwrap_or_default();
+                    let joined = tail.join("\n").to_lowercase();
+                    let matched_pattern = [
+                        "no conversation found",
+                        "session not found",
+                        "cannot resume",
+                        "not found in",
+                        "error",
+                    ]
+                    .iter()
+                    .find(|pattern| joined.contains(*pattern))
+                    .copied();
+                    let include_tail = matched_pattern.is_some() || exit_code != 0;
+                    warn!(
+                        session_id = %sid,
+                        resume_id = %resume_id,
+                        cli_tool = %cli_tool_id,
+                        exit_code,
+                        elapsed_ms = elapsed.as_millis() as u64,
+                        matched_pattern = ?matched_pattern,
+                        command = %command_line,
+                        tail = ?include_tail.then_some(tail),
+                        "resume session exited shortly after launch (heuristic; manual quit also triggers this)"
+                    );
+                }
+            }
 
             // 标记为已退出
             {

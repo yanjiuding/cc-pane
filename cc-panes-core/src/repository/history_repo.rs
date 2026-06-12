@@ -25,6 +25,54 @@ pub struct LaunchRecord {
     pub provider_selection: Option<String>,
     pub launch_profile_id: Option<String>,
     pub workspace_snapshot_id: Option<String>,
+    /// resume id 的来源：issued / osc-title / backfill / rescue / manual（NULL = 旧数据）
+    pub resume_source: Option<String>,
+}
+
+/// launch_history 查询列清单（与 [`map_launch_record`] 严格对应，新增列必须两处同步）
+const LAUNCH_RECORD_COLUMNS: &str = "
+    id,
+    project_id,
+    project_name,
+    project_path,
+    launched_at,
+    pty_session_id,
+    COALESCE(resume_session_id, claude_session_id) AS resume_session_id,
+    COALESCE(cli_tool, 'none') AS cli_tool,
+    COALESCE(runtime_kind, 'local') AS runtime_kind,
+    wsl_distro,
+    last_prompt,
+    workspace_name,
+    workspace_path,
+    launch_cwd,
+    provider_id,
+    provider_selection,
+    launch_profile_id,
+    COALESCE(workspace_snapshot_id, workspace_session_id) AS workspace_snapshot_id,
+    resume_source";
+
+fn map_launch_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<LaunchRecord> {
+    Ok(LaunchRecord {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        project_name: row.get(2)?,
+        project_path: row.get(3)?,
+        launched_at: row.get(4)?,
+        pty_session_id: row.get(5)?,
+        resume_session_id: row.get(6)?,
+        cli_tool: row.get(7)?,
+        runtime_kind: row.get(8)?,
+        wsl_distro: row.get(9)?,
+        last_prompt: row.get(10)?,
+        workspace_name: row.get(11)?,
+        workspace_path: row.get(12)?,
+        launch_cwd: row.get(13)?,
+        provider_id: row.get(14)?,
+        provider_selection: row.get(15)?,
+        launch_profile_id: row.get(16)?,
+        workspace_snapshot_id: row.get(17)?,
+        resume_source: row.get(18)?,
+    })
 }
 
 pub struct HistoryRepository {
@@ -152,58 +200,19 @@ impl HistoryRepository {
     pub fn list(&self, limit: usize) -> Result<Vec<LaunchRecord>, String> {
         let conn = self.db.connection().map_err(|e| e.to_string())?;
         let mut stmt = conn
-            .prepare(
-                "SELECT
-                    id,
-                    project_id,
-                    project_name,
-                    project_path,
-                    launched_at,
-                    pty_session_id,
-                    COALESCE(resume_session_id, claude_session_id) AS resume_session_id,
-                    COALESCE(cli_tool, 'none') AS cli_tool,
-                    COALESCE(runtime_kind, 'local') AS runtime_kind,
-                    wsl_distro,
-                    last_prompt,
-                    workspace_name,
-                    workspace_path,
-                    launch_cwd,
-                    provider_id,
-                    provider_selection,
-                    launch_profile_id,
-                    COALESCE(workspace_snapshot_id, workspace_session_id) AS workspace_snapshot_id
+            .prepare(&format!(
+                "SELECT {LAUNCH_RECORD_COLUMNS}
                  FROM launch_history
                  ORDER BY launched_at DESC
-                 LIMIT ?1",
-            )
+                 LIMIT ?1"
+            ))
             .map_err(|e| {
                 error!(table = "launch_history", err = %e, "SQL prepare failed");
                 e.to_string()
             })?;
 
         let records = stmt
-            .query_map([limit], |row| {
-                Ok(LaunchRecord {
-                    id: row.get(0)?,
-                    project_id: row.get(1)?,
-                    project_name: row.get(2)?,
-                    project_path: row.get(3)?,
-                    launched_at: row.get(4)?,
-                    pty_session_id: row.get(5)?,
-                    resume_session_id: row.get(6)?,
-                    cli_tool: row.get(7)?,
-                    runtime_kind: row.get(8)?,
-                    wsl_distro: row.get(9)?,
-                    last_prompt: row.get(10)?,
-                    workspace_name: row.get(11)?,
-                    workspace_path: row.get(12)?,
-                    launch_cwd: row.get(13)?,
-                    provider_id: row.get(14)?,
-                    provider_selection: row.get(15)?,
-                    launch_profile_id: row.get(16)?,
-                    workspace_snapshot_id: row.get(17)?,
-                })
-            })
+            .query_map([limit], map_launch_record)
             .map_err(|e| {
                 error!(table = "launch_history", err = %e, "SQL query_map failed");
                 e.to_string()
@@ -223,58 +232,19 @@ impl HistoryRepository {
         let conn = self.db.connection().map_err(|e| e.to_string())?;
         // 在 SQL 中用 REPLACE + LOWER 做路径规范化比较
         let mut stmt = conn
-            .prepare(
-                "SELECT
-                    id,
-                    project_id,
-                    project_name,
-                    project_path,
-                    launched_at,
-                    pty_session_id,
-                    COALESCE(resume_session_id, claude_session_id) AS resume_session_id,
-                    COALESCE(cli_tool, 'none') AS cli_tool,
-                    COALESCE(runtime_kind, 'local') AS runtime_kind,
-                    wsl_distro,
-                    last_prompt,
-                    workspace_name,
-                    workspace_path,
-                    launch_cwd,
-                    provider_id, \
-                    provider_selection, \
-                    launch_profile_id, \
-                    COALESCE(workspace_snapshot_id, workspace_session_id) AS workspace_snapshot_id \
-                 FROM launch_history \
-                 WHERE LOWER(REPLACE(project_path, '\\', '/')) = LOWER(REPLACE(?1, '\\', '/')) \
-                 ORDER BY launched_at DESC LIMIT ?2",
-            )
+            .prepare(&format!(
+                "SELECT {LAUNCH_RECORD_COLUMNS}
+                 FROM launch_history
+                 WHERE LOWER(REPLACE(project_path, '\\', '/')) = LOWER(REPLACE(?1, '\\', '/'))
+                 ORDER BY launched_at DESC LIMIT ?2"
+            ))
             .map_err(|e| {
                 error!(table = "launch_history", err = %e, "SQL prepare (list_by_project) failed");
                 e.to_string()
             })?;
 
         let records = stmt
-            .query_map(rusqlite::params![project_path, limit], |row| {
-                Ok(LaunchRecord {
-                    id: row.get(0)?,
-                    project_id: row.get(1)?,
-                    project_name: row.get(2)?,
-                    project_path: row.get(3)?,
-                    launched_at: row.get(4)?,
-                    pty_session_id: row.get(5)?,
-                    resume_session_id: row.get(6)?,
-                    cli_tool: row.get(7)?,
-                    runtime_kind: row.get(8)?,
-                    wsl_distro: row.get(9)?,
-                    last_prompt: row.get(10)?,
-                    workspace_name: row.get(11)?,
-                    workspace_path: row.get(12)?,
-                    launch_cwd: row.get(13)?,
-                    provider_id: row.get(14)?,
-                    provider_selection: row.get(15)?,
-                    launch_profile_id: row.get(16)?,
-                    workspace_snapshot_id: row.get(17)?,
-                })
-            })
+            .query_map(rusqlite::params![project_path, limit], map_launch_record)
             .map_err(|e| {
                 error!(table = "launch_history", err = %e, "SQL query_map (list_by_project) failed");
                 e.to_string()
@@ -297,6 +267,56 @@ impl HistoryRepository {
             e.to_string()
         })?;
         Ok(())
+    }
+
+    /// 标记 resume id 的来源（issued / osc-title / backfill / rescue / manual）
+    pub fn update_resume_source(&self, id: i64, source: &str) -> Result<(), String> {
+        let conn = self.db.connection().map_err(|e| e.to_string())?;
+        conn.execute(
+            "UPDATE launch_history SET resume_source = ?1 WHERE id = ?2",
+            rusqlite::params![source, id],
+        )
+        .map_err(|e| {
+            error!(table = "launch_history", id = %id, err = %e, "SQL update_resume_source failed");
+            e.to_string()
+        })?;
+        Ok(())
+    }
+
+    /// 按 pty_session_id 写入 resume id 及其来源（OSC 标题捕获等确定性通道使用）。
+    /// 返回命中的记录 id；无匹配记录返回 None。
+    pub fn update_resume_session_with_source_by_pty(
+        &self,
+        pty_session_id: &str,
+        resume_session_id: &str,
+        source: &str,
+    ) -> Result<Option<i64>, String> {
+        let conn = self.db.connection().map_err(|e| e.to_string())?;
+        let affected = conn
+            .execute(
+                "UPDATE launch_history
+                 SET resume_session_id = ?1, resume_source = ?2
+                 WHERE pty_session_id = ?3",
+                rusqlite::params![resume_session_id, source, pty_session_id],
+            )
+            .map_err(|e| {
+                error!(table = "launch_history", pty_session_id = %pty_session_id, err = %e, "SQL update_resume_session_with_source_by_pty failed");
+                e.to_string()
+            })?;
+        if affected == 0 {
+            return Ok(None);
+        }
+        let id = conn
+            .query_row(
+                "SELECT id FROM launch_history WHERE pty_session_id = ?1 ORDER BY launched_at DESC LIMIT 1",
+                rusqlite::params![pty_session_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                error!(table = "launch_history", pty_session_id = %pty_session_id, err = %e, "SQL query updated resume record failed");
+                e.to_string()
+            })?;
+        Ok(Some(id))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -493,58 +513,19 @@ impl HistoryRepository {
     ) -> Result<Option<LaunchRecord>, String> {
         let conn = self.db.connection().map_err(|e| e.to_string())?;
         let mut stmt = conn
-            .prepare(
-                "SELECT
-                    id,
-                    project_id,
-                    project_name,
-                    project_path,
-                    launched_at,
-                    pty_session_id,
-                    COALESCE(resume_session_id, claude_session_id) AS resume_session_id,
-                    COALESCE(cli_tool, 'none') AS cli_tool,
-                    COALESCE(runtime_kind, 'local') AS runtime_kind,
-                    wsl_distro,
-                    last_prompt,
-                    workspace_name,
-                    workspace_path,
-                    launch_cwd,
-                    provider_id,
-                    provider_selection,
-                    launch_profile_id,
-                    COALESCE(workspace_snapshot_id, workspace_session_id) AS workspace_snapshot_id
+            .prepare(&format!(
+                "SELECT {LAUNCH_RECORD_COLUMNS}
                  FROM launch_history
                  WHERE pty_session_id = ?1
                  ORDER BY launched_at DESC
-                 LIMIT 1",
-            )
+                 LIMIT 1"
+            ))
             .map_err(|e| {
                 error!(table = "launch_history", pty_session_id = %pty_session_id, err = %e, "SQL prepare find_by_pty_session_id failed");
                 e.to_string()
             })?;
 
-        let result = stmt.query_row(rusqlite::params![pty_session_id], |row| {
-            Ok(LaunchRecord {
-                id: row.get(0)?,
-                project_id: row.get(1)?,
-                project_name: row.get(2)?,
-                project_path: row.get(3)?,
-                launched_at: row.get(4)?,
-                pty_session_id: row.get(5)?,
-                resume_session_id: row.get(6)?,
-                cli_tool: row.get(7)?,
-                runtime_kind: row.get(8)?,
-                wsl_distro: row.get(9)?,
-                last_prompt: row.get(10)?,
-                workspace_name: row.get(11)?,
-                workspace_path: row.get(12)?,
-                launch_cwd: row.get(13)?,
-                provider_id: row.get(14)?,
-                provider_selection: row.get(15)?,
-                launch_profile_id: row.get(16)?,
-                workspace_snapshot_id: row.get(17)?,
-            })
-        });
+        let result = stmt.query_row(rusqlite::params![pty_session_id], map_launch_record);
 
         match result {
             Ok(record) => Ok(Some(record)),
@@ -562,58 +543,19 @@ impl HistoryRepository {
     ) -> Result<Option<LaunchRecord>, String> {
         let conn = self.db.connection().map_err(|e| e.to_string())?;
         let mut stmt = conn
-            .prepare(
-                "SELECT
-                    id,
-                    project_id,
-                    project_name,
-                    project_path,
-                    launched_at,
-                    pty_session_id,
-                    COALESCE(resume_session_id, claude_session_id) AS resume_session_id,
-                    COALESCE(cli_tool, 'none') AS cli_tool,
-                    COALESCE(runtime_kind, 'local') AS runtime_kind,
-                    wsl_distro,
-                    last_prompt,
-                    workspace_name,
-                    workspace_path,
-                    launch_cwd,
-                    provider_id,
-                    provider_selection,
-                    launch_profile_id,
-                    COALESCE(workspace_snapshot_id, workspace_session_id) AS workspace_snapshot_id
+            .prepare(&format!(
+                "SELECT {LAUNCH_RECORD_COLUMNS}
                  FROM launch_history
                  WHERE resume_session_id = ?1 OR claude_session_id = ?1
                  ORDER BY launched_at DESC
-                 LIMIT 1",
-            )
+                 LIMIT 1"
+            ))
             .map_err(|e| {
                 error!(table = "launch_history", resume_session_id = %resume_session_id, err = %e, "SQL prepare find_by_resume_session_id failed");
                 e.to_string()
             })?;
 
-        let result = stmt.query_row(rusqlite::params![resume_session_id], |row| {
-            Ok(LaunchRecord {
-                id: row.get(0)?,
-                project_id: row.get(1)?,
-                project_name: row.get(2)?,
-                project_path: row.get(3)?,
-                launched_at: row.get(4)?,
-                pty_session_id: row.get(5)?,
-                resume_session_id: row.get(6)?,
-                cli_tool: row.get(7)?,
-                runtime_kind: row.get(8)?,
-                wsl_distro: row.get(9)?,
-                last_prompt: row.get(10)?,
-                workspace_name: row.get(11)?,
-                workspace_path: row.get(12)?,
-                launch_cwd: row.get(13)?,
-                provider_id: row.get(14)?,
-                provider_selection: row.get(15)?,
-                launch_profile_id: row.get(16)?,
-                workspace_snapshot_id: row.get(17)?,
-            })
-        });
+        let result = stmt.query_row(rusqlite::params![resume_session_id], map_launch_record);
 
         match result {
             Ok(record) => Ok(Some(record)),
@@ -628,58 +570,19 @@ impl HistoryRepository {
     pub fn find_by_launch_id(&self, launch_id: &str) -> Result<Option<LaunchRecord>, String> {
         let conn = self.db.connection().map_err(|e| e.to_string())?;
         let mut stmt = conn
-            .prepare(
-                "SELECT
-                    id,
-                    project_id,
-                    project_name,
-                    project_path,
-                    launched_at,
-                    pty_session_id,
-                    COALESCE(resume_session_id, claude_session_id) AS resume_session_id,
-                    COALESCE(cli_tool, 'none') AS cli_tool,
-                    COALESCE(runtime_kind, 'local') AS runtime_kind,
-                    wsl_distro,
-                    last_prompt,
-                    workspace_name,
-                    workspace_path,
-                    launch_cwd,
-                    provider_id,
-                    provider_selection,
-                    launch_profile_id,
-                    COALESCE(workspace_snapshot_id, workspace_session_id) AS workspace_snapshot_id
+            .prepare(&format!(
+                "SELECT {LAUNCH_RECORD_COLUMNS}
                  FROM launch_history
                  WHERE project_id = ?1
                  ORDER BY launched_at DESC
-                 LIMIT 1",
-            )
+                 LIMIT 1"
+            ))
             .map_err(|e| {
                 error!(table = "launch_history", launch_id = %launch_id, err = %e, "SQL prepare find_by_launch_id failed");
                 e.to_string()
             })?;
 
-        let result = stmt.query_row(rusqlite::params![launch_id], |row| {
-            Ok(LaunchRecord {
-                id: row.get(0)?,
-                project_id: row.get(1)?,
-                project_name: row.get(2)?,
-                project_path: row.get(3)?,
-                launched_at: row.get(4)?,
-                pty_session_id: row.get(5)?,
-                resume_session_id: row.get(6)?,
-                cli_tool: row.get(7)?,
-                runtime_kind: row.get(8)?,
-                wsl_distro: row.get(9)?,
-                last_prompt: row.get(10)?,
-                workspace_name: row.get(11)?,
-                workspace_path: row.get(12)?,
-                launch_cwd: row.get(13)?,
-                provider_id: row.get(14)?,
-                provider_selection: row.get(15)?,
-                launch_profile_id: row.get(16)?,
-                workspace_snapshot_id: row.get(17)?,
-            })
-        });
+        let result = stmt.query_row(rusqlite::params![launch_id], map_launch_record);
 
         match result {
             Ok(record) => Ok(Some(record)),
@@ -934,5 +837,109 @@ mod tests {
         );
         assert_eq!(matching[0].pty_session_id.as_deref(), Some("new-pty"));
         assert_eq!(matching[0].resume_session_id.as_deref(), Some("resume-xyz"));
+    }
+
+    #[test]
+    fn update_resume_session_with_source_by_pty_round_trip() {
+        // OSC 标题捕获路径：按 pty_session_id 写入 resume id + 来源，
+        // 且 list/find 各查询的 mapper 必须把 resume_source 带回来。
+        let r = repo();
+        let launch_id = "osc-capture-1";
+        let pty_session = "pty-osc-1";
+
+        r.add_with_pty_session(
+            launch_id,
+            "proj",
+            "/tmp/proj",
+            pty_session,
+            "codex",
+            "local",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("seed insert");
+
+        // 无匹配 pty 时返回 None，不误写
+        assert_eq!(
+            r.update_resume_session_with_source_by_pty("no-such-pty", "id-x", "osc-title")
+                .expect("update ok"),
+            None
+        );
+
+        let id = r
+            .update_resume_session_with_source_by_pty(
+                pty_session,
+                "019eb252-b6bf-79f2-abfb-ff801aaaaaaa",
+                "osc-title",
+            )
+            .expect("update ok")
+            .expect("row matched");
+        assert!(id > 0);
+
+        let found = r
+            .find_by_pty_session_id(pty_session)
+            .expect("find ok")
+            .expect("row exists");
+        assert_eq!(
+            found.resume_session_id.as_deref(),
+            Some("019eb252-b6bf-79f2-abfb-ff801aaaaaaa")
+        );
+        assert_eq!(found.resume_source.as_deref(), Some("osc-title"));
+
+        // 标题轮换（trust 重建线程）：再次写入应覆盖为最新 id
+        r.update_resume_session_with_source_by_pty(
+            pty_session,
+            "019eb252-ffff-79f2-abfb-ff801bbbbbbb",
+            "osc-title",
+        )
+        .expect("update ok")
+        .expect("row matched");
+        let found = r
+            .find_by_pty_session_id(pty_session)
+            .expect("find ok")
+            .expect("row exists");
+        assert_eq!(
+            found.resume_session_id.as_deref(),
+            Some("019eb252-ffff-79f2-abfb-ff801bbbbbbb")
+        );
+    }
+
+    #[test]
+    fn update_resume_source_marks_existing_record() {
+        let r = repo();
+        let id = r
+            .add_with_pty_session(
+                "issued-1",
+                "proj",
+                "/tmp/proj",
+                "pty-1",
+                "claude",
+                "local",
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+            .expect("insert");
+
+        r.update_session_id(id, "11111111-2222-3333-4444-555555555555")
+            .expect("set resume id");
+        r.update_resume_source(id, "issued").expect("set source");
+
+        let found = r
+            .find_by_launch_id("issued-1")
+            .expect("find ok")
+            .expect("row exists");
+        assert_eq!(found.resume_source.as_deref(), Some("issued"));
     }
 }

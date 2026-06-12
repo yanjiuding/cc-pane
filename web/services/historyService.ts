@@ -84,6 +84,11 @@ export const historyService = {
     await invoke("update_launch_session_id", { id, resumeSessionId });
   },
 
+  /** 标记启动记录的 resume id 来源（manual 手动绑定等） */
+  async updateResumeSource(id: number, source: string): Promise<void> {
+    await invoke("update_launch_resume_source", { id, source });
+  },
+
   async updateLastPrompt(id: number, lastPrompt: string): Promise<void> {
     await invoke("update_launch_last_prompt", { id, lastPrompt });
   },
