@@ -57,10 +57,28 @@ export function useWindowControl() {
     }
   }, []);
 
+  const toggleFullscreenWindow = useCallback(async () => {
+    try {
+      const isFullscreen = await invoke<boolean>("is_fullscreen");
+      await invoke(isFullscreen ? "exit_fullscreen" : "enter_fullscreen");
+    } catch (e) {
+      handleErrorSilent(e, "toggle fullscreen");
+    }
+  }, []);
+
   const startDrag = useCallback(() => {
     if (!isTauriReady()) return;
     getCurrentWindow().startDragging().catch((e) => handleErrorSilent(e, "start drag"));
   }, []);
 
-  return { isPinned, isMaximized, togglePin, closeWindow, minimizeWindow, maximizeWindow, startDrag };
+  return {
+    isPinned,
+    isMaximized,
+    togglePin,
+    closeWindow,
+    minimizeWindow,
+    maximizeWindow,
+    toggleFullscreenWindow,
+    startDrag,
+  };
 }

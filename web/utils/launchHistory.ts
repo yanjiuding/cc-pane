@@ -5,6 +5,10 @@ import {
   resolveWorkspaceProjectLaunchOptions,
 } from "./workspaceLaunch";
 
+function optionalValue<T>(value: T | null | undefined): T | undefined {
+  return value ?? undefined;
+}
+
 function normalizeComparePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
@@ -32,14 +36,16 @@ export function buildLaunchRecordTerminalOptions(
 ): OpenTerminalOptions {
   const cliTool = record.cliTool && record.cliTool !== "none" ? record.cliTool : undefined;
   const runtimeKind = record.runtimeKind ?? "local";
+  const providerId = optionalValue(record.providerId);
+  const providerSelection = optionalValue(record.providerSelection);
   const fallback: OpenTerminalOptions = {
     path: record.projectPath,
-    workspaceName: record.workspaceName,
-    providerId: record.providerId,
-    providerSelection: record.providerSelection,
-    workspacePath: record.launchCwd ?? record.workspacePath,
+    workspaceName: optionalValue(record.workspaceName),
+    providerId,
+    providerSelection,
+    workspacePath: optionalValue(record.launchCwd ?? record.workspacePath),
     cliTool,
-    resumeId: record.resumeSessionId,
+    resumeId: optionalValue(record.resumeSessionId),
   };
 
   if (!record.workspaceName || runtimeKind === "local") {
@@ -77,8 +83,8 @@ export function buildLaunchRecordTerminalOptions(
     workspace: effectiveWorkspace,
     project,
     cliTool,
-    providerId: record.providerId,
-    providerSelection: record.providerSelection,
+    providerId,
+    providerSelection,
     machines,
     environment,
   });
@@ -89,6 +95,6 @@ export function buildLaunchRecordTerminalOptions(
 
   return {
     ...options,
-    resumeId: record.resumeSessionId,
+    resumeId: optionalValue(record.resumeSessionId),
   };
 }

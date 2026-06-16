@@ -18,6 +18,7 @@ interface TerminalImeGuardOptions {
 export interface TerminalImeGuardController {
   dispose: () => void;
   handleKeyEvent: (event: KeyboardEvent) => boolean;
+  clearNativeEditState: (reason?: string) => void;
 }
 
 export function isLinuxWebKitImeEnvironment(
@@ -68,6 +69,14 @@ function clearTextarea(textarea: HTMLTextAreaElement): void {
   }
 }
 
+function clearDocumentSelection(textarea: HTMLTextAreaElement): void {
+  try {
+    textarea.ownerDocument.getSelection()?.removeAllRanges();
+  } catch {
+    // Some WebViews can reject selection changes while native edit menus are open.
+  }
+}
+
 function eventPayload(event: InputEvent | CompositionEvent | KeyboardEvent, textarea: HTMLTextAreaElement): Record<string, unknown> {
   const inputEvent = event instanceof InputEvent ? event : null;
   const compositionEvent = event instanceof CompositionEvent ? event : null;
@@ -88,21 +97,35 @@ function eventPayload(event: InputEvent | CompositionEvent | KeyboardEvent, text
   };
 }
 
-function noopController(): TerminalImeGuardController {
+function noopController(clearNativeEditState: TerminalImeGuardController["clearNativeEditState"]): TerminalImeGuardController {
   return {
     dispose: () => {},
     handleKeyEvent: () => true,
+    clearNativeEditState,
   };
 }
 
 export function attachTerminalImeGuard(options: TerminalImeGuardOptions): TerminalImeGuardController {
-  if (!options.enabled) return noopController();
-
   const { textarea, terminal } = options;
   const now = options.now ?? (() => performance.now());
   const log = (event: string, payload: Record<string, unknown> = {}) => {
     options.logger?.(`ime-guard.${event}`, payload);
   };
+
+  const clearNativeEditState = (reason = "manual") => {
+    clearTextarea(textarea);
+    clearDocumentSelection(textarea);
+    log("native-edit-state.cleared", {
+      reason,
+      textarea: {
+        valueLength: textarea.value.length,
+        selectionStart: textarea.selectionStart,
+        selectionEnd: textarea.selectionEnd,
+      },
+    });
+  };
+
+  if (!options.enabled) return noopController(clearNativeEditState);
 
   const cleanups: Array<() => void> = [];
   let sawCompositionStart = false;
@@ -290,5 +313,6 @@ export function attachTerminalImeGuard(options: TerminalImeGuardOptions): Termin
       }
       return true;
     },
+    clearNativeEditState,
   };
 }

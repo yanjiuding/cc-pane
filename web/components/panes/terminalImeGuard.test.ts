@@ -134,6 +134,40 @@ describe("terminal IME guard", () => {
     guard.dispose();
   });
 
+  it("clears native textarea edit state even when IME interception is disabled", () => {
+    const textarea = document.createElement("textarea");
+    document.body.appendChild(textarea);
+    const terminal = { input: vi.fn() };
+    const logger = vi.fn();
+    const guard = attachTerminalImeGuard({
+      textarea,
+      terminal,
+      enabled: false,
+      logger,
+    });
+
+    textarea.value = "Write tests";
+    textarea.setSelectionRange(0, 1);
+    document.getSelection()?.selectAllChildren(textarea);
+
+    guard.clearNativeEditState("copy-selection");
+
+    expect(textarea.value).toBe("");
+    expect(textarea.selectionStart).toBe(0);
+    expect(textarea.selectionEnd).toBe(0);
+    expect(document.getSelection()?.rangeCount).toBe(0);
+    expect(terminal.input).not.toHaveBeenCalled();
+    expect(logger).toHaveBeenCalledWith(
+      "ime-guard.native-edit-state.cleared",
+      expect.objectContaining({
+        reason: "copy-selection",
+      }),
+    );
+
+    guard.dispose();
+    textarea.remove();
+  });
+
   it("suppresses the selection confirmation space after a malformed composition", () => {
     let currentTime = 1000;
     const textarea = document.createElement("textarea");

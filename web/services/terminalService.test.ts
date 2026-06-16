@@ -30,6 +30,26 @@ describe("terminalService", () => {
       expect(result).toBe("session-1");
     });
 
+    it("omits null optional fields before invoking Tauri", async () => {
+      mockTauriInvoke({ create_terminal_session: "session-1" });
+
+      await terminalService.createSession({
+        projectPath: "/tmp/project",
+        cols: 80,
+        rows: 24,
+        providerSelection: null,
+        resumeId: null,
+      } as never);
+
+      expect(invoke).toHaveBeenCalledWith("create_terminal_session", {
+        request: {
+          projectPath: "/tmp/project",
+          cols: 80,
+          rows: 24,
+        },
+      });
+    });
+
     it("rejects a null request before invoking Tauri", async () => {
       await expect(
         terminalService.createSession(null),

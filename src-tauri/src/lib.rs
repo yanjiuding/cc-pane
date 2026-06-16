@@ -341,6 +341,81 @@ use tauri::{
     Emitter, Manager, WindowEvent,
 };
 
+#[cfg(target_os = "macos")]
+fn with_macos_app_menu<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    use tauri::menu::{
+        AboutMetadata, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID,
+    };
+
+    builder.menu(|app| {
+        let app_menu = Submenu::with_items(
+            app,
+            "CC-Panes",
+            true,
+            &[
+                &PredefinedMenuItem::about(
+                    app,
+                    Some("About CC-Panes"),
+                    Some(AboutMetadata {
+                        name: Some("CC-Panes".to_string()),
+                        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                        ..Default::default()
+                    }),
+                )?,
+                &PredefinedMenuItem::separator(app)?,
+                &PredefinedMenuItem::hide(app, None)?,
+                &PredefinedMenuItem::hide_others(app, None)?,
+                &PredefinedMenuItem::show_all(app, None)?,
+                &PredefinedMenuItem::separator(app)?,
+                &PredefinedMenuItem::quit(app, None)?,
+            ],
+        )?;
+        let edit_menu = Submenu::with_items(
+            app,
+            "Edit",
+            true,
+            &[
+                &PredefinedMenuItem::undo(app, None)?,
+                &PredefinedMenuItem::redo(app, None)?,
+                &PredefinedMenuItem::separator(app)?,
+                &PredefinedMenuItem::cut(app, None)?,
+                &PredefinedMenuItem::copy(app, None)?,
+                &PredefinedMenuItem::paste(app, None)?,
+                &PredefinedMenuItem::select_all(app, None)?,
+            ],
+        )?;
+        let window_menu = Submenu::with_id_and_items(
+            app,
+            WINDOW_SUBMENU_ID,
+            "Window",
+            true,
+            &[
+                &PredefinedMenuItem::minimize(app, None)?,
+                &PredefinedMenuItem::maximize(app, None)?,
+                &PredefinedMenuItem::fullscreen(app, None)?,
+                &PredefinedMenuItem::separator(app)?,
+                &PredefinedMenuItem::bring_all_to_front(app, None)?,
+            ],
+        )?;
+        window_menu.set_as_windows_menu_for_nsapp()?;
+        let help_menu = Submenu::with_id_and_items(
+            app,
+            HELP_SUBMENU_ID,
+            "Help",
+            true,
+            &[&PredefinedMenuItem::services(app, None)?],
+        )?;
+        help_menu.set_as_help_menu_for_nsapp()?;
+
+        Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu, &help_menu])
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+fn with_macos_app_menu<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder
+}
+
 /// macOS: 强制将 WKWebView 设为 NSWindow 的 firstResponder
 /// 修复无边框窗口（decorations: false）下键盘输入失效的问题
 #[cfg(target_os = "macos")]
@@ -1021,7 +1096,7 @@ pub fn run() {
     let usage_stats_cleanup = usage_stats_service.clone();
 
     boot_mark!("building tauri app...");
-    tauri::Builder::default()
+    with_macos_app_menu(tauri::Builder::default())
         .plugin(
             tauri_plugin_log::Builder::new()
                 .targets([
@@ -1492,17 +1567,28 @@ pub fn run() {
             {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.with_webview(|webview| unsafe {
-                        use objc2_app_kit::{NSWindow, NSWindowStyleMask, NSWindowTitleVisibility};
+                        use objc2_app_kit::{
+                            NSWindow, NSWindowCollectionBehavior, NSWindowStyleMask,
+                            NSWindowTitleVisibility,
+                        };
 
                         let ns_window: &NSWindow = &*webview.ns_window().cast();
 
                         // 1. 添加 decorations（标题栏 + 红绿灯按钮）
                         let mut mask = ns_window.styleMask();
                         mask.insert(NSWindowStyleMask::Titled);
+                        mask.insert(NSWindowStyleMask::Closable);
+                        mask.insert(NSWindowStyleMask::Miniaturizable);
+                        mask.insert(NSWindowStyleMask::Resizable);
                         mask.insert(NSWindowStyleMask::FullSizeContentView);
                         ns_window.setStyleMask(mask);
 
-                        // 2. 标题栏透明 + 隐藏标题文字
+                        // 2. 允许绿色按钮和系统 Window 菜单进入原生 macOS 全屏
+                        let mut behavior = ns_window.collectionBehavior();
+                        behavior.insert(NSWindowCollectionBehavior::FullScreenPrimary);
+                        ns_window.setCollectionBehavior(behavior);
+
+                        // 3. 标题栏透明 + 隐藏标题文字
                         ns_window.setTitlebarAppearsTransparent(true);
                         ns_window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
                     });

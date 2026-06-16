@@ -8,6 +8,7 @@ const mockStartDrag = vi.fn();
 const mockCloseWindow = vi.fn();
 const mockMinimizeWindow = vi.fn();
 const mockMaximizeWindow = vi.fn();
+const mockToggleFullscreenWindow = vi.fn();
 
 vi.mock("@/stores", () => ({
   useBorderlessStore: (selector: (state: { isBorderless: boolean }) => boolean) =>
@@ -19,6 +20,7 @@ vi.mock("@/hooks/useWindowControl", () => ({
     closeWindow: mockCloseWindow,
     minimizeWindow: mockMinimizeWindow,
     maximizeWindow: mockMaximizeWindow,
+    toggleFullscreenWindow: mockToggleFullscreenWindow,
     isMaximized: false,
     startDrag: mockStartDrag,
   }),
@@ -54,6 +56,24 @@ describe("TitleBar", () => {
     fireEvent.mouseDown(screen.getByTestId("titlebar-drag-spacer"), { button: 0 });
 
     expect(mockStartDrag).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles fullscreen on center spacer double click", () => {
+    render(<TitleBar />);
+
+    fireEvent.mouseDown(screen.getByTestId("titlebar-drag-spacer"), { button: 0, detail: 2 });
+
+    expect(mockToggleFullscreenWindow).toHaveBeenCalledTimes(1);
+    expect(mockStartDrag).not.toHaveBeenCalled();
+  });
+
+  it("toggles fullscreen on workspace title double click", () => {
+    render(<TitleBar workspaceName="Workspace A" />);
+
+    fireEvent.doubleClick(screen.getByText("Workspace A"));
+
+    expect(mockToggleFullscreenWindow).toHaveBeenCalledTimes(1);
+    expect(mockStartDrag).not.toHaveBeenCalled();
   });
 
   it("hides itself in borderless mode", () => {

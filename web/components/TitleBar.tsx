@@ -12,7 +12,14 @@ const isMac = navigator.platform.toUpperCase().indexOf("MAC") >= 0;
 export default function TitleBar({ workspaceName }: TitleBarProps) {
   const { t } = useTranslation("common");
   const isBorderless = useBorderlessStore((s) => s.isBorderless);
-  const { closeWindow, minimizeWindow, maximizeWindow, isMaximized, startDrag } = useWindowControl();
+  const {
+    closeWindow,
+    minimizeWindow,
+    maximizeWindow,
+    toggleFullscreenWindow,
+    isMaximized,
+    startDrag,
+  } = useWindowControl();
 
   // 无边框模式时隐藏标题栏
   if (isBorderless) return null;
@@ -40,7 +47,14 @@ export default function TitleBar({ workspaceName }: TitleBarProps) {
       />
 
       {/* 左侧：工作空间名 */}
-      <div className="flex items-center gap-2 shrink-0 min-w-0">
+      <div
+        className="flex items-center gap-2 shrink-0 min-w-0"
+        style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+        onDoubleClick={(e) => {
+          e.preventDefault();
+          toggleFullscreenWindow();
+        }}
+      >
         <span
           className="text-[12px] font-medium truncate max-w-[200px]"
           style={{ color: "var(--app-text-secondary)" }}
@@ -55,6 +69,11 @@ export default function TitleBar({ workspaceName }: TitleBarProps) {
         className="flex-1 h-full cursor-grab"
         onMouseDown={(e) => {
           if (e.button === 0 && e.target === e.currentTarget) {
+            if (e.detail >= 2) {
+              e.preventDefault();
+              toggleFullscreenWindow();
+              return;
+            }
             e.preventDefault();
             startDrag();
           }

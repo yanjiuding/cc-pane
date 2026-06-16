@@ -26,7 +26,7 @@ trigger: |
 
 - 子任务共享同一文件、有顺序依赖、是数据库迁移之类不可并发的操作
 - 单点小修复 / < 50 行改动 → 单 agent 顺序更快更省事
-- 纯跨项目 fan-out（同一脚本/同一 prompt 跑在 N 个项目）→ 用 `ccpanes:parallel-run`
+- 纯跨项目 fan-out（同一脚本/同一 prompt 跑在 N 个项目）→ 用 [`ccpanes:parallel-run`](#与-ccpanes-parallel-run-skill-的关系)
 
 ---
 
@@ -139,7 +139,7 @@ mcp__ccpanes__register_plan_leader(
 | Claude Task 子 agent | 同步返回（Task tool 调用直接拿结果） | 等 tool result |
 | CC-Panes launch_task worker | PTY `report_to_leader` + `update_task_binding` | 等 `[worker-report]` 行 |
 
-**重要**：多个 worker 并发时，PTY `report_to_leader` 在 leader busy 时会**静默丢失**。所以代码型 worker 的 prompt **必须**包含双保险：
+**重要**：多个 worker 并发时，PTY `report_to_leader` 在 leader busy 时会**静默丢失**（见 [[ccpanes-worker-report-pty-dropout]] memory）。所以代码型 worker 的 prompt **必须**包含：
 
 ```
 ## 收尾(必须执行)

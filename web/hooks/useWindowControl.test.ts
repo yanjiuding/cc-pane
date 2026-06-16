@@ -168,6 +168,47 @@ describe("useWindowControl", () => {
     });
   });
 
+  describe("toggleFullscreenWindow", () => {
+    it("非全屏时应该进入全屏", async () => {
+      mockTauriInvoke({ is_fullscreen: false, enter_fullscreen: undefined });
+
+      const { result } = renderHook(() => useWindowControl());
+
+      await act(async () => {
+        await result.current.toggleFullscreenWindow();
+      });
+
+      expect(invoke).toHaveBeenCalledWith("is_fullscreen");
+      expect(invoke).toHaveBeenCalledWith("enter_fullscreen");
+    });
+
+    it("已全屏时应该退出全屏", async () => {
+      mockTauriInvoke({ is_fullscreen: true, exit_fullscreen: undefined });
+
+      const { result } = renderHook(() => useWindowControl());
+
+      await act(async () => {
+        await result.current.toggleFullscreenWindow();
+      });
+
+      expect(invoke).toHaveBeenCalledWith("is_fullscreen");
+      expect(invoke).toHaveBeenCalledWith("exit_fullscreen");
+    });
+
+    it("invoke 失败时不应该崩溃", async () => {
+      const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+      mockInvoke.mockRejectedValue(new Error("fullscreen failed"));
+
+      const { result } = renderHook(() => useWindowControl());
+
+      await act(async () => {
+        await result.current.toggleFullscreenWindow();
+      });
+
+      // 不抛出错误即通过
+    });
+  });
+
   describe("startDrag", () => {
     it("应该调用 getCurrentWindow().startDragging()", () => {
       const { result } = renderHook(() => useWindowControl());

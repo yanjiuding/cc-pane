@@ -878,8 +878,10 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
             kind,
             textLength: text.length,
           });
+          imeGuardRef.current?.clearNativeEditState("before-paste");
           term.focus();
           term.paste(text);
+          imeGuardRef.current?.clearNativeEditState("after-paste");
         };
 
         const pasteTerminalPayload = (clipboardData?: DataTransfer | null) => {
@@ -1000,7 +1002,11 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
               if (selection) {
                 e.preventDefault();
                 void copyTerminalSelection(selection)
-                  .then(() => term.clearSelection())
+                  .then(() => {
+                    term.clearSelection();
+                    imeGuardRef.current?.clearNativeEditState("copy-selection");
+                    term.focus();
+                  })
                   .catch((error) => {
                     const message = getErrorMessage(error);
                     debugLog("clipboard.copy.failed", { error: message });

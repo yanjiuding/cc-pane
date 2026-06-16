@@ -49,6 +49,24 @@ describe("launchHistory", () => {
     });
   });
 
+  it("omits null provider metadata from old launch records", () => {
+    const record = createRecord({
+      providerId: null,
+      providerSelection: null,
+      workspaceName: null,
+      launchCwd: null,
+      workspacePath: null,
+    } as unknown as Partial<LaunchRecord>);
+
+    const options = buildLaunchRecordTerminalOptions(record, [], []);
+
+    expect(options).toEqual({
+      path: record.projectPath,
+      cliTool: "codex",
+      resumeId: "resume-1",
+    });
+  });
+
   it("reconstructs WSL launch options from the current workspace config", () => {
     Object.defineProperty(window.navigator, "platform", {
       configurable: true,

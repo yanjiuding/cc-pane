@@ -229,4 +229,4 @@ REST 是**应急通道**，优先用 MCP。
 - ❌ 让 worker 只 `report_to_leader` 不 `update_task_binding` → leader busy 时反馈静默丢失
 - ❌ 复用窗口用 `write_to_session` 发整段 prompt → 不会自动回车，prompt 卡在输入框；要用 `submit_to_session`
 - ❌ 用 `update_todo({completed: true})` → 字段不存在，要用 `status` 字段
-- ❌ 把 `create_todo({todoType: "spec"})` 当 Spec 创建入口 → MCP 没此参数，只会创建普通 Todo
+- ❌ 把 `create_todo({todoType: "spec"})` 当 Spec 创建入口 → MCP 没此参数，只会创建普通 Todo（见 [`/ccbook:spec`](spec.md)）

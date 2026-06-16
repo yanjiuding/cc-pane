@@ -27,7 +27,7 @@ trigger: |
 **不用**：
 - 用户希望 Claude 自己改代码
 - 小到不值得一个新 Codex 实例（< 50 行简单 patch）
-- Plan 还没经过同行评审且涉及高风险 → 先走 `/ccbook:plan2codexwsl` 评审，再用本 skill 派实现
+- Plan 还没经过同行评审且涉及高风险 → 先走 [`/ccbook:plan2codexwsl`](plan2codexwsl.md) 评审，再用本 skill 派实现
 
 ---
 
@@ -239,4 +239,4 @@ git diff <worktree-or-main>
 - ❌ 把 `get_session_status` 返回的 `active/idle/exited` 当作完整枚举 → 漏掉 thinking/waitingInput/error
 - ❌ `launch_task.projectPath` 自己拼 `/mnt/...` → 不匹配 cc-panes 注册路径，启动失败
 - ❌ "超过 10 分钟提醒用户"作为唯一兜底 → 没有渐进性，体验差
-- ❌ Claude 自己改代码 → 角色冲突
+- ❌ Claude 自己改代码 → 这是 plan2codexwsl 之外，但和本 skill 角色冲突

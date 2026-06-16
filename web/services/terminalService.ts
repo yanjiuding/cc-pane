@@ -74,6 +74,12 @@ function assertCreateSessionRequest(
   }
 }
 
+function compactCreateSessionRequest(request: CreateSessionRequest): CreateSessionRequest {
+  return Object.fromEntries(
+    Object.entries(request).filter(([, value]) => value !== null && value !== undefined),
+  ) as CreateSessionRequest;
+}
+
 // ── 模块级状态：单例监听器 ──────────────────────────────────
 
 const outputCallbacks = new Map<string, (data: string) => void>();
@@ -186,7 +192,9 @@ export const terminalService = {
   /** 创建终端会话 */
   async createSession(request: CreateSessionRequest | null | undefined): Promise<string> {
     assertCreateSessionRequest(request);
-    return invoke<string>("create_terminal_session", { request });
+    return invoke<string>("create_terminal_session", {
+      request: compactCreateSessionRequest(request),
+    });
   },
 
   /** 向终端写入数据 */
