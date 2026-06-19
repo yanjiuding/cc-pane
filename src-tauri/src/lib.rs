@@ -104,8 +104,8 @@ use commands::{
     get_git_status,
     get_history_config,
     get_journal_index,
-    get_layout_switcher_snapshot,
     get_launch_profile,
+    get_layout_switcher_snapshot,
     get_layout_switcher_state,
     // 日志命令
     get_log_dir,

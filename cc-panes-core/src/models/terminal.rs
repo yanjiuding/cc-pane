@@ -45,7 +45,7 @@ pub struct WslLaunchInfo {
 }
 
 /// 创建终端会话请求
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
