@@ -91,6 +91,23 @@ impl TerminalDaemonClient {
         Ok(Self::from_manifest(manifest))
     }
 
+    pub fn addr(&self) -> &str {
+        &self.addr
+    }
+
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
+    pub fn websocket_url(&self, session_id: &str) -> String {
+        format!(
+            "ws://{}/ws/{}?token={}",
+            self.addr,
+            urlencoding::encode(session_id),
+            urlencoding::encode(&self.token)
+        )
+    }
+
     pub fn health(&self) -> AppResult<()> {
         self.get_json::<serde_json::Value>("/api/health", false)
             .map(|_| ())
@@ -436,6 +453,16 @@ mod tests {
 
         assert_eq!(client.addr, "127.0.0.1:1234");
         assert_eq!(client.token, "abc");
+    }
+
+    #[test]
+    fn websocket_url_encodes_session_and_token() {
+        let client = TerminalDaemonClient::new("127.0.0.1:1234", "a b");
+
+        assert_eq!(
+            client.websocket_url("session/1"),
+            "ws://127.0.0.1:1234/ws/session%2F1?token=a%20b"
+        );
     }
 
     #[test]

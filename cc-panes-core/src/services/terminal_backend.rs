@@ -26,6 +26,9 @@ pub trait TerminalBackend: Send + Sync {
         &self,
         session_id: &str,
     ) -> AppResult<Option<TerminalReplaySnapshot>>;
+    fn event_stream_url(&self, _session_id: &str) -> Option<String> {
+        None
+    }
 }
 
 #[derive(Clone)]
@@ -202,6 +205,10 @@ impl TerminalBackend for DaemonTerminalBackend {
         session_id: &str,
     ) -> AppResult<Option<TerminalReplaySnapshot>> {
         self.client.get_session_replay_snapshot(session_id)
+    }
+
+    fn event_stream_url(&self, session_id: &str) -> Option<String> {
+        Some(self.client.websocket_url(session_id))
     }
 }
 

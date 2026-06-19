@@ -6,7 +6,10 @@ use cc_panes_core::constants::events as EV;
 use cc_panes_core::models::{TerminalExit, TerminalOutput, TerminalReplaySnapshot};
 use cc_panes_core::services::terminal_service::{SessionStatus, SessionStatusInfo};
 use cc_panes_core::services::TerminalBackend;
+use futures_util::StreamExt;
+use serde::Deserialize;
 use tauri::Emitter;
+use tokio_tungstenite::connect_async;
 use tracing::{debug, warn};
 
 #[derive(Clone)]
@@ -21,6 +24,18 @@ struct SessionBridgeState {
     last_status: Option<SessionStatusInfo>,
     started: bool,
     terminal_exit_emitted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum DaemonStreamMessage {
+    Output {
+        data: String,
+    },
+    Exit {
+        #[serde(rename = "exitCode")]
+        exit_code: i32,
+    },
 }
 
 impl TerminalDaemonEventBridge {
@@ -71,13 +86,96 @@ impl TerminalDaemonEventBridge {
 
         let bridge = self.clone();
         tauri::async_runtime::spawn(async move {
-            bridge.poll_session(session_id, backend).await;
+            bridge.run_session(session_id, backend).await;
         });
     }
 
     fn stop_session(&self, session_id: &str) {
         let mut sessions = self.sessions.lock().unwrap_or_else(|err| err.into_inner());
         sessions.remove(session_id);
+    }
+
+    async fn run_session(&self, session_id: String, backend: Arc<dyn TerminalBackend>) {
+        if let Some(url) = backend.event_stream_url(&session_id) {
+            match self
+                .stream_session(session_id.clone(), url, backend.clone())
+                .await
+            {
+                Ok(()) => {
+                    self.stop_session(&session_id);
+                    debug!(session_id = %session_id, "terminal daemon websocket bridge stopped");
+                    return;
+                }
+                Err(error) => {
+                    warn!(session_id = %session_id, error = %error, "terminal daemon websocket bridge failed; falling back to polling");
+                }
+            }
+        }
+
+        self.poll_session(session_id, backend).await;
+    }
+
+    async fn stream_session(
+        &self,
+        session_id: String,
+        url: String,
+        backend: Arc<dyn TerminalBackend>,
+    ) -> anyhow::Result<()> {
+        let (mut ws, _) = connect_async(&url).await?;
+        let mut status_interval = tokio::time::interval(Duration::from_millis(500));
+
+        loop {
+            tokio::select! {
+                message = ws.next() => {
+                    let Some(message) = message else {
+                        self.emit_terminal_status_once(synthesized_exited_status(&session_id))?;
+                        self.emit_terminal_exit_once(&session_id, -1)?;
+                        return Ok(());
+                    };
+                    let message = message?;
+                    if message.is_close() {
+                        self.emit_terminal_status_once(synthesized_exited_status(&session_id))?;
+                        self.emit_terminal_exit_once(&session_id, -1)?;
+                        return Ok(());
+                    }
+                    if !message.is_text() {
+                        continue;
+                    }
+                    if self.handle_stream_message(&session_id, message.to_text()?)? {
+                        return Ok(());
+                    }
+                }
+                _ = status_interval.tick() => {
+                    if self.poll_status(&session_id, backend.clone()).await? == PollStatus::Done {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_stream_message(&self, session_id: &str, text: &str) -> anyhow::Result<bool> {
+        let message: DaemonStreamMessage = serde_json::from_str(text)?;
+        match message {
+            DaemonStreamMessage::Output { data } => {
+                self.app_handle.emit(
+                    EV::TERMINAL_OUTPUT,
+                    serde_json::to_value(TerminalOutput {
+                        session_id: session_id.to_string(),
+                        data,
+                    })?,
+                )?;
+                Ok(false)
+            }
+            DaemonStreamMessage::Exit { exit_code } => {
+                self.emit_terminal_status_once(synthesized_exited_status_with_code(
+                    session_id,
+                    Some(exit_code),
+                ))?;
+                self.emit_terminal_exit_once(session_id, exit_code)?;
+                Ok(true)
+            }
+        }
     }
 
     async fn poll_session(&self, session_id: String, backend: Arc<dyn TerminalBackend>) {
@@ -263,13 +361,20 @@ fn same_status_payload(left: &SessionStatusInfo, right: &SessionStatusInfo) -> b
 }
 
 fn synthesized_exited_status(session_id: &str) -> SessionStatusInfo {
+    synthesized_exited_status_with_code(session_id, None)
+}
+
+fn synthesized_exited_status_with_code(
+    session_id: &str,
+    exit_code: Option<i32>,
+) -> SessionStatusInfo {
     let now = current_epoch_millis();
     SessionStatusInfo {
         session_id: session_id.to_string(),
         status: SessionStatus::Exited,
         last_output_at: now,
         pid: None,
-        exit_code: None,
+        exit_code,
         current_tool_name: None,
         current_tool_use_id: None,
         current_tool_summary: None,
@@ -330,5 +435,22 @@ mod tests {
         assert!(same_status_payload(&first, &same));
         assert!(!same_status_payload(&first, &changed));
         assert!(!same_status_payload(&first, &changed_exit_code));
+    }
+
+    #[test]
+    fn daemon_stream_message_parses_output_and_exit_payloads() {
+        match serde_json::from_str::<DaemonStreamMessage>(r#"{"type":"output","data":"ready"}"#)
+            .expect("output message")
+        {
+            DaemonStreamMessage::Output { data } => assert_eq!(data, "ready"),
+            other => panic!("unexpected message: {other:?}"),
+        }
+
+        match serde_json::from_str::<DaemonStreamMessage>(r#"{"type":"exit","exitCode":7}"#)
+            .expect("exit message")
+        {
+            DaemonStreamMessage::Exit { exit_code } => assert_eq!(exit_code, 7),
+            other => panic!("unexpected message: {other:?}"),
+        }
     }
 }
