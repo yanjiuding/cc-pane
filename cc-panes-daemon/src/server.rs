@@ -281,11 +281,11 @@ async fn create_session(
     Json(req): Json<CreateSessionRequest>,
 ) -> Result<(StatusCode, Json<CreateSessionResponse>), (StatusCode, Json<serde_json::Value>)> {
     authorize(&headers, config.token())?;
-    if req.core.ssh.is_some() || req.core.wsl.is_some() {
+    if req.core.ssh.is_some() && req.core.wsl.is_some() {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
-            "UNSUPPORTED_REMOTE_LAUNCH",
-            "daemon MVP only supports local terminal sessions",
+            "INVALID_LAUNCH_OPTIONS",
+            "SSH and WSL launch options cannot be combined",
         ));
     }
 
@@ -311,8 +311,8 @@ async fn create_session(
         skip_mcp: req.core.skip_mcp,
         append_system_prompt: req.core.append_system_prompt,
         initial_prompt: req.core.initial_prompt,
-        ssh: None,
-        wsl: None,
+        ssh: req.core.ssh,
+        wsl: req.core.wsl,
     };
     let session_id = config
         .terminal_backend()
@@ -866,10 +866,71 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn daemon_mvp_rejects_remote_launch_options() {
+    async fn daemon_accepts_remote_launch_options() {
+        let backend = Arc::new(MockTerminalBackend::default());
+        let app = router(test_config("secret", "127.0.0.1:18085", backend.clone()));
+
+        let ssh_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"projectPath":"/repo","ssh":{"host":"example.com","remotePath":"/srv/repo"}}"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(ssh_response.status(), StatusCode::CREATED);
+
+        let wsl_response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"projectPath":"/repo","wsl":{"remotePath":"/mnt/c/repo","distro":"Ubuntu"}}"#,
+                    ))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(wsl_response.status(), StatusCode::CREATED);
+
+        let created = backend.created.lock().unwrap();
+        assert_eq!(created.len(), 2);
+        assert_eq!(
+            created[0].ssh.as_ref().map(|ssh| ssh.host.as_str()),
+            Some("example.com")
+        );
+        assert_eq!(
+            created[0].ssh.as_ref().map(|ssh| ssh.remote_path.as_str()),
+            Some("/srv/repo")
+        );
+        assert_eq!(
+            created[1].wsl.as_ref().map(|wsl| wsl.remote_path.as_str()),
+            Some("/mnt/c/repo")
+        );
+        assert_eq!(
+            created[1]
+                .wsl
+                .as_ref()
+                .and_then(|wsl| wsl.distro.as_deref()),
+            Some("Ubuntu")
+        );
+    }
+
+    #[tokio::test]
+    async fn daemon_rejects_combined_ssh_and_wsl_launch_options() {
         let app = router(test_config(
             "secret",
-            "127.0.0.1:18085",
+            "127.0.0.1:18086",
             Arc::new(MockTerminalBackend::default()),
         ));
 
@@ -881,7 +942,7 @@ mod tests {
                     .header(header::AUTHORIZATION, "Bearer secret")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        r#"{"projectPath":"/repo","wsl":{"remotePath":"/repo"}}"#,
+                        r#"{"projectPath":"/repo","ssh":{"host":"example.com","remotePath":"/repo"},"wsl":{"remotePath":"/repo"}}"#,
                     ))
                     .expect("request"),
             )
