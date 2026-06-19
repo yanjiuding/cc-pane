@@ -8,11 +8,14 @@ use std::sync::Arc;
 use cc_cli_adapters::CliToolRegistry;
 use cc_panes_core::{
     events::NoopNotifier,
-    repository::{Database, ProjectRepository},
+    repository::{
+        Database, ProjectRepository, SpecRepository, TaskBindingRepository, TodoRepository,
+    },
     services::{
         DaemonTerminalBackend, FileSystemService, InProcessTerminalBackend, ProjectCliHooksService,
-        ProjectService, ProviderService, SettingsService, SshCredentialService, TerminalBackend,
-        TerminalDaemonClient, TerminalService, WorkspaceService,
+        ProjectService, ProviderService, SettingsService, SpecService, SshCredentialService,
+        TaskBindingService, TerminalBackend, TerminalDaemonClient, TerminalService, TodoService,
+        WorkspaceService,
     },
     utils::AppPaths,
 };
@@ -73,9 +76,15 @@ async fn main() -> anyhow::Result<()> {
         Database::new(app_paths.database_path())
             .map_err(|error| anyhow::anyhow!(error.to_string()))?,
     );
-    let project_repo = Arc::new(ProjectRepository::new(database));
+    let project_repo = Arc::new(ProjectRepository::new(database.clone()));
+    let todo_repo = Arc::new(TodoRepository::new(database.clone()));
+    let spec_repo = Arc::new(SpecRepository::new(database.clone()));
+    let task_binding_repo = Arc::new(TaskBindingRepository::new(database));
     let workspace_service = Arc::new(WorkspaceService::new(app_paths.workspaces_dir()));
     let project_service = Arc::new(ProjectService::new(project_repo));
+    let todo_service = Arc::new(TodoService::new(todo_repo));
+    let spec_service = Arc::new(SpecService::new(spec_repo, todo_service.clone()));
+    let task_binding_service = Arc::new(TaskBindingService::new(task_binding_repo));
     let provider_service = Arc::new(ProviderService::new(app_paths.providers_path()));
     let settings_service = Arc::new(SettingsService::new());
     let filesystem_service = Arc::new(FileSystemService::new());
@@ -96,6 +105,9 @@ async fn main() -> anyhow::Result<()> {
         provider_service,
         settings_service,
         filesystem_service,
+        todo_service,
+        spec_service,
+        task_binding_service,
         ws_emitter,
         default_cwd: cwd_str.clone(),
         output_mode: backend_state.output_mode,

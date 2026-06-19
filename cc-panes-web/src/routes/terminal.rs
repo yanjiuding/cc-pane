@@ -286,7 +286,8 @@ mod tests {
         models::{TerminalBufferMode, WslLaunchInfo},
         services::{
             terminal_service::SessionStatus, FileSystemService, ProjectService, ProviderService,
-            SettingsService, TerminalBackend, WorkspaceService,
+            SettingsService, SpecService, TaskBindingService, TerminalBackend, TodoService,
+            WorkspaceService,
         },
         utils::{AppPaths, AppResult},
     };
@@ -401,7 +402,19 @@ mod tests {
 
         let app_paths = AppPaths::new(Some(test_dir("terminal-state")));
         let database = Arc::new(cc_panes_core::repository::Database::new_fallback().expect("db"));
-        let project_repo = Arc::new(cc_panes_core::repository::ProjectRepository::new(database));
+        let project_repo = Arc::new(cc_panes_core::repository::ProjectRepository::new(
+            database.clone(),
+        ));
+        let todo_repo = Arc::new(cc_panes_core::repository::TodoRepository::new(
+            database.clone(),
+        ));
+        let spec_repo = Arc::new(cc_panes_core::repository::SpecRepository::new(
+            database.clone(),
+        ));
+        let task_binding_repo = Arc::new(cc_panes_core::repository::TaskBindingRepository::new(
+            database,
+        ));
+        let todo_service = Arc::new(TodoService::new(todo_repo));
         AppState {
             terminal_backend: backend,
             workspace_service: Arc::new(WorkspaceService::new(app_paths.workspaces_dir())),
@@ -409,6 +422,9 @@ mod tests {
             provider_service: Arc::new(ProviderService::new(app_paths.providers_path())),
             settings_service: Arc::new(SettingsService::new()),
             filesystem_service: Arc::new(FileSystemService::new()),
+            todo_service: todo_service.clone(),
+            spec_service: Arc::new(SpecService::new(spec_repo, todo_service)),
+            task_binding_service: Arc::new(TaskBindingService::new(task_binding_repo)),
             ws_emitter: Arc::new(WsEmitter::new()),
             default_cwd: "/default/project".to_string(),
             output_mode: crate::state::TerminalOutputMode::Emitter,

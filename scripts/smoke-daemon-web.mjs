@@ -219,6 +219,12 @@ function assertContains(value, expected, context) {
   }
 }
 
+function assertEquals(actual, expected, context) {
+  if (actual !== expected) {
+    fail(`${context} expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+  }
+}
+
 function assertExitCode(value, context) {
   if (value !== 0 && value !== 1) {
     fail(`${context} expected exit code 0 or PTY-normalized 1, got ${value}`);
@@ -361,6 +367,223 @@ async function verifyWebResourceApis(webBaseUrl, rootDir) {
   }
 }
 
+async function verifyWebWorkflowApis(webBaseUrl, rootDir) {
+  log("verifying web workflow APIs");
+  const projectDir = path.join(rootDir, "workflow-project");
+  await mkdir(projectDir, { recursive: true });
+
+  const todo = await requestJson(webBaseUrl, "/api/todos", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Smoke workflow todo",
+      priority: "high",
+      scope: "project",
+      scopeRef: projectDir,
+      tags: ["smoke", "workflow"],
+    }),
+  });
+  if (!todo.id) {
+    fail(`todo create returned invalid payload: ${JSON.stringify(todo)}`);
+  }
+  assertEquals(todo.status, "todo", "todo create status");
+
+  const subtask = await requestJson(webBaseUrl, `/api/todos/${encodeURIComponent(todo.id)}/subtasks`, {
+    method: "POST",
+    body: JSON.stringify({ title: "Smoke subtask" }),
+  });
+  if (!subtask.id || subtask.todoId !== todo.id) {
+    fail(`subtask create returned invalid payload: ${JSON.stringify(subtask)}`);
+  }
+
+  const updatedTodo = await requestJson(webBaseUrl, `/api/todos/${encodeURIComponent(todo.id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "in_progress", myDay: true }),
+  });
+  assertEquals(updatedTodo.status, "in_progress", "todo update status");
+  assertEquals(updatedTodo.myDay, true, "todo update myDay");
+
+  const toggledSubtask = await requestJson(
+    webBaseUrl,
+    `/api/todo-subtasks/${encodeURIComponent(subtask.id)}/toggle`,
+    { method: "POST" },
+  );
+  assertEquals(toggledSubtask, true, "subtask toggle result");
+
+  const todoQuery = await requestJson(webBaseUrl, "/api/todos/query", {
+    method: "POST",
+    body: JSON.stringify({ scope: "project", scopeRef: projectDir, search: "workflow" }),
+  });
+  assertEquals(todoQuery.total, 1, "todo query total");
+
+  const batchUpdated = await requestJson(webBaseUrl, "/api/todos/batch-status", {
+    method: "POST",
+    body: JSON.stringify({ ids: [todo.id], status: "done" }),
+  });
+  assertEquals(batchUpdated, 1, "todo batch status count");
+
+  const todoStats = await requestJson(
+    webBaseUrl,
+    `/api/todos/stats?scope=project&scopeRef=${encodeURIComponent(projectDir)}`,
+  );
+  assertEquals(todoStats.total, 1, "todo stats total");
+
+  const spec = await requestJson(webBaseUrl, "/api/specs", {
+    method: "POST",
+    body: JSON.stringify({
+      projectPath: projectDir,
+      title: "Smoke Web Spec",
+      tasks: ["Spec task A", "Spec task B"],
+    }),
+  });
+  if (!spec.id || !spec.todoId) {
+    fail(`spec create returned invalid payload: ${JSON.stringify(spec)}`);
+  }
+
+  const specs = await requestJson(webBaseUrl, `/api/specs?projectPath=${encodeURIComponent(projectDir)}`);
+  if (!Array.isArray(specs) || specs.length !== 1) {
+    fail(`spec list returned invalid payload: ${JSON.stringify(specs)}`);
+  }
+
+  const specContentPath = `/api/specs/${encodeURIComponent(spec.id)}/content?projectPath=${encodeURIComponent(projectDir)}`;
+  const specContent = await requestJson(webBaseUrl, specContentPath);
+  assertContains(specContent, "Smoke Web Spec", "spec content");
+
+  await requestNoContent(webBaseUrl, `/api/specs/${encodeURIComponent(spec.id)}/content`, {
+    method: "PUT",
+    body: JSON.stringify({
+      projectPath: projectDir,
+      content: specContent.replace("## Tasks", "## Tasks\n\n- [x] Spec task A\n"),
+    }),
+  });
+
+  const activeSpec = await requestJson(webBaseUrl, `/api/specs/${encodeURIComponent(spec.id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "active" }),
+  });
+  assertEquals(activeSpec.status, "active", "spec update status");
+
+  await requestNoContent(webBaseUrl, `/api/specs/${encodeURIComponent(spec.id)}/sync-tasks`, {
+    method: "POST",
+    body: JSON.stringify({ projectPath: projectDir }),
+  });
+
+  const binding = await requestJson(webBaseUrl, "/api/task-bindings", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "Smoke task binding",
+      projectPath: projectDir,
+      sessionId: "smoke-task-session",
+      cliTool: "codex",
+    }),
+  });
+  if (!binding.id) {
+    fail(`task binding create returned invalid payload: ${JSON.stringify(binding)}`);
+  }
+  assertEquals(binding.status, "pending", "task binding create status");
+
+  const foundBinding = await requestJson(
+    webBaseUrl,
+    "/api/task-bindings/by-session?sessionId=smoke-task-session",
+  );
+  assertEquals(foundBinding?.id, binding.id, "task binding by session id");
+
+  const runningBinding = await requestJson(webBaseUrl, `/api/task-bindings/${encodeURIComponent(binding.id)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ status: "running", progress: 42 }),
+  });
+  assertEquals(runningBinding.progress, 42, "task binding update progress");
+
+  const patchedBinding = await requestJson(
+    webBaseUrl,
+    `/api/task-bindings/${encodeURIComponent(binding.id)}/merge-patch`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ metadata: { smoke: { verified: true } } }),
+    },
+  );
+  assertEquals(patchedBinding.metadata?.smoke?.verified, true, "task binding merge patch metadata");
+
+  const bindingQuery = await requestJson(webBaseUrl, "/api/task-bindings/query", {
+    method: "POST",
+    body: JSON.stringify({ projectPath: projectDir, status: "running" }),
+  });
+  assertEquals(bindingQuery.total, 1, "task binding query total");
+
+  const deletedBinding = await requestJson(webBaseUrl, `/api/task-bindings/${encodeURIComponent(binding.id)}`, {
+    method: "DELETE",
+  });
+  assertEquals(deletedBinding, true, "task binding delete result");
+
+  const planPath = path.join(projectDir, "plan.md");
+  const leader = await requestJson(webBaseUrl, "/api/plan-collaboration/leader", {
+    method: "POST",
+    body: JSON.stringify({
+      planPath,
+      projectPath: projectDir,
+      title: "Smoke Plan",
+      sessionId: "smoke-leader-session",
+      cliTool: "claude",
+    }),
+  });
+  assertEquals(leader.role, "leader", "plan leader role");
+  assertEquals(leader.status, "running", "plan leader status");
+
+  const worker = await requestJson(webBaseUrl, "/api/plan-collaboration/worker", {
+    method: "POST",
+    body: JSON.stringify({
+      leaderId: leader.id,
+      sessionId: "smoke-worker-session",
+      projectPath: projectDir,
+      title: "Smoke Worker",
+      cliTool: "codex",
+    }),
+  });
+  assertEquals(worker.role, "worker", "plan worker role");
+
+  const child = await requestJson(webBaseUrl, "/api/plan-collaboration/child", {
+    method: "POST",
+    body: JSON.stringify({
+      leaderId: leader.id,
+      sessionId: "smoke-child-session",
+      projectPath: projectDir,
+      title: "Smoke Child",
+      cliTool: "claude",
+    }),
+  });
+  assertEquals(child.role, "worker", "plan child compatibility role");
+
+  const collaboration = await requestJson(
+    webBaseUrl,
+    `/api/plan-collaboration?leaderId=${encodeURIComponent(leader.id)}&verbose=true`,
+  );
+  assertEquals(collaboration.leader.id, leader.id, "plan collaboration leader id");
+  assertEquals(collaboration.total, 2, "plan collaboration worker total");
+  assertEquals(collaboration.workers.length, 2, "plan collaboration workers length");
+
+  const reconciled = await requestJson(
+    webBaseUrl,
+    `/api/plan-collaboration/reconcile?leaderId=${encodeURIComponent(leader.id)}&verbose=false`,
+    { method: "POST" },
+  );
+  assertEquals(reconciled.total, 2, "plan collaboration reconciled total");
+
+  const cascadeDeleted = await requestJson(
+    webBaseUrl,
+    `/api/task-bindings/${encodeURIComponent(leader.id)}/cascade`,
+    { method: "DELETE" },
+  );
+  assertEquals(cascadeDeleted, true, "plan collaboration cascade delete");
+
+  await requestNoContent(
+    webBaseUrl,
+    `/api/specs/${encodeURIComponent(spec.id)}?projectPath=${encodeURIComponent(projectDir)}`,
+    { method: "DELETE" },
+  );
+  await requestNoContent(webBaseUrl, `/api/todos/${encodeURIComponent(todo.id)}`, {
+    method: "DELETE",
+  });
+}
+
 async function main() {
   const tempDirs = [];
   const processes = [];
@@ -450,6 +673,7 @@ async function main() {
       marker: "CCPANES_WEB_DAEMON_PROXY_SMOKE",
     });
     await verifyWebResourceApis(webBaseUrl, webWorkspaceDir);
+    await verifyWebWorkflowApis(webBaseUrl, webWorkspaceDir);
 
     await requestNoContent(daemonBaseUrl, "/api/daemon/shutdown", {
       method: "POST",

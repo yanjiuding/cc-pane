@@ -1,6 +1,7 @@
 pub mod resources;
 pub mod static_files;
 pub mod terminal;
+pub mod workflow;
 
 use axum::{
     routing::{delete, get, patch, post, put},
@@ -114,7 +115,102 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/fs/rename", post(resources::fs_rename_entry))
         .route("/api/fs/copy", post(resources::fs_copy_entry))
         .route("/api/fs/move", post(resources::fs_move_entry))
-        .route("/api/fs/info", get(resources::fs_get_entry_info));
+        .route("/api/fs/info", get(resources::fs_get_entry_info))
+        .route("/api/todos", post(workflow::create_todo))
+        .route("/api/todos/query", post(workflow::query_todos))
+        .route("/api/todos/reorder", post(workflow::reorder_todos))
+        .route(
+            "/api/todos/batch-status",
+            post(workflow::batch_update_todo_status),
+        )
+        .route("/api/todos/stats", get(workflow::get_todo_stats))
+        .route("/api/todos/reminders", get(workflow::check_todo_reminders))
+        .route("/api/todos/{id}", get(workflow::get_todo))
+        .route("/api/todos/{id}", patch(workflow::update_todo))
+        .route("/api/todos/{id}", delete(workflow::delete_todo))
+        .route(
+            "/api/todos/{id}/toggle-my-day",
+            post(workflow::toggle_todo_my_day),
+        )
+        .route("/api/todos/{id}/subtasks", post(workflow::add_todo_subtask))
+        .route(
+            "/api/todo-subtasks/reorder",
+            post(workflow::reorder_todo_subtasks),
+        )
+        .route(
+            "/api/todo-subtasks/{id}",
+            patch(workflow::update_todo_subtask),
+        )
+        .route(
+            "/api/todo-subtasks/{id}",
+            delete(workflow::delete_todo_subtask),
+        )
+        .route(
+            "/api/todo-subtasks/{id}/toggle",
+            post(workflow::toggle_todo_subtask),
+        )
+        .route("/api/specs", post(workflow::create_spec))
+        .route("/api/specs", get(workflow::list_specs))
+        .route(
+            "/api/specs/{spec_id}/content",
+            get(workflow::get_spec_content),
+        )
+        .route(
+            "/api/specs/{spec_id}/content",
+            put(workflow::save_spec_content),
+        )
+        .route("/api/specs/{spec_id}", patch(workflow::update_spec))
+        .route("/api/specs/{spec_id}", delete(workflow::delete_spec))
+        .route(
+            "/api/specs/{spec_id}/sync-tasks",
+            post(workflow::sync_spec_tasks),
+        )
+        .route("/api/task-bindings", post(workflow::create_task_binding))
+        .route(
+            "/api/task-bindings/query",
+            post(workflow::query_task_bindings),
+        )
+        .route(
+            "/api/task-bindings/by-session",
+            get(workflow::find_task_binding_by_session),
+        )
+        .route("/api/task-bindings/{id}", get(workflow::get_task_binding))
+        .route(
+            "/api/task-bindings/{id}",
+            patch(workflow::update_task_binding),
+        )
+        .route(
+            "/api/task-bindings/{id}/merge-patch",
+            patch(workflow::update_task_binding_patch),
+        )
+        .route(
+            "/api/task-bindings/{id}",
+            delete(workflow::delete_task_binding),
+        )
+        .route(
+            "/api/task-bindings/{id}/cascade",
+            delete(workflow::delete_task_binding_cascade),
+        )
+        .route(
+            "/api/plan-collaboration/leader",
+            post(workflow::register_plan_leader),
+        )
+        .route(
+            "/api/plan-collaboration/worker",
+            post(workflow::register_plan_worker),
+        )
+        .route(
+            "/api/plan-collaboration/child",
+            post(workflow::register_plan_child),
+        )
+        .route(
+            "/api/plan-collaboration",
+            get(workflow::get_plan_collaboration),
+        )
+        .route(
+            "/api/plan-collaboration/reconcile",
+            post(workflow::reconcile_plan_collaboration),
+        );
 
     let ws = Router::new().route("/ws/{session_id}", get(ws_upgrade));
 

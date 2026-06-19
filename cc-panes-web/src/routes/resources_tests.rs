@@ -7,11 +7,13 @@ use axum::{
 };
 use cc_panes_core::{
     models::{provider::Provider, provider::ProviderType, TerminalBufferMode},
-    repository::{Database, ProjectRepository},
+    repository::{
+        Database, ProjectRepository, SpecRepository, TaskBindingRepository, TodoRepository,
+    },
     services::{
         terminal_service::{SessionOutput, SessionStatus},
-        FileSystemService, ProjectService, ProviderService, SettingsService, TerminalBackend,
-        WorkspaceService,
+        FileSystemService, ProjectService, ProviderService, SettingsService, SpecService,
+        TaskBindingService, TerminalBackend, TodoService, WorkspaceService,
     },
     utils::{AppPaths, AppResult},
 };
@@ -101,7 +103,11 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
     let root = test_dir(name);
     let app_paths = AppPaths::new(Some(root.join("data").to_string_lossy().to_string()));
     let db = Arc::new(Database::new_fallback().expect("db"));
-    let project_repo = Arc::new(ProjectRepository::new(db));
+    let project_repo = Arc::new(ProjectRepository::new(db.clone()));
+    let todo_repo = Arc::new(TodoRepository::new(db.clone()));
+    let spec_repo = Arc::new(SpecRepository::new(db.clone()));
+    let task_binding_repo = Arc::new(TaskBindingRepository::new(db));
+    let todo_service = Arc::new(TodoService::new(todo_repo));
     let state = AppState {
         terminal_backend: Arc::new(NoopTerminalBackend),
         workspace_service: Arc::new(WorkspaceService::new(app_paths.workspaces_dir())),
@@ -109,6 +115,9 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
         provider_service: Arc::new(ProviderService::new(app_paths.providers_path())),
         settings_service: Arc::new(SettingsService::new()),
         filesystem_service: Arc::new(FileSystemService::new()),
+        todo_service: todo_service.clone(),
+        spec_service: Arc::new(SpecService::new(spec_repo, todo_service)),
+        task_binding_service: Arc::new(TaskBindingService::new(task_binding_repo)),
         ws_emitter: Arc::new(WsEmitter::new()),
         default_cwd: root.to_string_lossy().to_string(),
         output_mode: TerminalOutputMode::Emitter,
