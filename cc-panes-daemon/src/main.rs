@@ -1,4 +1,5 @@
 mod server;
+mod ws_emitter;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -6,7 +7,7 @@ use std::sync::Arc;
 
 use cc_cli_adapters::CliToolRegistry;
 use cc_panes_core::{
-    events::{NoopEmitter, NoopNotifier},
+    events::NoopNotifier,
     services::{
         InProcessTerminalBackend, ProjectCliHooksService, ProviderService, SettingsService,
         SshCredentialService, TerminalBackend, TerminalService,
@@ -17,6 +18,7 @@ use clap::Parser;
 use tracing::info;
 
 use crate::server::{generate_token, write_manifest, DaemonConfig};
+use crate::ws_emitter::WsEmitter;
 
 #[derive(Parser, Debug)]
 #[command(name = "cc-panes-daemon", about = "CC-Panes local terminal daemon")]
@@ -70,8 +72,15 @@ async fn main() -> anyhow::Result<()> {
             .map(|home| home.join(".cc-panes-daemon").to_string_lossy().to_string())
             .unwrap_or_else(|| "/tmp/.cc-panes-daemon".to_string())
     });
-    let terminal_backend = create_terminal_backend(data_dir);
-    let config = DaemonConfig::new(token, local_addr, terminal_backend, cwd_str.clone());
+    let ws_emitter = Arc::new(WsEmitter::new());
+    let terminal_backend = create_terminal_backend(data_dir, ws_emitter.clone());
+    let config = DaemonConfig::new(
+        token,
+        local_addr,
+        terminal_backend,
+        ws_emitter,
+        cwd_str.clone(),
+    );
     let shutdown_rx = config.shutdown_signal();
 
     if let Some(runtime_dir) = args.runtime_dir {
@@ -86,7 +95,10 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn create_terminal_backend(data_dir: String) -> Arc<dyn TerminalBackend> {
+fn create_terminal_backend(
+    data_dir: String,
+    ws_emitter: Arc<WsEmitter>,
+) -> Arc<dyn TerminalBackend> {
     let app_paths = Arc::new(AppPaths::new(Some(data_dir)));
     let settings_service = Arc::new(SettingsService::new());
     let provider_service = Arc::new(ProviderService::new(app_paths.providers_path()));
@@ -102,7 +114,7 @@ fn create_terminal_backend(data_dir: String) -> Arc<dyn TerminalBackend> {
         project_cli_hooks_service,
         ssh_credential_service,
     ));
-    terminal_service.set_emitter(Arc::new(NoopEmitter));
+    terminal_service.set_emitter(ws_emitter);
     terminal_service.set_notifier(Arc::new(NoopNotifier));
 
     Arc::new(InProcessTerminalBackend::new(terminal_service))

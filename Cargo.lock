@@ -1046,6 +1046,8 @@ dependencies = [
  "cc-panes-core",
  "clap",
  "dirs",
+ "futures-util",
+ "parking_lot",
  "rand 0.9.2",
  "serde",
  "serde_json",

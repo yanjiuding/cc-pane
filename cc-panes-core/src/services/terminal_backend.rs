@@ -308,8 +308,7 @@ mod tests {
 
     #[test]
     fn daemon_backend_maps_status_output_and_snapshot_payloads() {
-        let status_body =
-            r#"[{"sessionId":"s1","status":"exited","lastOutputAt":10,"pid":42,"exitCode":7,"updatedAt":20}]"#;
+        let status_body = r#"[{"sessionId":"s1","status":"exited","lastOutputAt":10,"pid":42,"exitCode":7,"updatedAt":20}]"#;
         let (addr, _) = spawn_response_server(http_json_response("200 OK", status_body));
         let backend = backend_for(addr);
 

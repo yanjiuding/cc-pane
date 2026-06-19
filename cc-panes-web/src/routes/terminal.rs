@@ -161,13 +161,16 @@ pub async fn get_session_status(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<SessionStatusInfo>, (StatusCode, String)> {
-    let status = state.terminal_backend.get_session_status(&id).map_err(|e| {
-        tracing::error!(error = %e, "Failed to get session status");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Failed to get session status".to_string(),
-        )
-    })?;
+    let status = state
+        .terminal_backend
+        .get_session_status(&id)
+        .map_err(|e| {
+            tracing::error!(error = %e, "Failed to get session status");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to get session status".to_string(),
+            )
+        })?;
 
     status
         .map(Json)

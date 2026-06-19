@@ -3,8 +3,10 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use cc_panes_core::models::{
@@ -13,9 +15,12 @@ use cc_panes_core::models::{
 };
 use cc_panes_core::services::terminal_service::SessionOutput;
 use cc_panes_core::services::{SessionStatusInfo, TerminalBackend};
+use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
+
+use crate::ws_emitter::WsEmitter;
 
 const MANIFEST_FILE: &str = "daemon-manifest.json";
 
@@ -29,6 +34,7 @@ impl DaemonConfig {
         token: String,
         addr: SocketAddr,
         terminal_backend: Arc<dyn TerminalBackend>,
+        ws_emitter: Arc<WsEmitter>,
         default_cwd: String,
     ) -> Self {
         let started_at = current_epoch_millis();
@@ -40,6 +46,7 @@ impl DaemonConfig {
                 started_at,
                 shutdown_tx,
                 terminal_backend,
+                ws_emitter,
                 default_cwd,
             }),
         }
@@ -82,6 +89,10 @@ impl DaemonConfig {
         self.inner.terminal_backend.as_ref()
     }
 
+    fn ws_emitter(&self) -> Arc<WsEmitter> {
+        self.inner.ws_emitter.clone()
+    }
+
     fn default_cwd(&self) -> &str {
         &self.inner.default_cwd
     }
@@ -93,6 +104,7 @@ struct DaemonState {
     started_at: u64,
     shutdown_tx: watch::Sender<bool>,
     terminal_backend: Arc<dyn TerminalBackend>,
+    ws_emitter: Arc<WsEmitter>,
     default_cwd: String,
 }
 
@@ -196,6 +208,12 @@ pub struct OutputQuery {
     pub lines: Option<usize>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WsQuery {
+    pub token: Option<String>,
+}
+
 pub fn router(config: DaemonConfig) -> Router {
     Router::new()
         .route("/api/health", get(health))
@@ -210,6 +228,7 @@ pub fn router(config: DaemonConfig) -> Router {
         .route("/api/sessions/{id}/submit", post(submit_session))
         .route("/api/sessions/{id}/resize", post(resize_session))
         .route("/api/sessions/{id}", delete(kill_session))
+        .route("/ws/{id}", get(ws_session))
         .with_state(config)
 }
 
@@ -323,13 +342,11 @@ async fn get_session_status(
     Path(id): Path<String>,
 ) -> Result<Json<SessionStatusInfo>, (StatusCode, Json<serde_json::Value>)> {
     authorize(&headers, config.token())?;
-    let statuses = config
+    let status = config
         .terminal_backend()
-        .get_all_status()
+        .get_session_status(&id)
         .map_err(internal_error)?;
-    statuses
-        .into_iter()
-        .find(|status| status.session_id == id)
+    status
         .map(Json)
         .ok_or_else(|| not_found("Session not found"))
 }
@@ -415,6 +432,66 @@ async fn kill_session(
         .kill(&id)
         .map_err(not_found_from_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn ws_session(
+    State(config): State<DaemonConfig>,
+    Path(id): Path<String>,
+    Query(query): Query<WsQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    match query.token.as_deref() {
+        Some(token) if token == config.token() => {}
+        _ => {
+            return Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "UNAUTHORIZED",
+                "Invalid or missing token",
+            ));
+        }
+    }
+
+    Ok(ws.on_upgrade(move |socket| handle_ws(socket, id, config)))
+}
+
+async fn handle_ws(socket: WebSocket, session_id: String, config: DaemonConfig) {
+    let (mut ws_tx, mut ws_rx) = socket.split();
+    let mut output_rx = config.ws_emitter().subscribe(&session_id);
+    let send_session_id = session_id.clone();
+
+    let send_task = tokio::spawn(async move {
+        while let Some(msg) = output_rx.recv().await {
+            if ws_tx.send(Message::Text(msg.into())).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    while let Some(Ok(msg)) = ws_rx.next().await {
+        match msg {
+            Message::Text(text) => {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if value.get("type").and_then(|value| value.as_str()) == Some("input") {
+                        let data = value
+                            .get("data")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or("");
+                        let _ = config.terminal_backend().write(&session_id, data);
+                    }
+                }
+            }
+            Message::Binary(data) => {
+                if let Ok(text) = String::from_utf8(data.to_vec()) {
+                    let _ = config.terminal_backend().write(&session_id, &text);
+                }
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+
+    send_task.abort();
+    config.ws_emitter().cleanup_session(&send_session_id);
 }
 
 fn authorize(
@@ -552,11 +629,19 @@ mod tests {
                 status: SessionStatus::Idle,
                 last_output_at: 100,
                 pid: Some(42),
+                exit_code: None,
                 current_tool_name: None,
                 current_tool_use_id: None,
                 current_tool_summary: None,
                 updated_at: 120,
             }])
+        }
+
+        fn get_session_status(&self, session_id: &str) -> AppResult<Option<SessionStatusInfo>> {
+            Ok(self
+                .get_all_status()?
+                .into_iter()
+                .find(|status| status.session_id == session_id))
         }
 
         fn get_session_output(&self, session_id: &str, _lines: usize) -> AppResult<SessionOutput> {
@@ -582,6 +667,7 @@ mod tests {
             token.to_string(),
             addr.parse().expect("socket addr"),
             backend,
+            Arc::new(WsEmitter::new()),
             "/default/project".to_string(),
         )
     }
