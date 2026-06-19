@@ -1,5 +1,6 @@
 pub mod claude_session_service;
 pub mod codex_session_service;
+mod daemon_client;
 pub mod default_skill_service;
 mod external_skill_registry;
 mod filesystem_service;
@@ -37,6 +38,7 @@ mod worktree_service;
 #[cfg(target_os = "windows")]
 pub mod wsl_discovery_service;
 
+pub use daemon_client::{TerminalDaemonClient, TerminalDaemonManifest, TerminalDaemonStatus};
 pub use default_skill_service::DefaultSkillService;
 pub use external_skill_registry::ExternalSkillRegistry;
 pub use filesystem_service::FileSystemService;
