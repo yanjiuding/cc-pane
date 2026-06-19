@@ -329,8 +329,8 @@ use services::{
     ProjectCliHooksService, ProjectContextService, ProjectService, ProviderService,
     ScreenshotService, SessionRestoreService, SettingsService, SharedMcpService,
     SkillMarketService, SkillService, SpecService, SshCredentialService, SshMachineService,
-    StartLocks, TaskBindingService, TerminalBackendState, TerminalService, TodoService,
-    UsageStatsService, WorkspaceService, WorktreeService,
+    StartLocks, TaskBindingService, TerminalBackendState, TerminalDaemonEventBridge,
+    TerminalService, TodoService, UsageStatsService, WorkspaceService, WorktreeService,
 };
 use std::sync::Arc;
 use utils::AppPaths;
@@ -1231,6 +1231,7 @@ pub fn run() {
             {
                 use emitter::{TauriEmitter, TauriSessionNotifier};
                 let app_handle = app.handle().clone();
+                app.manage(Arc::new(TerminalDaemonEventBridge::new(app_handle.clone())));
                 let tauri_emitter: std::sync::Arc<dyn cc_panes_core::events::EventEmitter> =
                     Arc::new(TauriEmitter::new(app_handle.clone()));
 

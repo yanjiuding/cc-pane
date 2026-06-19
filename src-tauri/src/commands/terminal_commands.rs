@@ -2,12 +2,15 @@ use crate::models::TerminalReplaySnapshot;
 use crate::models::{CreateSessionRequest, ResizeRequest};
 use crate::services::terminal_service;
 use crate::services::terminal_service::SessionOutput;
-use crate::services::{SessionStatusInfo, ShellInfo, TerminalBackendState, TerminalService};
+use crate::services::{
+    SessionStatusInfo, ShellInfo, TerminalBackendKind, TerminalBackendState,
+    TerminalDaemonEventBridge, TerminalService,
+};
 use crate::utils::error::AppError;
 use crate::utils::{validate_path, validate_ssh_info, AppResult};
 use cc_cli_adapters::{CliToolInfo, CliToolRegistry};
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tracing::debug;
 
 fn is_idempotent_kill_error(error: &AppError) -> bool {
@@ -22,7 +25,7 @@ fn is_idempotent_kill_error(error: &AppError) -> bool {
 /// 创建终端会话
 #[tauri::command]
 pub async fn create_terminal_session(
-    _app_handle: AppHandle,
+    app_handle: AppHandle,
     service: State<'_, Arc<TerminalBackendState>>,
     request: Option<CreateSessionRequest>,
 ) -> AppResult<String> {
@@ -52,10 +55,19 @@ pub async fn create_terminal_session(
     }
 
     let backend = service.backend();
-    let result = tauri::async_runtime::spawn_blocking(move || backend.create_session(request))
-        .await
-        .map_err(|e| AppError::from(e.to_string()))?;
-    result
+    let create_backend = backend.clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || create_backend.create_session(request))
+            .await
+            .map_err(|e| AppError::from(e.to_string()))?;
+    let session_id = result?;
+
+    if service.kind() == TerminalBackendKind::Daemon {
+        let bridge = app_handle.state::<Arc<TerminalDaemonEventBridge>>();
+        bridge.start_session(session_id.clone(), backend);
+    }
+
+    Ok(session_id)
 }
 
 /// 向终端写入数据
@@ -221,11 +233,23 @@ pub fn get_terminal_recent_output(
 /// 获取 attach-existing 所需的原始 VT replay 快照
 #[tauri::command]
 pub fn get_terminal_replay_snapshot(
+    app_handle: AppHandle,
     service: State<'_, Arc<TerminalBackendState>>,
     session_id: String,
 ) -> AppResult<Option<TerminalReplaySnapshot>> {
     debug!(session_id = %session_id, "cmd::get_terminal_replay_snapshot");
-    service.backend().get_session_replay_snapshot(&session_id)
+    let backend = service.backend();
+    let snapshot = backend.get_session_replay_snapshot(&session_id)?;
+
+    if let Some(snapshot) = snapshot
+        .as_ref()
+        .filter(|_| service.kind() == TerminalBackendKind::Daemon)
+    {
+        let bridge = app_handle.state::<Arc<TerminalDaemonEventBridge>>();
+        bridge.start_session_after_replay(session_id, backend, snapshot);
+    }
+
+    Ok(snapshot)
 }
 
 #[cfg(test)]
