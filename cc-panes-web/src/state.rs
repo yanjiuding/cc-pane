@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use cc_panes_core::services::TerminalBackend;
+use cc_panes_core::services::{
+    FileSystemService, ProjectService, ProviderService, SettingsService, TerminalBackend,
+    WorkspaceService,
+};
 
 use crate::ws_emitter::WsEmitter;
 
@@ -14,6 +17,11 @@ pub enum TerminalOutputMode {
 #[derive(Clone)]
 pub struct AppState {
     pub terminal_backend: Arc<dyn TerminalBackend>,
+    pub workspace_service: Arc<WorkspaceService>,
+    pub project_service: Arc<ProjectService>,
+    pub provider_service: Arc<ProviderService>,
+    pub settings_service: Arc<SettingsService>,
+    pub filesystem_service: Arc<FileSystemService>,
     pub ws_emitter: Arc<WsEmitter>,
     pub default_cwd: String,
     pub output_mode: TerminalOutputMode,

@@ -284,8 +284,11 @@ mod tests {
 
     use cc_panes_core::{
         models::{TerminalBufferMode, WslLaunchInfo},
-        services::{terminal_service::SessionStatus, TerminalBackend},
-        utils::AppResult,
+        services::{
+            terminal_service::SessionStatus, FileSystemService, ProjectService, ProviderService,
+            SettingsService, TerminalBackend, WorkspaceService,
+        },
+        utils::{AppPaths, AppResult},
     };
     use serde_json::json;
 
@@ -386,8 +389,26 @@ mod tests {
     }
 
     fn test_state(backend: Arc<MockTerminalBackend>) -> AppState {
+        fn test_dir(name: &str) -> String {
+            let millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_millis();
+            let path = std::env::temp_dir().join(format!("cc-panes-web-terminal-{name}-{millis}"));
+            std::fs::create_dir_all(&path).expect("create temp dir");
+            path.to_string_lossy().to_string()
+        }
+
+        let app_paths = AppPaths::new(Some(test_dir("terminal-state")));
+        let database = Arc::new(cc_panes_core::repository::Database::new_fallback().expect("db"));
+        let project_repo = Arc::new(cc_panes_core::repository::ProjectRepository::new(database));
         AppState {
             terminal_backend: backend,
+            workspace_service: Arc::new(WorkspaceService::new(app_paths.workspaces_dir())),
+            project_service: Arc::new(ProjectService::new(project_repo)),
+            provider_service: Arc::new(ProviderService::new(app_paths.providers_path())),
+            settings_service: Arc::new(SettingsService::new()),
+            filesystem_service: Arc::new(FileSystemService::new()),
             ws_emitter: Arc::new(WsEmitter::new()),
             default_cwd: "/default/project".to_string(),
             output_mode: crate::state::TerminalOutputMode::Emitter,

@@ -8,10 +8,11 @@ use std::sync::Arc;
 use cc_cli_adapters::CliToolRegistry;
 use cc_panes_core::{
     events::NoopNotifier,
+    repository::{Database, ProjectRepository},
     services::{
-        DaemonTerminalBackend, InProcessTerminalBackend, ProjectCliHooksService, ProviderService,
-        SettingsService, SshCredentialService, TerminalBackend, TerminalDaemonClient,
-        TerminalService,
+        DaemonTerminalBackend, FileSystemService, InProcessTerminalBackend, ProjectCliHooksService,
+        ProjectService, ProviderService, SettingsService, SshCredentialService, TerminalBackend,
+        TerminalDaemonClient, TerminalService, WorkspaceService,
     },
     utils::AppPaths,
 };
@@ -67,15 +68,34 @@ async fn main() -> anyhow::Result<()> {
             .map(|h| h.join(".cc-panes-web").to_string_lossy().to_string())
             .unwrap_or_else(|| "/tmp/.cc-panes-web".to_string())
     });
+    let app_paths = Arc::new(AppPaths::new(Some(data_dir.clone())));
+    let database = Arc::new(
+        Database::new(app_paths.database_path())
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?,
+    );
+    let project_repo = Arc::new(ProjectRepository::new(database));
+    let workspace_service = Arc::new(WorkspaceService::new(app_paths.workspaces_dir()));
+    let project_service = Arc::new(ProjectService::new(project_repo));
+    let provider_service = Arc::new(ProviderService::new(app_paths.providers_path()));
+    let settings_service = Arc::new(SettingsService::new());
+    let filesystem_service = Arc::new(FileSystemService::new());
+
     let ws_emitter = Arc::new(WsEmitter::new());
     let backend_config = BackendConfig {
-        data_dir,
+        app_paths: app_paths.clone(),
+        settings_service: settings_service.clone(),
+        provider_service: provider_service.clone(),
         daemon_manifest: args.daemon_manifest,
     };
     let backend_state = create_terminal_backend(backend_config, ws_emitter.clone())?;
 
     let state = AppState {
         terminal_backend: backend_state.backend,
+        workspace_service,
+        project_service,
+        provider_service,
+        settings_service,
+        filesystem_service,
         ws_emitter,
         default_cwd: cwd_str.clone(),
         output_mode: backend_state.output_mode,
@@ -94,7 +114,9 @@ async fn main() -> anyhow::Result<()> {
 }
 
 struct BackendConfig {
-    data_dir: String,
+    app_paths: Arc<AppPaths>,
+    settings_service: Arc<SettingsService>,
+    provider_service: Arc<ProviderService>,
     daemon_manifest: Option<String>,
 }
 
@@ -126,7 +148,7 @@ fn create_terminal_backend(
         });
     }
 
-    let terminal_service = create_in_process_terminal_service(config.data_dir, ws_emitter);
+    let terminal_service = create_in_process_terminal_service(config, ws_emitter);
     Ok(BackendState {
         backend: Arc::new(InProcessTerminalBackend::new(terminal_service)),
         output_mode: TerminalOutputMode::Emitter,
@@ -134,20 +156,17 @@ fn create_terminal_backend(
 }
 
 fn create_in_process_terminal_service(
-    data_dir: String,
+    config: BackendConfig,
     ws_emitter: Arc<WsEmitter>,
 ) -> Arc<TerminalService> {
-    let app_paths = Arc::new(AppPaths::new(Some(data_dir)));
-    let settings_service = Arc::new(SettingsService::new());
-    let provider_service = Arc::new(ProviderService::new(app_paths.providers_path()));
     let cli_registry = Arc::new(CliToolRegistry::new());
     let project_cli_hooks_service = Arc::new(ProjectCliHooksService::new(cli_registry.clone()));
     let ssh_credential_service = Arc::new(SshCredentialService::new());
 
     let terminal_service = Arc::new(TerminalService::new(
-        settings_service,
-        provider_service,
-        app_paths,
+        config.settings_service,
+        config.provider_service,
+        config.app_paths,
         cli_registry,
         project_cli_hooks_service,
         ssh_credential_service,
@@ -225,7 +244,11 @@ mod tests {
     fn default_backend_uses_in_process_output_emitter() {
         let state = create_terminal_backend(
             BackendConfig {
-                data_dir: test_dir("in-process"),
+                app_paths: Arc::new(AppPaths::new(Some(test_dir("in-process-paths")))),
+                settings_service: Arc::new(SettingsService::new()),
+                provider_service: Arc::new(ProviderService::new(
+                    std::path::Path::new(&test_dir("in-process-providers")).join("providers.json"),
+                )),
                 daemon_manifest: None,
             },
             Arc::new(WsEmitter::new()),
@@ -248,7 +271,11 @@ mod tests {
 
         let state = create_terminal_backend(
             BackendConfig {
-                data_dir: test_dir("daemon-data"),
+                app_paths: Arc::new(AppPaths::new(Some(test_dir("daemon-paths")))),
+                settings_service: Arc::new(SettingsService::new()),
+                provider_service: Arc::new(ProviderService::new(
+                    std::path::Path::new(&test_dir("daemon-providers")).join("providers.json"),
+                )),
                 daemon_manifest: Some(manifest_path.to_string_lossy().to_string()),
             },
             Arc::new(WsEmitter::new()),

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -274,6 +274,93 @@ async function verifyTerminalPath({ name, baseUrl, wsUrl, cwd, headers = {}, mar
   assertExitCode(status.exitCode, `${name} status exitCode`);
 }
 
+async function verifyWebResourceApis(webBaseUrl, rootDir) {
+  log("verifying web resource APIs");
+  const projectDir = path.join(rootDir, "project-a");
+  const filesDir = path.join(rootDir, "files");
+  const nestedDir = path.join(filesDir, "nested");
+  const notePath = path.join(nestedDir, "note.txt");
+  await mkdir(projectDir, { recursive: true });
+  await mkdir(filesDir, { recursive: true });
+
+  const workspace = await requestJson(webBaseUrl, "/api/workspaces", {
+    method: "POST",
+    body: JSON.stringify({
+      name: "smoke-workspace",
+      path: rootDir,
+    }),
+  });
+  if (workspace.name !== "smoke-workspace") {
+    fail(`workspace create returned invalid payload: ${JSON.stringify(workspace)}`);
+  }
+  const workspaceProject = await requestJson(webBaseUrl, "/api/workspaces/smoke-workspace/projects", {
+    method: "POST",
+    body: JSON.stringify({ path: projectDir }),
+  });
+  if (!workspaceProject.id || workspaceProject.path !== projectDir) {
+    fail(`workspace project create returned invalid payload: ${JSON.stringify(workspaceProject)}`);
+  }
+  await requestNoContent(webBaseUrl, "/api/workspaces/smoke-workspace/alias", {
+    method: "PATCH",
+    body: JSON.stringify({ alias: "Smoke Workspace" }),
+  });
+  const savedWorkspace = await requestJson(webBaseUrl, "/api/workspaces/smoke-workspace");
+  if (savedWorkspace.alias !== "Smoke Workspace" || savedWorkspace.projects.length !== 1) {
+    fail(`workspace round trip returned invalid payload: ${JSON.stringify(savedWorkspace)}`);
+  }
+
+  await requestNoContent(webBaseUrl, "/api/fs/create-directory", {
+    method: "POST",
+    body: JSON.stringify({ path: nestedDir }),
+  });
+  await requestNoContent(webBaseUrl, "/api/fs/create-file", {
+    method: "POST",
+    body: JSON.stringify({ path: notePath }),
+  });
+  await requestNoContent(webBaseUrl, "/api/fs/write", {
+    method: "POST",
+    body: JSON.stringify({ path: notePath, content: "CCPANES_WEB_RESOURCE_SMOKE" }),
+  });
+  const file = await requestJson(webBaseUrl, `/api/fs/read?path=${encodeURIComponent(notePath)}`);
+  if (file.content !== "CCPANES_WEB_RESOURCE_SMOKE") {
+    fail(`file read returned invalid payload: ${JSON.stringify(file)}`);
+  }
+  const listing = await requestJson(
+    webBaseUrl,
+    `/api/fs/list?path=${encodeURIComponent(nestedDir)}&showHidden=false`,
+  );
+  if (!Array.isArray(listing.entries) || listing.entries.length !== 1) {
+    fail(`directory list returned invalid payload: ${JSON.stringify(listing)}`);
+  }
+  const info = await requestJson(webBaseUrl, `/api/fs/info?path=${encodeURIComponent(notePath)}`);
+  if (!info.isFile) {
+    fail(`file info returned invalid payload: ${JSON.stringify(info)}`);
+  }
+
+  await requestNoContent(webBaseUrl, "/api/providers", {
+    method: "POST",
+    body: JSON.stringify({
+      id: "smoke-provider",
+      name: "Smoke Provider",
+      providerType: "anthropic",
+      apiKey: "smoke-key",
+      isDefault: true,
+    }),
+  });
+  const defaultProvider = await requestJson(webBaseUrl, "/api/providers/default");
+  if (defaultProvider?.id !== "smoke-provider") {
+    fail(`default provider returned invalid payload: ${JSON.stringify(defaultProvider)}`);
+  }
+  await requestNoContent(webBaseUrl, "/api/providers/smoke-provider", {
+    method: "DELETE",
+  });
+
+  const settings = await requestJson(webBaseUrl, "/api/settings");
+  if (!settings || typeof settings !== "object" || !settings.terminal) {
+    fail(`settings returned invalid payload: ${JSON.stringify(settings)}`);
+  }
+}
+
 async function main() {
   const tempDirs = [];
   const processes = [];
@@ -283,7 +370,8 @@ async function main() {
     const daemonRuntimeDir = await mkdtemp(path.join(tmpdir(), DAEMON_RUNTIME_PREFIX));
     const daemonDataDir = await mkdtemp(path.join(tmpdir(), DAEMON_DATA_PREFIX));
     const webDataDir = await mkdtemp(path.join(tmpdir(), WEB_DATA_PREFIX));
-    tempDirs.push(daemonRuntimeDir, daemonDataDir, webDataDir);
+    const webWorkspaceDir = await mkdtemp(path.join(tmpdir(), "cc-panes-web-smoke-workspace-"));
+    tempDirs.push(daemonRuntimeDir, daemonDataDir, webDataDir, webWorkspaceDir);
 
     const daemon = spawnProcess(
       cargoBinary("cc-panes-daemon"),
@@ -361,6 +449,7 @@ async function main() {
       cwd: tmpdir(),
       marker: "CCPANES_WEB_DAEMON_PROXY_SMOKE",
     });
+    await verifyWebResourceApis(webBaseUrl, webWorkspaceDir);
 
     await requestNoContent(daemonBaseUrl, "/api/daemon/shutdown", {
       method: "POST",
