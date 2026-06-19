@@ -926,16 +926,18 @@ export const usePanesStore = create<PanesState>()(
     },
 
     deleteLayout: (id) => {
+      let deleted = false;
       set((state) => {
         const index = state.layouts.findIndex((layout) => layout.id === id);
         if (index === -1) return;
         const deletingLayout = state.layouts[index];
-        const deletingStarred = isStarredLayout(deletingLayout);
-        if (!deletingStarred && state.layouts.filter(isNormalLayout).length <= 1) return;
+        if (isStarredLayout(deletingLayout)) return;
+        if (state.layouts.filter(isNormalLayout).length <= 1) return;
 
         syncWorkingCopyToCurrentLayout(state);
         const deletingCurrent = state.currentLayoutId === id;
         state.layouts.splice(index, 1);
+        deleted = true;
 
         if (deletingCurrent) {
           const normalLayouts = state.layouts.filter(isNormalLayout);
@@ -950,6 +952,7 @@ export const usePanesStore = create<PanesState>()(
           state.activePaneId = nextLayout.activePaneId;
         }
       });
+      if (!deleted) return;
       useFullscreenStore.getState().exitFullscreen();
       notifyTerminalLayoutChanged("layout.delete");
     },

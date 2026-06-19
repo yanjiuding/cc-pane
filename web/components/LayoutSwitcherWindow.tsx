@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { emitTo, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import { Check, Star, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import StatusIndicator from "@/components/StatusIndicator";
@@ -63,6 +63,13 @@ export default function LayoutSwitcherWindow() {
   const statusMap = useTerminalStatusStore((s) => s.statusMap);
   const [snapshot, setSnapshot] = useState<LayoutSwitcherSnapshot>(EMPTY_SNAPSHOT);
   const moveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragStateRef = useRef<{
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startWindowX: number;
+    startWindowY: number;
+  } | null>(null);
 
   useEffect(() => {
     void useTerminalStatusStore.getState().init();
@@ -70,6 +77,7 @@ export default function LayoutSwitcherWindow() {
       if (moveTimerRef.current) {
         clearTimeout(moveTimerRef.current);
       }
+      dragStateRef.current = null;
       useTerminalStatusStore.getState().cleanup();
     };
   }, []);
@@ -89,6 +97,14 @@ export default function LayoutSwitcherWindow() {
           unlisten();
         } else {
           unlistenState = unlisten;
+        }
+      })
+      .catch(() => {});
+
+    layoutSwitcherService.getSnapshot()
+      .then((storedSnapshot) => {
+        if (!disposed && storedSnapshot) {
+          setSnapshot(storedSnapshot);
         }
       })
       .catch(() => {});
@@ -118,22 +134,75 @@ export default function LayoutSwitcherWindow() {
 
     return () => {
       disposed = true;
-      unlistenState?.();
-      unlistenMoved?.();
+      try {
+        unlistenState?.();
+      } catch {
+        /* Window teardown can invalidate listeners before cleanup runs. */
+      }
+      try {
+        unlistenMoved?.();
+      } catch {
+        /* Window teardown can invalidate listeners before cleanup runs. */
+      }
     };
   }, []);
 
   async function closeWindow() {
-    const state = await layoutSwitcherService.getState().catch(() => ({
-      windowX: null,
-      windowY: null,
-      pinned: false,
-    }));
-    await layoutSwitcherService.saveState({ ...state, pinned: false }).catch(() => {});
+    dragStateRef.current = null;
+    void layoutSwitcherService.getState()
+      .then((state) => layoutSwitcherService.saveState({ ...state, pinned: false }))
+      .catch(() => {});
+    void layoutSwitcherService.close()
+      .catch(() => getCurrentWindow().close().catch(() => {}));
+  }
+
+  async function startWindowDrag(event: React.PointerEvent<HTMLElement>) {
+    if (event.button !== 0 || event.pointerType === "touch") return;
+    event.preventDefault();
+    event.stopPropagation();
+
     try {
-      await getCurrentWindow().close();
+      event.currentTarget.setPointerCapture(event.pointerId);
     } catch {
-      /* Best effort close. */
+      /* Pointer capture can fail if the pointer is already released. */
+    }
+
+    try {
+      const position = await getCurrentWindow().outerPosition();
+      dragStateRef.current = {
+        pointerId: event.pointerId,
+        startClientX: event.screenX,
+        startClientY: event.screenY,
+        startWindowX: position.x,
+        startWindowY: position.y,
+      };
+    } catch {
+      dragStateRef.current = null;
+    }
+  }
+
+  function moveWindow(event: React.PointerEvent<HTMLElement>) {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    void getCurrentWindow()
+      .setPosition(new PhysicalPosition(
+        Math.round(drag.startWindowX + event.screenX - drag.startClientX),
+        Math.round(drag.startWindowY + event.screenY - drag.startClientY),
+      ))
+      .catch(() => {});
+  }
+
+  function stopWindowDrag(event: React.PointerEvent<HTMLElement>) {
+    const drag = dragStateRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragStateRef.current = null;
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {
+      /* Pointer may already be released by the webview. */
     }
   }
 
@@ -143,11 +212,14 @@ export default function LayoutSwitcherWindow() {
       style={{ background: "var(--app-panel-bg)", color: "var(--app-text-primary)" }}
     >
       <div
-        data-tauri-drag-region
-        className="flex h-10 shrink-0 select-none items-center justify-between border-b px-3"
+        className="flex h-10 shrink-0 cursor-grab select-none items-center justify-between border-b px-3 active:cursor-grabbing"
         style={{ borderColor: "var(--app-border)" }}
+        onPointerDown={startWindowDrag}
+        onPointerMove={moveWindow}
+        onPointerUp={stopWindowDrag}
+        onPointerCancel={stopWindowDrag}
       >
-        <div data-tauri-drag-region className="min-w-0 truncate text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--app-text-tertiary)" }}>
+        <div className="min-w-0 truncate text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--app-text-tertiary)" }}>
           {t("layoutSwitcherTitle")}
         </div>
         <button
@@ -155,7 +227,16 @@ export default function LayoutSwitcherWindow() {
           aria-label={t("closeLayoutSwitcher")}
           title={t("closeLayoutSwitcher")}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[var(--app-hover)]"
-          onClick={() => void closeWindow()}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void closeWindow();
+          }}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            void closeWindow();
+          }}
         >
           <X className="h-4 w-4" />
         </button>

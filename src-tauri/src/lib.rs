@@ -38,6 +38,7 @@ use commands::{
     clear_launch_history,
     clear_session_output,
     clear_terminal_sessions,
+    close_layout_switcher_window,
     close_window,
     compress_history,
     copy_skill,
@@ -103,6 +104,7 @@ use commands::{
     get_git_status,
     get_history_config,
     get_journal_index,
+    get_layout_switcher_snapshot,
     get_launch_profile,
     get_layout_switcher_state,
     // 日志命令
@@ -256,6 +258,7 @@ use commands::{
     runner_register_for_session,
     runner_register_implicit_instance,
     runner_upsert_profile,
+    save_layout_switcher_snapshot,
     save_layout_switcher_state,
     save_skill,
     save_spec_content,
@@ -1083,6 +1086,7 @@ pub fn run() {
         Arc::new(SessionRestoreService::new(db.clone(), app_paths.clone()));
 
     let popup_data_store = commands::PopupDataStore::default();
+    let layout_switcher_snapshot_store = commands::LayoutSwitcherSnapshotStore::default();
     let orchestrator_service = Arc::new(OrchestratorService::new());
     let start_locks = Arc::new(StartLocks::default());
     boot_mark!("all services created");
@@ -1151,6 +1155,7 @@ pub fn run() {
         .manage(shared_mcp_service.clone())
         .manage(session_restore_service)
         .manage(popup_data_store)
+        .manage(layout_switcher_snapshot_store)
         .manage(orchestrator_service.clone())
         .manage(cli_registry)
         .setup(move |app| {
@@ -1681,7 +1686,10 @@ pub fn run() {
             create_popup_terminal_window,
             get_popup_tab_data,
             open_layout_switcher_window,
+            close_layout_switcher_window,
+            get_layout_switcher_snapshot,
             get_layout_switcher_state,
+            save_layout_switcher_snapshot,
             save_layout_switcher_state,
             show_ccchan,
             hide_ccchan,

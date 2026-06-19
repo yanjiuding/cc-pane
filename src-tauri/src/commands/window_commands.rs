@@ -10,6 +10,7 @@ use tracing::debug;
 
 /// 弹出窗口数据共享存储：label -> tabData JSON
 pub type PopupDataStore = Mutex<HashMap<String, String>>;
+pub type LayoutSwitcherSnapshotStore = Mutex<Option<String>>;
 
 const LAYOUT_SWITCHER_WINDOW_LABEL: &str = "layout-switcher";
 const LAYOUT_SWITCHER_WIDTH: f64 = 280.0;
@@ -182,6 +183,15 @@ pub async fn open_layout_switcher_window(app: AppHandle) -> AppResult<()> {
 }
 
 #[tauri::command]
+pub fn close_layout_switcher_window(window: WebviewWindow) -> AppResult<()> {
+    debug!("cmd::close_layout_switcher_window");
+    window
+        .close()
+        .map_err(|error| AppError::from(error.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_layout_switcher_state(
     settings_service: State<'_, Arc<SettingsService>>,
 ) -> AppResult<LayoutSwitcherSettings> {
@@ -200,6 +210,27 @@ pub fn save_layout_switcher_state(
     app_settings.layout_switcher.window_y = y;
     app_settings.layout_switcher.pinned = pinned;
     settings_service.update_settings(app_settings)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_layout_switcher_snapshot(
+    snapshot_store: State<'_, LayoutSwitcherSnapshotStore>,
+) -> AppResult<Option<String>> {
+    Ok(snapshot_store
+        .lock()
+        .map_err(|error| AppError::from(error.to_string()))?
+        .clone())
+}
+
+#[tauri::command]
+pub fn save_layout_switcher_snapshot(
+    snapshot_store: State<'_, LayoutSwitcherSnapshotStore>,
+    snapshot: String,
+) -> AppResult<()> {
+    *snapshot_store
+        .lock()
+        .map_err(|error| AppError::from(error.to_string()))? = Some(snapshot);
     Ok(())
 }
 

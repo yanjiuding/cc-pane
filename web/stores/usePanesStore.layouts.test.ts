@@ -293,17 +293,17 @@ describe("usePanesStore layouts", () => {
     expect(panel(usePanesStore.getState().rootPane).activeTabId).toBe("hidden-tab");
   });
 
-  it("删除星标布局不会删除真实布局或原 tab，重新打星会恢复星标布局", () => {
+  it("deleteLayout 不允许删除星标布局", () => {
     const tab = panel(usePanesStore.getState().rootPane).tabs[0];
+    usePanesStore.getState().toggleStarTab(tab.id);
+    const beforeLayoutIds = usePanesStore.getState().layouts.map((layout) => layout.id);
 
     usePanesStore.getState().deleteLayout("layout-starred");
-    expect(usePanesStore.getState().layouts.some((layout) => layout.kind === "starred")).toBe(false);
-    expect(usePanesStore.getState().layouts.some((layout) => layout.id === "layout-1")).toBe(true);
-
-    usePanesStore.getState().toggleStarTab(tab.id);
 
     const state = usePanesStore.getState();
+    expect(state.layouts.map((layout) => layout.id)).toEqual(beforeLayoutIds);
     expect(state.layouts.some((layout) => layout.kind === "starred")).toBe(true);
+    expect(state.layouts.some((layout) => layout.id === "layout-1")).toBe(true);
     expect(panel(state.rootPane).tabs[0].id).toBe(tab.id);
     expect(state.starredTabs().map((item) => item.tab.id)).toEqual([tab.id]);
   });

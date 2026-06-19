@@ -16,6 +16,18 @@ export interface LayoutSwitcherSnapshot {
 export const layoutSwitcherService = {
   open: () => invoke<void>("open_layout_switcher_window"),
 
+  close: () => invoke<void>("close_layout_switcher_window"),
+
+  getSnapshot: async () => {
+    const snapshot = await invoke<string | null>("get_layout_switcher_snapshot");
+    return snapshot ? JSON.parse(snapshot) as LayoutSwitcherSnapshot : null;
+  },
+
+  saveSnapshot: (snapshot: LayoutSwitcherSnapshot) =>
+    invoke<void>("save_layout_switcher_snapshot", {
+      snapshot: JSON.stringify(snapshot),
+    }),
+
   getState: () => invoke<LayoutSwitcherSettings>("get_layout_switcher_state"),
 
   saveState: (state: LayoutSwitcherSettings) =>

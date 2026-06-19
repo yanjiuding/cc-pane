@@ -41,7 +41,9 @@ function buildSnapshot(): LayoutSwitcherSnapshot {
 }
 
 function emitSnapshot() {
-  void emitTo("layout-switcher", STATE_EVENT, buildSnapshot()).catch(() => {});
+  const snapshot = buildSnapshot();
+  void layoutSwitcherService.saveSnapshot(snapshot).catch(() => {});
+  void emitTo("layout-switcher", STATE_EVENT, snapshot).catch(() => {});
 }
 
 export default function useLayoutSwitcherSync() {
@@ -81,7 +83,7 @@ export default function useLayoutSwitcherSync() {
     layoutSwitcherService.getState()
       .then((state) => {
         if (!disposed && state.pinned) {
-          void layoutSwitcherService.open().catch(() => {});
+          void layoutSwitcherService.saveState({ ...state, pinned: false }).catch(() => {});
         }
       })
       .catch(() => {});

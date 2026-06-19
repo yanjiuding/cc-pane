@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { SyntheticEvent } from "react";
-import { Check, Command, Pin, Plus, Star, Trash2 } from "lucide-react";
+import type { PointerEvent as ReactPointerEvent, SyntheticEvent } from "react";
+import { Check, Command, GripVertical, Pin, PinOff, Plus, Star, Trash2 } from "lucide-react";
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -10,7 +10,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { toast } from "sonner";
 import { useActivityBarStore, usePanesStore, useTerminalStatusStore } from "@/stores";
-import { terminalService, getPoppedTabs, markTabReclaimed as popupMarkReclaimed, layoutSwitcherService } from "@/services";
+import { terminalService, getPoppedTabs, markTabReclaimed as popupMarkReclaimed } from "@/services";
 import { handleErrorSilent } from "@/utils";
 import { aggregatePaneStatus } from "@/utils/layoutStatus";
 import { collectTerminalLeaves, collectTerminalSessionIdsFromTree, collectTerminalTabs } from "@/lib/paneSessions";
@@ -50,6 +50,10 @@ interface FloatingPosition {
 }
 
 const MAX_LAYOUT_STATUS_DOTS = 6;
+const FLOATING_PANEL_WIDTH = 256;
+const FLOATING_PANEL_MARGIN = 8;
+const FLOATING_PANEL_GAP = 10;
+const FLOATING_PANEL_DEFAULT_HEIGHT = 360;
 
 function layoutRowStyle(selected: boolean): React.CSSProperties {
   return {
@@ -197,6 +201,7 @@ function SortableLayoutRow({
     attributes,
     listeners,
     setNodeRef,
+    setActivatorNodeRef,
     transform,
     transition,
     isDragging,
@@ -250,18 +255,7 @@ function SortableLayoutRow({
           ref={setNodeRef}
           className="group flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm transition-colors hover:bg-[var(--app-hover)]"
           style={style}
-          {...attributes}
-          {...listeners}
           onMouseEnter={onMouseEnter}
-          onClick={() => {
-            selectLayout(layout.id);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" || event.key === " ") {
-              event.preventDefault();
-              selectLayout(layout.id);
-            }
-          }}
           onDoubleClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -270,46 +264,73 @@ function SortableLayoutRow({
             }
           }}
         >
-          <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-            {selected ? (
-              <Check className="h-3.5 w-3.5" />
-            ) : isStarredLayout ? (
-              <Star className="h-3.5 w-3.5" fill="currentColor" style={{ color: "var(--app-accent)" }} />
-            ) : null}
-          </span>
-          <span className="min-w-0 flex-1 truncate">{layout.name}</span>
-          {isStarredLayout ? null : <LayoutStatusDots rootPane={rootPane} statusMap={statusMap} />}
           <button
+            ref={setActivatorNodeRef}
             type="button"
-            aria-label={deletingLastLayout ? t("cannotDeleteLastLayout") : t("deleteLayout")}
-            title={deletingLastLayout ? t("cannotDeleteLastLayout") : t("deleteLayout")}
-            disabled={deletingLastLayout}
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md opacity-0 transition-opacity hover:bg-[var(--app-hover)] focus:opacity-100 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
-            onPointerDown={stopLayoutRowAction}
+            aria-label={t("reorderLayout")}
+            title={t("reorderLayout")}
+            className="flex h-6 w-5 shrink-0 cursor-grab items-center justify-center rounded text-[var(--app-text-tertiary)] transition-colors hover:bg-[var(--app-hover)] active:cursor-grabbing"
+            {...attributes}
+            {...listeners}
             onClick={(event) => {
-              stopLayoutRowAction(event);
-              requestDelete(layout);
+              event.preventDefault();
+              event.stopPropagation();
             }}
           >
-            <Trash2 className="h-3.5 w-3.5" />
+            <GripVertical className="h-3.5 w-3.5" />
           </button>
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              selectLayout(layout.id);
+            }}
+          >
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+              {selected ? (
+                <Check className="h-3.5 w-3.5" />
+              ) : isStarredLayout ? (
+                <Star className="h-3.5 w-3.5" fill="currentColor" style={{ color: "var(--app-accent)" }} />
+              ) : null}
+            </span>
+            <span className="min-w-0 flex-1 truncate">{layout.name}</span>
+            {isStarredLayout ? null : <LayoutStatusDots rootPane={rootPane} statusMap={statusMap} />}
+          </button>
+          {!isStarredLayout ? (
+            <button
+              type="button"
+              aria-label={deletingLastLayout ? t("cannotDeleteLastLayout") : t("deleteLayout")}
+              title={deletingLastLayout ? t("cannotDeleteLastLayout") : t("deleteLayout")}
+              disabled={deletingLastLayout}
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md opacity-0 transition-opacity hover:bg-[var(--app-hover)] focus:opacity-100 group-hover:opacity-100 disabled:cursor-not-allowed disabled:opacity-30"
+              onPointerDown={stopLayoutRowAction}
+              onClick={(event) => {
+                stopLayoutRowAction(event);
+                requestDelete(layout);
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          ) : null}
         </div>
       </ContextMenuTrigger>
-      <ContextMenuContent className="z-[120] w-44">
-        {!isStarredLayout ? (
+      {!isStarredLayout ? (
+        <ContextMenuContent className="z-[120] w-44">
           <ContextMenuItem onClick={() => startRename(layout)}>
             {t("renameLayout")}
           </ContextMenuItem>
-        ) : null}
-        <ContextMenuItem
-          variant="destructive"
-          disabled={deletingLastLayout}
-          onClick={() => requestDelete(layout)}
-        >
-          <Trash2 />
-          {deletingLastLayout ? t("cannotDeleteLastLayout") : t("deleteLayout")}
-        </ContextMenuItem>
-      </ContextMenuContent>
+          <ContextMenuItem
+            variant="destructive"
+            disabled={deletingLastLayout}
+            onClick={() => requestDelete(layout)}
+          >
+            <Trash2 />
+            {deletingLastLayout ? t("cannotDeleteLastLayout") : t("deleteLayout")}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      ) : null}
     </ContextMenu>
   );
 }
@@ -332,9 +353,12 @@ export default function LayoutBar() {
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoveringRef = useRef(false);
   const draggingRef = useRef(false);
+  const panelDraggingRef = useRef(false);
   const editingIdRef = useRef<string | null>(null);
   const contextMenuOpenRef = useRef(false);
+  const panelPinnedRef = useRef(false);
   const [open, setOpen] = useState(false);
+  const [panelPinned, setPanelPinnedState] = useState(false);
   const [floatingPosition, setFloatingPosition] = useState<FloatingPosition | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
@@ -378,19 +402,53 @@ export default function LayoutBar() {
     }
   }
 
-  function updateFloatingPosition() {
+  function setPanelPinned(nextPinned: boolean) {
+    panelPinnedRef.current = nextPinned;
+    setPanelPinnedState(nextPinned);
+  }
+
+  function clampFloatingPosition(position: FloatingPosition): FloatingPosition {
+    const panelHeight = floatingRef.current?.offsetHeight ?? FLOATING_PANEL_DEFAULT_HEIGHT;
+    const maxLeft = Math.max(
+      FLOATING_PANEL_MARGIN,
+      window.innerWidth - FLOATING_PANEL_WIDTH - FLOATING_PANEL_MARGIN,
+    );
+    const maxTop = Math.max(
+      FLOATING_PANEL_MARGIN,
+      window.innerHeight - panelHeight - FLOATING_PANEL_MARGIN,
+    );
+    return {
+      left: Math.min(Math.max(position.left, FLOATING_PANEL_MARGIN), maxLeft),
+      top: Math.min(Math.max(position.top, FLOATING_PANEL_MARGIN), maxTop),
+    };
+  }
+
+  function defaultFloatingPosition() {
     const root = rootRef.current;
-    if (!root) return;
+    if (!root) return null;
     const rect = root.getBoundingClientRect();
-    const left = Math.min(rect.right + 10, Math.max(8, window.innerWidth - 264 - 8));
-    const top = Math.min(rect.top, Math.max(8, window.innerHeight - 360 - 8));
-    setFloatingPosition({ left, top: Math.max(8, top) });
+    return clampFloatingPosition({
+      left: rect.right + FLOATING_PANEL_GAP,
+      top: rect.top,
+    });
+  }
+
+  function updateFloatingPosition(options: { preserve?: boolean } = {}) {
+    if (options.preserve) {
+      setFloatingPosition((current) => current ? clampFloatingPosition(current) : defaultFloatingPosition());
+      return;
+    }
+    const nextPosition = defaultFloatingPosition();
+    if (nextPosition) {
+      setFloatingPosition(nextPosition);
+    }
   }
 
   function closeSelector() {
     clearCloseTimer();
     editingIdRef.current = null;
     contextMenuOpenRef.current = false;
+    setPanelPinned(false);
     setOpen(false);
     setFloatingPosition(null);
     setEditingId(null);
@@ -400,7 +458,9 @@ export default function LayoutBar() {
   function openSelector() {
     hoveringRef.current = true;
     clearCloseTimer();
-    updateFloatingPosition();
+    if (!floatingPosition) {
+      updateFloatingPosition();
+    }
     setOpen(true);
   }
 
@@ -408,10 +468,12 @@ export default function LayoutBar() {
     clearCloseTimer();
     closeTimerRef.current = setTimeout(() => {
       if (
+        panelPinnedRef.current ||
         hoveringRef.current ||
         editingIdRef.current ||
         contextMenuOpenRef.current ||
-        draggingRef.current
+        draggingRef.current ||
+        panelDraggingRef.current
       ) {
         return;
       }
@@ -421,6 +483,7 @@ export default function LayoutBar() {
 
   function scheduleClose() {
     hoveringRef.current = false;
+    if (panelPinnedRef.current) return;
     queueClose();
   }
 
@@ -432,6 +495,69 @@ export default function LayoutBar() {
       return;
     }
     queueClose();
+  }
+
+  function handleLayoutButtonClick(event: SyntheticEvent) {
+    event.preventDefault();
+    hoveringRef.current = true;
+    clearCloseTimer();
+
+    if (open && panelPinnedRef.current) {
+      closeSelector();
+      return;
+    }
+
+    if (!floatingPosition) {
+      updateFloatingPosition();
+    }
+    setPanelPinned(true);
+    setOpen(true);
+  }
+
+  function handleTogglePanelPinned(event: SyntheticEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    const nextPinned = !panelPinnedRef.current;
+    setPanelPinned(nextPinned);
+    setOpen(true);
+    clearCloseTimer();
+    if (!nextPinned && !hoveringRef.current) {
+      queueClose();
+    }
+  }
+
+  function handlePanelTitlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0 || !floatingPosition) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startPosition = floatingPosition;
+    panelDraggingRef.current = true;
+    clearCloseTimer();
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      moveEvent.preventDefault();
+      setFloatingPosition(clampFloatingPosition({
+        left: startPosition.left + moveEvent.clientX - startX,
+        top: startPosition.top + moveEvent.clientY - startY,
+      }));
+    }
+
+    function stopDragging() {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopDragging);
+      window.removeEventListener("pointercancel", stopDragging);
+      panelDraggingRef.current = false;
+      if (!hoveringRef.current && !panelPinnedRef.current) {
+        queueClose();
+      }
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopDragging);
+    window.addEventListener("pointercancel", stopDragging);
   }
 
   useEffect(() => {
@@ -461,6 +587,7 @@ export default function LayoutBar() {
       const floating = floatingRef.current;
       const target = event.target;
       if (
+        panelPinnedRef.current ||
         !root ||
         !(target instanceof Node) ||
         root.contains(target) ||
@@ -472,6 +599,10 @@ export default function LayoutBar() {
       closeSelector();
     }
 
+    function handleViewportChange() {
+      updateFloatingPosition({ preserve: panelPinnedRef.current });
+    }
+
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape" && !editingIdRef.current && !contextMenuOpenRef.current) {
         closeSelector();
@@ -481,13 +612,13 @@ export default function LayoutBar() {
     updateFloatingPosition();
     document.addEventListener("pointerdown", handlePointerDown);
     document.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("resize", updateFloatingPosition);
-    window.addEventListener("scroll", updateFloatingPosition, true);
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
     return () => {
       document.removeEventListener("pointerdown", handlePointerDown);
       document.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("resize", updateFloatingPosition);
-      window.removeEventListener("scroll", updateFloatingPosition, true);
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
     };
   }, [open]);
 
@@ -509,15 +640,11 @@ export default function LayoutBar() {
   }
 
   function requestDelete(layout: LayoutEntry) {
-    if (layout.kind !== "starred" && deletingLastLayout) return;
+    if (layout.kind === "starred") return;
+    if (deletingLastLayout) return;
     editingIdRef.current = null;
     contextMenuOpenRef.current = false;
     closeSelector();
-    if (layout.kind === "starred") {
-      deleteLayout(layout.id);
-      toast.success(t("layoutDeleted", { name: layout.name }));
-      return;
-    }
     setDeleteSummary(summarizeLayoutDelete(layout));
   }
 
@@ -530,21 +657,6 @@ export default function LayoutBar() {
     setAppViewMode("panes");
     createLayout();
     setOpen(true);
-  }
-
-  async function handlePinLayoutPanel() {
-    try {
-      await layoutSwitcherService.open();
-      const state = await layoutSwitcherService.getState().catch(() => ({
-        windowX: null,
-        windowY: null,
-        pinned: false,
-      }));
-      await layoutSwitcherService.saveState({ ...state, pinned: true });
-      closeSelector();
-    } catch (error) {
-      handleErrorSilent(error, "pin layout panel");
-    }
   }
 
   function handleLayoutDragStart() {
@@ -597,7 +709,7 @@ export default function LayoutBar() {
         ref={floatingRef}
         role="dialog"
         aria-label={t("layouts")}
-        className="fixed z-[100] w-64 rounded-md border p-2 shadow-md outline-none"
+        className={`fixed w-64 rounded-md border p-2 shadow-md outline-none ${panelPinned ? "z-[140]" : "z-[100]"}`}
         onMouseEnter={openSelector}
         onMouseLeave={scheduleClose}
         style={{
@@ -609,22 +721,33 @@ export default function LayoutBar() {
         }}
       >
         <div className="mb-2 flex items-center justify-between px-1">
-          <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: "var(--app-text-tertiary)" }}>
-            {t("layouts")}
-          </span>
+          <div
+            className="flex min-w-0 flex-1 cursor-move select-none items-center self-stretch pr-2"
+            onPointerDown={handlePanelTitlePointerDown}
+          >
+            <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: "var(--app-text-tertiary)" }}>
+              {t("layouts")}
+            </span>
+          </div>
           <div className="flex items-center gap-1">
             <button
               type="button"
-              className="flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--app-hover)]"
-              title={t("pinLayoutPanel")}
-              onClick={() => void handlePinLayoutPanel()}
+              aria-label={panelPinned ? t("unpinLayoutPanel") : t("pinLayoutPanel")}
+              aria-pressed={panelPinned}
+              className={`flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--app-hover)] ${
+                panelPinned ? "text-[var(--app-accent)]" : ""
+              }`}
+              title={panelPinned ? t("unpinLayoutPanel") : t("pinLayoutPanel")}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={handleTogglePanelPinned}
             >
-              <Pin className="h-4 w-4" />
+              {panelPinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
             </button>
             <button
               type="button"
               className="flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--app-hover)]"
               title={t("newLayout")}
+              onPointerDown={(event) => event.stopPropagation()}
               onClick={handleCreateLayout}
             >
               <Plus className="h-4 w-4" />
@@ -686,6 +809,7 @@ export default function LayoutBar() {
         aria-label={t("layoutSwitcher")}
         aria-haspopup="dialog"
         aria-expanded={open}
+        aria-pressed={panelPinned}
         className={`relative flex h-10 w-10 cursor-pointer items-center justify-center rounded-xl transition-all duration-200 ${
           active
             ? "text-[var(--primary-foreground)]"
@@ -698,10 +822,7 @@ export default function LayoutBar() {
             ? "0 2px 8px color-mix(in srgb, var(--app-accent) 40%, transparent)"
             : "none",
         }}
-        onClick={(event) => {
-          event.preventDefault();
-          openSelector();
-        }}
+        onClick={handleLayoutButtonClick}
       >
         <Command className="h-[14px] w-[14px]" />
         <span className="absolute -right-[4px] -top-[4px] flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-[var(--app-accent)] px-[3px] text-[9px] font-bold leading-none text-white ring-1 ring-[var(--app-activity-bar-bg)]">

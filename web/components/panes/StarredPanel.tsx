@@ -1,13 +1,52 @@
+import { useMemo } from "react";
 import { Folder, Star } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import StatusIndicator from "@/components/StatusIndicator";
 import { usePanesStore, useTerminalStatusStore } from "@/stores";
+import { collectPanels } from "@/stores/paneTreeHelpers";
+import type { LayoutEntry, PaneNode, Tab } from "@/types";
+
+interface StarredTabShortcut {
+  layoutId: string;
+  layoutName: string;
+  paneId: string;
+  tab: Tab;
+}
+
+function collectStarredTabs(rootPane: PaneNode, layouts: LayoutEntry[], currentLayoutId: string): StarredTabShortcut[] {
+  const shortcuts: StarredTabShortcut[] = [];
+
+  for (const layout of layouts) {
+    if (layout.kind === "starred") continue;
+    const tree = layout.id === currentLayoutId ? rootPane : layout.rootPane;
+    for (const panel of collectPanels(tree)) {
+      for (const tab of panel.tabs) {
+        if (tab.starred) {
+          shortcuts.push({
+            layoutId: layout.id,
+            layoutName: layout.name,
+            paneId: panel.id,
+            tab,
+          });
+        }
+      }
+    }
+  }
+
+  return shortcuts;
+}
 
 export default function StarredPanel() {
   const { t } = useTranslation("panes");
-  const starredTabs = usePanesStore((s) => s.starredTabs());
+  const rootPane = usePanesStore((s) => s.rootPane);
+  const layouts = usePanesStore((s) => s.layouts);
+  const currentLayoutId = usePanesStore((s) => s.currentLayoutId);
+  const starredTabs = useMemo(
+    () => collectStarredTabs(rootPane, layouts, currentLayoutId),
+    [rootPane, layouts, currentLayoutId],
+  );
   const openStarredTab = usePanesStore((s) => s.openStarredTab);
-  const getStatus = useTerminalStatusStore((s) => s.getStatus);
+  const statusMap = useTerminalStatusStore((s) => s.statusMap);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col" style={{ background: "var(--app-panel-bg)", color: "var(--app-text-primary)" }}>
@@ -44,7 +83,7 @@ export default function StarredPanel() {
                 style={{ borderColor: "var(--app-border)", background: "var(--app-content-bg)" }}
                 onClick={() => openStarredTab(tab.id)}
               >
-                <StatusIndicator status={getStatus(tab.sessionId)} size={8} />
+                <StatusIndicator status={tab.sessionId ? statusMap.get(tab.sessionId)?.status ?? null : null} size={8} />
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <Star className="h-3.5 w-3.5 shrink-0" fill="currentColor" style={{ color: "var(--app-accent)" }} />

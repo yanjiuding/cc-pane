@@ -1,5 +1,5 @@
 import "@/i18n";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import LayoutBar from "./LayoutBar";
@@ -107,6 +107,48 @@ describe("LayoutBar", () => {
     expect(useActivityBarStore.getState().appViewMode).toBe("home");
   });
 
+  it("布局选择器可用 pin 按钮固定在前方，并可拖动标题移动", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <LayoutBar />
+        <button type="button">外部按钮</button>
+      </>
+    );
+
+    const switcher = screen.getByRole("button", { name: /布局|Layout/i });
+    await user.hover(switcher);
+
+    const dialog = await screen.findByRole("dialog", { name: /布局|Layouts/i });
+    const pinButton = within(dialog).getByRole("button", { name: /钉住布局面板|Pin Layout Panel/i });
+    const title = within(dialog).getByText(/^布局$|^Layouts$/i);
+    const beforeLeft = dialog.style.left;
+    const beforeTop = dialog.style.top;
+
+    await user.click(pinButton);
+    expect(within(dialog).getByRole("button", { name: /取消钉住布局面板|Unpin Layout Panel/i })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await user.unhover(switcher);
+    await user.click(screen.getByRole("button", { name: "外部按钮" }));
+    expect(dialog).toBeInTheDocument();
+
+    fireEvent.pointerDown(title, { button: 0, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(window, { clientX: 80, clientY: 70 });
+    fireEvent.pointerUp(window);
+
+    expect(dialog.style.left).not.toBe(beforeLeft);
+    expect(dialog.style.top).not.toBe(beforeTop);
+
+    await user.click(within(dialog).getByRole("button", { name: /取消钉住布局面板|Unpin Layout Panel/i }));
+    expect(within(dialog).getByRole("button", { name: /钉住布局面板|Pin Layout Panel/i })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
   it("右键重命名后保持编辑态并提交新布局名", async () => {
     const user = userEvent.setup();
     render(<LayoutBar />);
@@ -164,6 +206,42 @@ describe("LayoutBar", () => {
     await user.click(deleteItem);
 
     expect(await screen.findByRole("dialog", { name: /删除.*布局 2|Delete.*布局 2/i })).toBeInTheDocument();
+  });
+
+  it("点击布局行应切换布局", async () => {
+    const user = userEvent.setup();
+    addSecondLayout();
+    render(<LayoutBar />);
+
+    await user.hover(screen.getByRole("button", { name: /布局|Layout/i }));
+    await user.click(await screen.findByRole("button", { name: "布局 2" }));
+
+    expect(usePanesStore.getState().currentLayoutId).toBe("layout-2");
+    expect(useActivityBarStore.getState().appViewMode).toBe("panes");
+  });
+
+  it("拖动排序只从布局把手开始，避免吞掉行点击", async () => {
+    const user = userEvent.setup();
+    addSecondLayout();
+    render(<LayoutBar />);
+
+    await user.hover(screen.getByRole("button", { name: /布局|Layout/i }));
+
+    expect(await screen.findAllByRole("button", { name: /拖动排序布局|Reorder layout/i })).toHaveLength(3);
+  });
+
+  it("星标布局不显示删除入口", async () => {
+    const user = userEvent.setup();
+    addSecondLayout();
+    render(<LayoutBar />);
+
+    await user.hover(screen.getByRole("button", { name: /布局|Layout/i }));
+    expect(await screen.findByRole("button", { name: "星标" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /删除布局|Delete Layout/i })).toHaveLength(2);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "星标" }));
+
+    expect(screen.queryByRole("menuitem", { name: /删除布局|Delete Layout/i })).not.toBeInTheDocument();
   });
 
   it("多布局时行内删除按钮打开确认框", async () => {
