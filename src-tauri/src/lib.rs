@@ -329,8 +329,8 @@ use services::{
     ProjectCliHooksService, ProjectContextService, ProjectService, ProviderService,
     ScreenshotService, SessionRestoreService, SettingsService, SharedMcpService,
     SkillMarketService, SkillService, SpecService, SshCredentialService, SshMachineService,
-    StartLocks, TaskBindingService, TerminalService, TodoService, UsageStatsService,
-    WorkspaceService, WorktreeService,
+    StartLocks, TaskBindingService, TerminalBackendState, TerminalService, TodoService,
+    UsageStatsService, WorkspaceService, WorktreeService,
 };
 use std::sync::Arc;
 use utils::AppPaths;
@@ -1059,6 +1059,10 @@ pub fn run() {
     terminal_service.set_spec_service(spec_service.clone());
     terminal_service.set_launch_profile_service(launch_profile_service.clone());
     terminal_service.set_workspace_service(workspace_service.clone());
+    let terminal_backend_state = Arc::new(TerminalBackendState::from_env_or_in_process(
+        terminal_service.clone(),
+        app_paths.as_ref(),
+    ));
 
     let memory_service = Arc::new(
         MemoryService::new(app_paths.data_dir().join("memory.db")).unwrap_or_else(|e| {
@@ -1124,6 +1128,7 @@ pub fn run() {
         .manage(app_paths)
         .manage(project_service)
         .manage(terminal_service)
+        .manage(terminal_backend_state)
         .manage(launch_history_service)
         .manage(usage_stats_service)
         .manage(history_service)
