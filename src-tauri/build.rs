@@ -45,4 +45,9 @@ fn ensure_hook_binary_placeholder() {
     if !placeholder.exists() {
         std::fs::write(placeholder, "placeholder for dev build").ok();
     }
+
+    let daemon_placeholder = binaries_dir.join("cc-panes-daemon.placeholder");
+    if !daemon_placeholder.exists() {
+        std::fs::write(daemon_placeholder, "placeholder for dev build").ok();
+    }
 }

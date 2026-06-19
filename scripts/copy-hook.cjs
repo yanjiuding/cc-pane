@@ -17,37 +17,44 @@ const targetTriple = readFlagValue("--target") || process.env.TAURI_ENV_TARGET_T
 const profile = resolveProfile();
 const isWindowsTarget = targetTriple ? targetTriple.includes("windows") : process.platform === "win32";
 
-// 1. 复制 hook 二进制到 src-tauri/binaries/（target 感知）
+// 1. 复制辅助二进制到 src-tauri/binaries/（target 感知）
 const d = path.join("src-tauri", "binaries");
 fs.mkdirSync(d, { recursive: true });
 
 // 清理旧文件，避免通配符误匹配
-for (const f of fs.readdirSync(d).filter(f => f.startsWith("cc-panes-hook") || f.startsWith("cc-panes-cli-hook"))) {
+for (const f of fs.readdirSync(d).filter(f =>
+  f.startsWith("cc-panes-hook") ||
+  f.startsWith("cc-panes-cli-hook") ||
+  f.startsWith("cc-panes-daemon")
+)) {
   fs.unlinkSync(path.join(d, f));
 }
 
 const ext = isWindowsTarget ? ".exe" : "";
-const binaryName = `cc-panes-cli-hook${ext}`;
 const buildDir = targetTriple
   ? path.join("target", targetTriple, profile)
   : path.join("target", profile);
-const sourceBinary = path.join(buildDir, binaryName);
 
-if (!fs.existsSync(sourceBinary)) {
-  throw new Error(`Hook binary not found: ${sourceBinary}`);
+function copyBinary(baseName) {
+  const binaryName = `${baseName}${ext}`;
+  const sourceBinary = path.join(buildDir, binaryName);
+
+  if (!fs.existsSync(sourceBinary)) {
+    throw new Error(`${baseName} binary not found: ${sourceBinary}`);
+  }
+
+  const destBinary = path.join(d, binaryName);
+  fs.copyFileSync(sourceBinary, destBinary);
+  console.log(`[copy-hook] copied ${sourceBinary} -> ${destBinary}`);
+
+  // macOS/Linux: 确保可执行权限
+  if (!isWindowsTarget) {
+    fs.chmodSync(destBinary, 0o755);
+  }
 }
 
-fs.copyFileSync(
-  sourceBinary,
-  path.join(d, binaryName)
-);
-
-console.log(`[copy-hook] copied ${sourceBinary} -> ${path.join(d, binaryName)}`);
-
-// macOS/Linux: 确保可执行权限
-if (!isWindowsTarget) {
-  fs.chmodSync(path.join(d, binaryName), 0o755);
-}
+copyBinary("cc-panes-cli-hook");
+copyBinary("cc-panes-daemon");
 
 // 2. 复制 .claude/ skills 和 agents 到 src-tauri/resources/claude-bundle/
 const srcClaude = ".claude";

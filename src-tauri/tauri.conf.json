@@ -60,6 +60,7 @@
     ],
     "resources": [
       "binaries/cc-panes-cli-hook*",
+      "binaries/cc-panes-daemon*",
       "resources/claude-bundle/.claude/commands/ccbook/*",
       "resources/claude-bundle/.claude/agents/*",
       "resources/ccchan/**/*",

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::services::{
     DaemonTerminalBackend, InProcessTerminalBackend, TerminalBackend, TerminalDaemonClient,
@@ -9,6 +9,10 @@ use tracing::{info, warn};
 
 #[derive(Clone)]
 pub struct TerminalBackendState {
+    inner: Arc<RwLock<TerminalBackendStateInner>>,
+}
+
+struct TerminalBackendStateInner {
     backend: Arc<dyn TerminalBackend>,
     kind: TerminalBackendKind,
 }
@@ -22,8 +26,10 @@ pub enum TerminalBackendKind {
 impl TerminalBackendState {
     pub fn new(backend: Arc<dyn TerminalBackend>) -> Self {
         Self {
-            backend,
-            kind: TerminalBackendKind::InProcess,
+            inner: Arc::new(RwLock::new(TerminalBackendStateInner {
+                backend,
+                kind: TerminalBackendKind::InProcess,
+            })),
         }
     }
 
@@ -33,8 +39,10 @@ impl TerminalBackendState {
     ) -> Self {
         if let Some(client) = daemon_client_from_env(app_paths) {
             return Self {
-                backend: Arc::new(DaemonTerminalBackend::new(client)),
-                kind: TerminalBackendKind::Daemon,
+                inner: Arc::new(RwLock::new(TerminalBackendStateInner {
+                    backend: Arc::new(DaemonTerminalBackend::new(client)),
+                    kind: TerminalBackendKind::Daemon,
+                })),
             };
         }
 
@@ -42,11 +50,27 @@ impl TerminalBackendState {
     }
 
     pub fn backend(&self) -> Arc<dyn TerminalBackend> {
-        self.backend.clone()
+        self.inner
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .backend
+            .clone()
     }
 
     pub fn kind(&self) -> TerminalBackendKind {
-        self.kind
+        self.inner
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .kind
+    }
+
+    pub fn try_enable_daemon(&self, client: TerminalDaemonClient) {
+        let mut inner = self
+            .inner
+            .write()
+            .unwrap_or_else(|error| error.into_inner());
+        inner.backend = Arc::new(DaemonTerminalBackend::new(client));
+        inner.kind = TerminalBackendKind::Daemon;
     }
 }
 
@@ -179,5 +203,15 @@ mod tests {
         assert!(!is_truthy_daemon_flag("0"));
         assert!(!is_truthy_daemon_flag("false"));
         assert!(!is_truthy_daemon_flag(""));
+    }
+
+    #[test]
+    fn terminal_backend_state_can_switch_to_daemon_backend() {
+        let state = TerminalBackendState::new(Arc::new(MockBackend));
+        assert_eq!(state.kind(), TerminalBackendKind::InProcess);
+
+        state.try_enable_daemon(TerminalDaemonClient::new("127.0.0.1:1", "token"));
+
+        assert_eq!(state.kind(), TerminalBackendKind::Daemon);
     }
 }

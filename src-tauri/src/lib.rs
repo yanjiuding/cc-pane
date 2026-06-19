@@ -329,8 +329,9 @@ use services::{
     ProjectCliHooksService, ProjectContextService, ProjectService, ProviderService,
     ScreenshotService, SessionRestoreService, SettingsService, SharedMcpService,
     SkillMarketService, SkillService, SpecService, SshCredentialService, SshMachineService,
-    StartLocks, TaskBindingService, TerminalBackendState, TerminalDaemonEventBridge,
-    TerminalService, TodoService, UsageStatsService, WorkspaceService, WorktreeService,
+    StartLocks, TaskBindingService, TerminalBackendKind, TerminalBackendState,
+    TerminalDaemonEventBridge, TerminalDaemonLifecycle, TerminalService, TodoService,
+    UsageStatsService, WorkspaceService, WorktreeService,
 };
 use std::sync::Arc;
 use utils::AppPaths;
@@ -1214,6 +1215,30 @@ pub fn run() {
                 "[boot] +{}ms: bundled config extracted",
                 boot_t0.elapsed().as_millis()
             );
+
+            // ---- 实验性 terminal daemon lifecycle ----
+            if TerminalDaemonLifecycle::enabled_from_env() {
+                let backend_state = app.state::<Arc<TerminalBackendState>>();
+                if backend_state.kind() != TerminalBackendKind::Daemon {
+                    let paths = app.state::<Arc<AppPaths>>();
+                    let resource_dir = app.path().resource_dir().ok();
+                    match TerminalDaemonLifecycle::connect_or_start(
+                        paths.inner().as_ref(),
+                        resource_dir.as_deref(),
+                    ) {
+                        Ok(client) => {
+                            backend_state.try_enable_daemon(client);
+                            info!("[boot] terminal daemon backend enabled");
+                        }
+                        Err(error) => {
+                            warn!(
+                                error = %error,
+                                "[boot] terminal daemon unavailable; keeping in-process terminal backend"
+                            );
+                        }
+                    }
+                }
+            }
 
             // ---- 强制关闭原生窗口装饰（兜底：防 tauri.dev.conf.json 配置合并丢失 decorations: false）----
             // macOS 用 traffic light 原生装饰，不强制；只对 Windows / Linux 兜底。

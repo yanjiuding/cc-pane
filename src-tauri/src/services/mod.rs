@@ -12,6 +12,7 @@ mod session_prompt_service;
 mod skill_market_service;
 mod terminal_backend_state;
 mod terminal_daemon_event_bridge;
+mod terminal_daemon_lifecycle;
 
 pub(crate) use launch_backfill_service::detect_resume_session;
 pub use launch_backfill_service::rescue_null_codex_records;
@@ -25,3 +26,4 @@ pub use session_prompt_service::extract_last_prompt;
 pub use skill_market_service::{SkillMarketEntry, SkillMarketService};
 pub use terminal_backend_state::{TerminalBackendKind, TerminalBackendState};
 pub use terminal_daemon_event_bridge::TerminalDaemonEventBridge;
+pub use terminal_daemon_lifecycle::TerminalDaemonLifecycle;
