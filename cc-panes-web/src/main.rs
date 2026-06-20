@@ -9,15 +9,15 @@ use cc_cli_adapters::CliToolRegistry;
 use cc_panes_core::{
     events::NoopNotifier,
     repository::{
-        Database, HistoryRepository, ProjectRepository, SpecRepository, TaskBindingRepository,
-        TodoRepository,
+        Database, HistoryRepository, ProjectRepository, RunnerRepository, SpecRepository,
+        TaskBindingRepository, TodoRepository,
     },
     services::{
         DaemonTerminalBackend, FileSystemService, HistoryService, InProcessTerminalBackend,
-        LaunchHistoryService, ProjectCliHooksService, ProjectService, ProviderService,
-        SessionRestoreService, SettingsService, SpecService, SshCredentialService,
-        TaskBindingService, TerminalBackend, TerminalDaemonClient, TerminalService, TodoService,
-        WorkspaceService, WorktreeService,
+        LaunchHistoryService, ProcessMonitorService, ProjectCliHooksService, ProjectService,
+        ProviderService, RunnerService, SessionRestoreService, SettingsService, SpecService,
+        SshCredentialService, TaskBindingService, TerminalBackend, TerminalDaemonClient,
+        TerminalService, TodoService, WorkspaceService, WorktreeService,
     },
     utils::AppPaths,
 };
@@ -83,6 +83,7 @@ async fn main() -> anyhow::Result<()> {
     let spec_repo = Arc::new(SpecRepository::new(database.clone()));
     let task_binding_repo = Arc::new(TaskBindingRepository::new(database.clone()));
     let history_repo = Arc::new(HistoryRepository::new(database.clone()));
+    let runner_repo = Arc::new(RunnerRepository::new(database.clone()));
     let workspace_service = Arc::new(WorkspaceService::new(app_paths.workspaces_dir()));
     let project_service = Arc::new(ProjectService::new(project_repo));
     let todo_service = Arc::new(TodoService::new(todo_repo));
@@ -92,6 +93,11 @@ async fn main() -> anyhow::Result<()> {
     let session_restore_service = Arc::new(SessionRestoreService::new(database, app_paths.clone()));
     let history_service = Arc::new(HistoryService::new());
     let worktree_service = Arc::new(WorktreeService::new());
+    let process_monitor_service = Arc::new(ProcessMonitorService::new());
+    let runner_service = Arc::new(RunnerService::new(
+        runner_repo,
+        process_monitor_service.clone(),
+    ));
     let provider_service = Arc::new(ProviderService::new(app_paths.providers_path()));
     let settings_service = Arc::new(SettingsService::new());
     let filesystem_service = Arc::new(FileSystemService::new());
@@ -119,6 +125,8 @@ async fn main() -> anyhow::Result<()> {
         session_restore_service,
         history_service,
         worktree_service,
+        runner_service,
+        process_monitor_service,
         ws_emitter,
         default_cwd: cwd_str.clone(),
         output_mode: backend_state.output_mode,

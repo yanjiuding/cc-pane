@@ -8,14 +8,15 @@ use axum::{
 use cc_panes_core::{
     models::{provider::Provider, provider::ProviderType, TerminalBufferMode},
     repository::{
-        Database, HistoryRepository, ProjectRepository, SpecRepository, TaskBindingRepository,
-        TodoRepository,
+        Database, HistoryRepository, ProjectRepository, RunnerRepository, SpecRepository,
+        TaskBindingRepository, TodoRepository,
     },
     services::{
         terminal_service::{SessionOutput, SessionStatus},
-        FileSystemService, HistoryService, LaunchHistoryService, ProjectService, ProviderService,
-        SessionRestoreService, SettingsService, SpecService, TaskBindingService, TerminalBackend,
-        TodoService, WorkspaceService, WorktreeService,
+        FileSystemService, HistoryService, LaunchHistoryService, ProcessMonitorService,
+        ProjectService, ProviderService, RunnerService, SessionRestoreService, SettingsService,
+        SpecService, TaskBindingService, TerminalBackend, TodoService, WorkspaceService,
+        WorktreeService,
     },
     utils::{AppPaths, AppResult},
 };
@@ -110,7 +111,9 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
     let spec_repo = Arc::new(SpecRepository::new(db.clone()));
     let task_binding_repo = Arc::new(TaskBindingRepository::new(db.clone()));
     let history_repo = Arc::new(HistoryRepository::new(db.clone()));
+    let runner_repo = Arc::new(RunnerRepository::new(db.clone()));
     let todo_service = Arc::new(TodoService::new(todo_repo));
+    let process_monitor_service = Arc::new(ProcessMonitorService::new());
     let state = AppState {
         terminal_backend: Arc::new(NoopTerminalBackend),
         workspace_service: Arc::new(WorkspaceService::new(app_paths.workspaces_dir())),
@@ -125,6 +128,11 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
         session_restore_service: Arc::new(SessionRestoreService::new(db, Arc::new(app_paths))),
         history_service: Arc::new(HistoryService::new()),
         worktree_service: Arc::new(WorktreeService::new()),
+        runner_service: Arc::new(RunnerService::new(
+            runner_repo,
+            process_monitor_service.clone(),
+        )),
+        process_monitor_service,
         ws_emitter: Arc::new(WsEmitter::new()),
         default_cwd: root.to_string_lossy().to_string(),
         output_mode: TerminalOutputMode::Emitter,

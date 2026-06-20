@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use cc_panes_core::services::{
-    FileSystemService, HistoryService, LaunchHistoryService, ProjectService, ProviderService,
-    SessionRestoreService, SettingsService, SpecService, TaskBindingService, TerminalBackend,
-    TodoService, WorkspaceService, WorktreeService,
+    FileSystemService, HistoryService, LaunchHistoryService, ProcessMonitorService, ProjectService,
+    ProviderService, RunnerService, SessionRestoreService, SettingsService, SpecService,
+    TaskBindingService, TerminalBackend, TodoService, WorkspaceService, WorktreeService,
 };
 
 use crate::ws_emitter::WsEmitter;
@@ -30,6 +30,8 @@ pub struct AppState {
     pub session_restore_service: Arc<SessionRestoreService>,
     pub history_service: Arc<HistoryService>,
     pub worktree_service: Arc<WorktreeService>,
+    pub runner_service: Arc<RunnerService>,
+    pub process_monitor_service: Arc<ProcessMonitorService>,
     pub ws_emitter: Arc<WsEmitter>,
     pub default_cwd: String,
     pub output_mode: TerminalOutputMode,

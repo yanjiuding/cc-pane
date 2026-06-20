@@ -1,6 +1,7 @@
 pub mod git;
 pub mod history;
 pub mod resources;
+pub mod runner;
 pub mod static_files;
 pub mod terminal;
 pub mod workflow;
@@ -136,6 +137,43 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/worktrees", get(git::list_worktrees))
         .route("/api/worktrees", post(git::add_worktree))
         .route("/api/worktrees", delete(git::remove_worktree))
+        .route("/api/runner/profiles", get(runner::list_profiles))
+        .route("/api/runner/profiles", put(runner::upsert_profile))
+        .route("/api/runner/profiles/{id}", get(runner::get_profile))
+        .route("/api/runner/profiles/{id}", delete(runner::delete_profile))
+        .route(
+            "/api/runner/profiles/{profile_id}/launch-plan",
+            get(runner::plan_launch),
+        )
+        .route(
+            "/api/runner/instances/active",
+            get(runner::list_active_instances),
+        )
+        .route(
+            "/api/runner/ports/conflicts",
+            post(runner::list_port_conflicts),
+        )
+        .route(
+            "/api/runner/instances/register-for-session",
+            post(runner::register_for_session),
+        )
+        .route(
+            "/api/runner/instances/register-implicit",
+            post(runner::register_implicit_instance),
+        )
+        .route(
+            "/api/runner/instances/{instance_id}/port-claims",
+            post(runner::refresh_port_claims),
+        )
+        .route(
+            "/api/runner/instances/{instance_id}/mark-exited",
+            post(runner::mark_instance_exited),
+        )
+        .route(
+            "/api/runner/instances/{instance_id}/kill",
+            post(runner::kill_instance),
+        )
+        .route("/api/runner/pids/kill", post(runner::kill_pid))
         .route("/api/workspaces", get(resources::list_workspaces))
         .route("/api/workspaces", post(resources::create_workspace))
         .route(

@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { verifyWebGitApis } from "./smoke-daemon-web-git.mjs";
 import { verifyWebHistoryApis } from "./smoke-daemon-web-history.mjs";
+import { verifyWebRunnerApis } from "./smoke-daemon-web-runner.mjs";
 
 const TOKEN = "ccpanes-smoke-token";
 const DAEMON_RUNTIME_PREFIX = "cc-panes-daemon-smoke-runtime-";
@@ -678,6 +679,15 @@ async function main() {
     await verifyWebResourceApis(webBaseUrl, webWorkspaceDir);
     await verifyWebWorkflowApis(webBaseUrl, webWorkspaceDir);
     await verifyWebHistoryApis({
+      webBaseUrl,
+      rootDir: webWorkspaceDir,
+      requestJson,
+      requestNoContent,
+      assertEquals,
+      fail,
+      log,
+    });
+    await verifyWebRunnerApis({
       webBaseUrl,
       rootDir: webWorkspaceDir,
       requestJson,
