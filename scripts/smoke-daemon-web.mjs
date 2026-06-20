@@ -14,6 +14,7 @@ import { verifyWebRunnerApis } from "./smoke-daemon-web-runner.mjs";
 import { verifyWebSkillsApis } from "./smoke-daemon-web-skills.mjs";
 import { verifyWebSshMachineApis } from "./smoke-daemon-web-ssh-machines.mjs";
 import { verifyWebUsageStatsApis } from "./smoke-daemon-web-usage-stats.mjs";
+import { verifyWebWorkspaceMigrationApis } from "./smoke-daemon-web-workspace-migration.mjs";
 
 const TOKEN = "ccpanes-smoke-token";
 const DAEMON_RUNTIME_PREFIX = "cc-panes-daemon-smoke-runtime-";
@@ -720,6 +721,15 @@ async function main() {
       launchProfileId,
     });
     await verifyWebResourceApis(webBaseUrl, webWorkspaceDir);
+    await verifyWebWorkspaceMigrationApis({
+      webBaseUrl,
+      rootDir: webWorkspaceDir,
+      requestJson,
+      requestNoContent,
+      assertEquals,
+      fail,
+      log,
+    });
     await verifyWebWorkflowApis(webBaseUrl, webWorkspaceDir);
     await verifyWebMcpApis({
       webBaseUrl,

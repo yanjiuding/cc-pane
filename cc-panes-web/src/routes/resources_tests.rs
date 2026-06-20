@@ -6,7 +6,10 @@ use axum::{
     Json,
 };
 use cc_panes_core::{
-    models::{provider::Provider, provider::ProviderType, TerminalBufferMode},
+    models::{
+        provider::Provider, provider::ProviderType, TerminalBufferMode, WorkspaceMigrationRequest,
+        WorkspaceMigrationTargetKind,
+    },
     repository::{
         Database, HistoryRepository, ProjectRepository, RunnerRepository, SpecRepository,
         TaskBindingRepository, TodoRepository,
@@ -232,6 +235,29 @@ async fn workspace_routes_match_core_service_operations() {
     assert_eq!(workspace.alias.as_deref(), Some("Team A"));
     assert_eq!(workspace.projects[0].alias.as_deref(), Some("Project A"));
 
+    let mut saved_workspace = workspace.clone();
+    saved_workspace.pinned = true;
+    saved_workspace.hidden = true;
+    saved_workspace.launch_profile_id = Some("profile-a".to_string());
+    update_workspace(
+        State(state.clone()),
+        Path("team-a".to_string()),
+        Json(UpdateWorkspaceRequest {
+            workspace: saved_workspace,
+        }),
+    )
+    .await
+    .expect("update full workspace");
+    let Json(updated_workspace) = get_workspace(State(state.clone()), Path("team-a".to_string()))
+        .await
+        .expect("get updated workspace");
+    assert!(updated_workspace.pinned);
+    assert!(updated_workspace.hidden);
+    assert_eq!(
+        updated_workspace.launch_profile_id.as_deref(),
+        Some("profile-a")
+    );
+
     remove_workspace_project(
         State(state.clone()),
         Path(("team-a".to_string(), project.id)),
@@ -241,6 +267,157 @@ async fn workspace_routes_match_core_service_operations() {
     delete_workspace(State(state), Path("team-a".to_string()))
         .await
         .expect("delete workspace");
+}
+
+#[tokio::test]
+async fn workspace_migration_routes_match_core_service_operations() {
+    let (state, root) = test_state("workspace-migration");
+    let source_root = root.join("source-workspace");
+    let project_path = source_root.join("project-a");
+    let target_root = root.join("target-workspaces");
+    std::fs::create_dir_all(&project_path).expect("project dir");
+    std::fs::write(project_path.join("note.txt"), "workspace migration").expect("project file");
+
+    let _workspace = create_workspace(
+        State(state.clone()),
+        Json(CreateWorkspaceRequest {
+            name: "migrate-ws".to_string(),
+            path: Some(source_root.to_string_lossy().to_string()),
+        }),
+    )
+    .await
+    .expect("create workspace");
+    let (_status, Json(project)) = add_workspace_project(
+        State(state.clone()),
+        Path("migrate-ws".to_string()),
+        Json(AddWorkspaceProjectRequest {
+            path: project_path.to_string_lossy().to_string(),
+        }),
+    )
+    .await
+    .expect("add project");
+
+    let request = WorkspaceMigrationRequest {
+        workspace_name: "migrate-ws".to_string(),
+        target_kind: WorkspaceMigrationTargetKind::Local,
+        target_root: target_root.to_string_lossy().to_string(),
+        target_distro: None,
+    };
+    let Json(plan) = preview_workspace_migration(State(state.clone()), Json(request.clone()))
+        .await
+        .expect("preview workspace migration");
+    assert_eq!(plan.items.len(), 1);
+    assert_eq!(plan.items[0].project_id, project.id);
+
+    let Json(result) = execute_workspace_migration(State(state.clone()), Json(request))
+        .await
+        .expect("execute workspace migration");
+    assert_eq!(
+        result.status,
+        cc_panes_core::models::WorkspaceMigrationStatus::Succeeded
+    );
+    assert_eq!(
+        result.workspace.path.as_deref(),
+        Some(target_root.to_string_lossy().as_ref())
+    );
+    assert!(target_root.join("project-a").join("note.txt").exists());
+
+    let Json(rolled_back) = rollback_workspace_migration(
+        State(state),
+        Path(("migrate-ws".to_string(), result.snapshot_id)),
+    )
+    .await
+    .expect("rollback workspace migration");
+    assert_eq!(
+        rolled_back.workspace.path.as_deref(),
+        Some(source_root.to_string_lossy().as_ref())
+    );
+}
+
+#[tokio::test]
+async fn project_migration_routes_match_core_service_operations() {
+    let (state, root) = test_state("project-migration");
+    let workspace_root = root.join("workspace");
+    let project_path = workspace_root.join("project-b");
+    let target_root = root.join("project-target");
+    std::fs::create_dir_all(&project_path).expect("project dir");
+    std::fs::write(project_path.join("note.txt"), "project migration").expect("project file");
+
+    let _workspace = create_workspace(
+        State(state.clone()),
+        Json(CreateWorkspaceRequest {
+            name: "project-ws".to_string(),
+            path: Some(workspace_root.to_string_lossy().to_string()),
+        }),
+    )
+    .await
+    .expect("create workspace");
+    let (_status, Json(project)) = add_workspace_project(
+        State(state.clone()),
+        Path("project-ws".to_string()),
+        Json(AddWorkspaceProjectRequest {
+            path: project_path.to_string_lossy().to_string(),
+        }),
+    )
+    .await
+    .expect("add project");
+
+    let request = cc_panes_core::models::ProjectMigrationRequest {
+        workspace_name: "project-ws".to_string(),
+        project_id: project.id.clone(),
+        target_kind: WorkspaceMigrationTargetKind::Local,
+        target_root: target_root.to_string_lossy().to_string(),
+        target_distro: None,
+    };
+    let Json(plan) = preview_project_migration(State(state.clone()), Json(request.clone()))
+        .await
+        .expect("preview project migration");
+    assert_eq!(plan.project_id, project.id);
+
+    let Json(result) = execute_project_migration(State(state.clone()), Json(request))
+        .await
+        .expect("execute project migration");
+    assert_eq!(
+        result.status,
+        cc_panes_core::models::WorkspaceMigrationStatus::Succeeded
+    );
+    assert!(target_root.join("note.txt").exists());
+    assert_eq!(
+        result.workspace.projects[0].path,
+        target_root.to_string_lossy()
+    );
+
+    let Json(rolled_back) = rollback_project_migration(
+        State(state),
+        Path(("project-ws".to_string(), result.snapshot_id)),
+    )
+    .await
+    .expect("rollback project migration");
+    assert_eq!(
+        rolled_back.workspace.projects[0].path,
+        project_path.to_string_lossy()
+    );
+}
+
+#[tokio::test]
+async fn scan_workspace_directory_route_discovers_git_repositories() {
+    let (_state, root) = test_state("workspace-scan");
+    let repo = root.join("repo-a");
+    std::fs::create_dir_all(&repo).expect("repo dir");
+    std::process::Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(&repo)
+        .output()
+        .expect("git init");
+
+    let Json(scanned) = scan_workspace_directory(Query(ScanWorkspaceQuery {
+        root_path: root.to_string_lossy().to_string(),
+    }))
+    .await
+    .expect("scan workspace directory");
+    assert_eq!(scanned.len(), 1);
+    assert_eq!(scanned[0].main_path, repo.to_string_lossy());
+    assert_eq!(scanned[0].main_branch, "main");
 }
 
 #[tokio::test]

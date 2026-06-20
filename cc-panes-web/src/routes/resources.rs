@@ -7,8 +7,12 @@ use cc_panes_core::{
     models::{
         filesystem::{DirListing, FileContent, FsEntry},
         provider::Provider,
-        Project, SshConnectionInfo, Workspace, WorkspaceProject,
+        Project, ProjectMigrationPlan, ProjectMigrationRequest, ProjectMigrationResult,
+        ProjectMigrationRollbackResult, ScannedRepo, SshConnectionInfo, Workspace,
+        WorkspaceMigrationPlan, WorkspaceMigrationRequest, WorkspaceMigrationResult,
+        WorkspaceMigrationRollbackResult, WorkspaceProject,
     },
+    services::WorkspaceService,
     utils::{validate_path, validate_ssh_info},
 };
 use serde::Deserialize;
@@ -45,6 +49,12 @@ pub struct WorkspacePathRequest {
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceProviderRequest {
     pub provider_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateWorkspaceRequest {
+    pub workspace: Workspace,
 }
 
 #[derive(Deserialize)]
@@ -93,6 +103,12 @@ pub struct ProviderIdRequest {
 #[serde(rename_all = "camelCase")]
 pub struct FsPathQuery {
     pub path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScanWorkspaceQuery {
+    pub root_path: String,
 }
 
 #[derive(Deserialize)]
@@ -231,6 +247,18 @@ pub async fn update_workspace_provider(
     Ok(StatusCode::NO_CONTENT)
 }
 
+pub async fn update_workspace(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Json(req): Json<UpdateWorkspaceRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .workspace_service
+        .write_workspace_json(&name, &req.workspace)
+        .map_err(service_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn reorder_workspaces(
     State(state): State<AppState>,
     Json(req): Json<ReorderWorkspacesRequest>,
@@ -240,6 +268,91 @@ pub async fn reorder_workspaces(
         .reorder_workspaces(req.ordered_names)
         .map_err(service_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn scan_workspace_directory(
+    Query(query): Query<ScanWorkspaceQuery>,
+) -> Result<Json<Vec<ScannedRepo>>, (StatusCode, String)> {
+    validate_path(&query.root_path).map_err(service_error)?;
+    WorkspaceService::scan_directory(std::path::Path::new(&query.root_path))
+        .map(Json)
+        .map_err(service_error)
+}
+
+pub async fn preview_workspace_migration(
+    State(state): State<AppState>,
+    Json(request): Json<WorkspaceMigrationRequest>,
+) -> Result<Json<WorkspaceMigrationPlan>, (StatusCode, String)> {
+    let service = state.workspace_service.clone();
+    tokio::task::spawn_blocking(move || service.preview_workspace_migration(&request))
+        .await
+        .map_err(service_error)?
+        .map(Json)
+        .map_err(service_error)
+}
+
+pub async fn execute_workspace_migration(
+    State(state): State<AppState>,
+    Json(request): Json<WorkspaceMigrationRequest>,
+) -> Result<Json<WorkspaceMigrationResult>, (StatusCode, String)> {
+    let service = state.workspace_service.clone();
+    tokio::task::spawn_blocking(move || service.execute_workspace_migration(&request))
+        .await
+        .map_err(service_error)?
+        .map(Json)
+        .map_err(service_error)
+}
+
+pub async fn rollback_workspace_migration(
+    State(state): State<AppState>,
+    Path((workspace_name, snapshot_id)): Path<(String, String)>,
+) -> Result<Json<WorkspaceMigrationRollbackResult>, (StatusCode, String)> {
+    let service = state.workspace_service.clone();
+    tokio::task::spawn_blocking(move || {
+        service.rollback_workspace_migration(&workspace_name, &snapshot_id)
+    })
+    .await
+    .map_err(service_error)?
+    .map(Json)
+    .map_err(service_error)
+}
+
+pub async fn preview_project_migration(
+    State(state): State<AppState>,
+    Json(request): Json<ProjectMigrationRequest>,
+) -> Result<Json<ProjectMigrationPlan>, (StatusCode, String)> {
+    let service = state.workspace_service.clone();
+    tokio::task::spawn_blocking(move || service.preview_project_migration(&request))
+        .await
+        .map_err(service_error)?
+        .map(Json)
+        .map_err(service_error)
+}
+
+pub async fn execute_project_migration(
+    State(state): State<AppState>,
+    Json(request): Json<ProjectMigrationRequest>,
+) -> Result<Json<ProjectMigrationResult>, (StatusCode, String)> {
+    let service = state.workspace_service.clone();
+    tokio::task::spawn_blocking(move || service.execute_project_migration(&request))
+        .await
+        .map_err(service_error)?
+        .map(Json)
+        .map_err(service_error)
+}
+
+pub async fn rollback_project_migration(
+    State(state): State<AppState>,
+    Path((workspace_name, snapshot_id)): Path<(String, String)>,
+) -> Result<Json<ProjectMigrationRollbackResult>, (StatusCode, String)> {
+    let service = state.workspace_service.clone();
+    tokio::task::spawn_blocking(move || {
+        service.rollback_project_migration(&workspace_name, &snapshot_id)
+    })
+    .await
+    .map_err(service_error)?
+    .map(Json)
+    .map_err(service_error)
 }
 
 pub async fn add_workspace_project(

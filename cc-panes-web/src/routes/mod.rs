@@ -382,7 +382,12 @@ pub fn build_router(state: AppState) -> Router {
             "/api/workspaces/reorder",
             post(resources::reorder_workspaces),
         )
+        .route(
+            "/api/workspace-scan",
+            get(resources::scan_workspace_directory),
+        )
         .route("/api/workspaces/{name}", get(resources::get_workspace))
+        .route("/api/workspaces/{name}", put(resources::update_workspace))
         .route(
             "/api/workspaces/{name}",
             delete(resources::delete_workspace),
@@ -418,6 +423,30 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/workspaces/{name}/projects/{project_id}/alias",
             patch(resources::update_workspace_project_alias),
+        )
+        .route(
+            "/api/workspace-migrations/preview",
+            post(resources::preview_workspace_migration),
+        )
+        .route(
+            "/api/workspace-migrations/execute",
+            post(resources::execute_workspace_migration),
+        )
+        .route(
+            "/api/workspace-migrations/{workspace_name}/{snapshot_id}/rollback",
+            post(resources::rollback_workspace_migration),
+        )
+        .route(
+            "/api/project-migrations/preview",
+            post(resources::preview_project_migration),
+        )
+        .route(
+            "/api/project-migrations/execute",
+            post(resources::execute_project_migration),
+        )
+        .route(
+            "/api/project-migrations/{workspace_name}/{snapshot_id}/rollback",
+            post(resources::rollback_project_migration),
         )
         .route("/api/projects", get(resources::list_projects))
         .route("/api/projects", post(resources::add_project))
