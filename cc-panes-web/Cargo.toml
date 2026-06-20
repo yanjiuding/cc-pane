@@ -9,6 +9,7 @@ edition = "2021"
 [dependencies]
 cc-panes-core = { path = "../cc-panes-core" }
 cc-cli-adapters = { path = "../cc-cli-adapters" }
+cc-memory = { path = "../cc-memory" }
 axum = { version = "0.8", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors"] }
 tokio = { version = "1", features = ["full"] }

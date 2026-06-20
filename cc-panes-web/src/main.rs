@@ -14,12 +14,12 @@ use cc_panes_core::{
     },
     services::{
         DaemonTerminalBackend, FileSystemService, HistoryService, InProcessTerminalBackend,
-        LaunchHistoryService, LaunchProfileService, McpConfigService, ProcessMonitorService,
-        ProjectCliHooksService, ProjectService, ProviderService, RunnerService,
-        SessionRestoreService, SettingsService, SharedMcpService, SkillService, SpecService,
-        SshCredentialService, TaskBindingService, TerminalBackend, TerminalDaemonClient,
-        TerminalService, TodoService, UsageStatsService, UserSkillService, WorkspaceService,
-        WorktreeService,
+        LaunchHistoryService, LaunchProfileService, McpConfigService, MemoryService,
+        ProcessMonitorService, ProjectCliHooksService, ProjectService, ProviderService,
+        RunnerService, SessionRestoreService, SettingsService, SharedMcpService, SkillService,
+        SpecService, SshCredentialService, TaskBindingService, TerminalBackend,
+        TerminalDaemonClient, TerminalService, TodoService, UsageStatsService, UserSkillService,
+        WorkspaceService, WorktreeService,
     },
     utils::AppPaths,
 };
@@ -115,6 +115,15 @@ async fn main() -> anyhow::Result<()> {
         app_paths.launch_profiles_path(),
         external_skill_registry.clone(),
     ));
+    let memory_service = Arc::new(
+        MemoryService::new(app_paths.data_dir().join("memory.db")).unwrap_or_else(|error| {
+            tracing::error!(
+                "MemoryService init failed: {}, using in-memory fallback",
+                error
+            );
+            MemoryService::new_memory().expect("MemoryService fallback failed")
+        }),
+    );
     let user_skill_service = Arc::new(UserSkillService::new(app_paths.user_skills_dir()));
     let usage_stats_service = Arc::new(UsageStatsService::new(
         usage_stats_repo,
@@ -148,6 +157,7 @@ async fn main() -> anyhow::Result<()> {
         task_binding_service,
         launch_history_service,
         launch_profile_service,
+        memory_service,
         session_restore_service,
         history_service,
         worktree_service,

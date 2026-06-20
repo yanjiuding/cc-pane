@@ -1,9 +1,12 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     Json,
+};
+use cc_memory::models::{
+    MemoryCategory, MemoryQuery, MemoryScope, StoreMemoryRequest, UpdateMemoryRequest,
 };
 use cc_panes_core::{
     models::TerminalBufferMode,
@@ -98,7 +101,7 @@ fn test_dir(name: &str) -> std::path::PathBuf {
         .expect("system clock")
         .as_millis();
     let path = std::env::temp_dir().join(format!(
-        "cc-panes-web-usage-stats-{name}-{millis}-{}",
+        "cc-panes-web-memory-{name}-{millis}-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&path).expect("create temp dir");
@@ -121,12 +124,13 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
     let todo_service = Arc::new(TodoService::new(todo_repo));
     let process_monitor_service = Arc::new(ProcessMonitorService::new());
     let launch_history_service = Arc::new(LaunchHistoryService::new(history_repo));
+    let external_skill_registry = Arc::new(cc_panes_core::services::ExternalSkillRegistry::new(
+        Arc::new(cc_cli_adapters::CliToolRegistry::new()),
+    ));
     let launch_profile_service = Arc::new(
         cc_panes_core::services::LaunchProfileService::new_with_external_skill_registry(
             app_paths.launch_profiles_path(),
-            Arc::new(cc_panes_core::services::ExternalSkillRegistry::new(
-                Arc::new(cc_cli_adapters::CliToolRegistry::new()),
-            )),
+            external_skill_registry.clone(),
         ),
     );
     let usage_stats_service = Arc::new(UsageStatsService::new(
@@ -159,9 +163,7 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
         mcp_config_service: Arc::new(McpConfigService::new()),
         shared_mcp_service: Arc::new(SharedMcpService::new(&app_paths)),
         skill_service: Arc::new(cc_panes_core::services::SkillService::new()),
-        external_skill_registry: Arc::new(cc_panes_core::services::ExternalSkillRegistry::new(
-            Arc::new(cc_cli_adapters::CliToolRegistry::new()),
-        )),
+        external_skill_registry,
         user_skill_service: Arc::new(cc_panes_core::services::UserSkillService::new(
             app_paths.user_skills_dir(),
         )),
@@ -173,74 +175,121 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
     (state, root)
 }
 
-#[tokio::test]
-async fn usage_stats_query_returns_requested_empty_series() {
-    let (state, _root) = test_state("query");
-
-    let Json(result) = query_usage_stats(
-        State(state),
-        Query(UsageStatsQuery {
-            range_days: Some(7),
-            workspace_filter: None,
-        }),
-    )
-    .await
-    .expect("query usage stats");
-
-    assert_eq!(result.series.len(), 7);
-    assert_eq!(result.totals.char_count, 0);
-    assert!(result.by_cli.is_empty());
+fn store_request(project_path: String) -> StoreMemoryRequest {
+    StoreMemoryRequest {
+        title: "Memory API".to_string(),
+        content: "Remember the web memory route".to_string(),
+        scope: Some(MemoryScope::Project),
+        category: Some(MemoryCategory::Decision),
+        importance: Some(5),
+        workspace_name: Some("workspace-a".to_string()),
+        project_path: Some(project_path),
+        session_id: Some("session-a".to_string()),
+        tags: Some(vec!["web".to_string(), "memory".to_string()]),
+        source: Some("test".to_string()),
+    }
 }
 
 #[tokio::test]
-async fn record_terminal_input_accumulates_after_flush() {
-    let (state, _root) = test_state("record");
+async fn memory_routes_match_tauri_memory_commands() {
+    let (state, root) = test_state("crud");
+    let project = root.join("project");
+    std::fs::create_dir_all(&project).expect("project dir");
+    let project_path = project.to_string_lossy().to_string();
 
-    let status = record_terminal_input(
+    let (status, Json(memory)) = store_memory(
         State(state.clone()),
-        Json(RecordTerminalInputRequest {
-            session_id: "missing-session".to_string(),
-            char_count: 123,
+        Json(store_request(project_path.clone())),
+    )
+    .await
+    .expect("store memory");
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(memory.title, "Memory API");
+
+    let Json(listed) = list_memories(
+        State(state.clone()),
+        Query(ListMemoriesQuery {
+            scope: Some(MemoryScope::Project),
+            workspace_name: None,
+            project_path: Some(project_path.clone()),
+            limit: Some(10),
+            offset: Some(0),
         }),
     )
     .await
-    .expect("record usage input");
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    .expect("list memories");
+    assert_eq!(listed.total, 1);
 
-    state
-        .usage_stats_service
-        .flush_pending()
-        .expect("flush pending usage input");
-
-    let Json(result) = query_usage_stats(
-        State(state),
-        Query(UsageStatsQuery {
-            range_days: Some(1),
-            workspace_filter: Some("_global".to_string()),
-        }),
-    )
-    .await
-    .expect("query usage stats");
-
-    assert_eq!(result.totals.char_count, 123);
-    assert_eq!(
-        result
-            .by_cli
-            .get("unknown")
-            .expect("unknown cli totals")
-            .char_count,
-        123
-    );
-    assert_eq!(result.workspaces, vec!["_global".to_string()]);
-}
-
-#[tokio::test]
-async fn refresh_usage_stats_route_returns_no_content() {
-    let (state, _root) = test_state("refresh");
-
-    let status = refresh_usage_stats(State(state))
+    let Json(found) = get_memory(State(state.clone()), Path(memory.id.clone()))
         .await
-        .expect("refresh usage stats");
+        .expect("get memory");
+    assert_eq!(
+        found.expect("memory").content,
+        "Remember the web memory route"
+    );
 
-    assert_eq!(status, StatusCode::NO_CONTENT);
+    let Json(search_result) = search_memory(
+        State(state.clone()),
+        Json(MemoryQuery {
+            search: Some("web memory".to_string()),
+            project_path: Some(project_path.clone()),
+            limit: Some(10),
+            ..Default::default()
+        }),
+    )
+    .await
+    .expect("search memory");
+    assert_eq!(search_result.total, 1);
+
+    let Json(updated) = update_memory(
+        State(state.clone()),
+        Path(memory.id.clone()),
+        Json(UpdateMemoryRequest {
+            title: Some("Updated Memory API".to_string()),
+            importance: Some(4),
+            ..Default::default()
+        }),
+    )
+    .await
+    .expect("update memory");
+    assert!(updated);
+
+    let Json(stats) = get_memory_stats(
+        State(state.clone()),
+        Query(MemoryStatsQuery {
+            workspace_name: None,
+            project_path: Some(project_path.clone()),
+        }),
+    )
+    .await
+    .expect("memory stats");
+    assert_eq!(stats.total, 1);
+    assert_eq!(stats.by_scope.get("project"), Some(&1));
+
+    let Json(formatted) = format_memory_for_injection(
+        State(state.clone()),
+        Json(FormatMemoryRequest {
+            memory_ids: vec![memory.id.clone()],
+        }),
+    )
+    .await
+    .expect("format memory");
+    assert!(formatted.contains("Updated Memory API"));
+
+    let Json(context) = prepare_session_context(
+        State(state.clone()),
+        Json(PrepareSessionContextRequest {
+            project_path: project_path.clone(),
+            memory_ids: vec![memory.id.clone()],
+        }),
+    )
+    .await
+    .expect("prepare session context");
+    assert!(context.contains("Updated Memory API"));
+    assert!(project.join("CLAUDE.local.md").exists());
+
+    let Json(deleted) = delete_memory(State(state.clone()), Path(memory.id))
+        .await
+        .expect("delete memory");
+    assert!(deleted);
 }

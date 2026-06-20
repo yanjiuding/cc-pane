@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use cc_panes_core::services::{
     ExternalSkillRegistry, FileSystemService, HistoryService, LaunchHistoryService,
-    LaunchProfileService, McpConfigService, ProcessMonitorService, ProjectService, ProviderService,
-    RunnerService, SessionRestoreService, SettingsService, SharedMcpService, SkillService,
-    SpecService, TaskBindingService, TerminalBackend, TodoService, UsageStatsService,
+    LaunchProfileService, McpConfigService, MemoryService, ProcessMonitorService, ProjectService,
+    ProviderService, RunnerService, SessionRestoreService, SettingsService, SharedMcpService,
+    SkillService, SpecService, TaskBindingService, TerminalBackend, TodoService, UsageStatsService,
     UserSkillService, WorkspaceService, WorktreeService,
 };
 
@@ -30,6 +30,7 @@ pub struct AppState {
     pub task_binding_service: Arc<TaskBindingService>,
     pub launch_history_service: Arc<LaunchHistoryService>,
     pub launch_profile_service: Arc<LaunchProfileService>,
+    pub memory_service: Arc<MemoryService>,
     pub session_restore_service: Arc<SessionRestoreService>,
     pub history_service: Arc<HistoryService>,
     pub worktree_service: Arc<WorktreeService>,

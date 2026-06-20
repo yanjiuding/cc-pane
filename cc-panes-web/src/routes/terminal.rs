@@ -440,6 +440,8 @@ mod tests {
             usage_stats_repo,
             launch_history_service.clone(),
         ));
+        let memory_service =
+            Arc::new(cc_panes_core::services::MemoryService::new_memory().expect("memory"));
         AppState {
             terminal_backend: backend,
             workspace_service: Arc::new(WorkspaceService::new(app_paths.workspaces_dir())),
@@ -452,6 +454,7 @@ mod tests {
             task_binding_service: Arc::new(TaskBindingService::new(task_binding_repo)),
             launch_history_service,
             launch_profile_service,
+            memory_service,
             session_restore_service: Arc::new(SessionRestoreService::new(
                 database,
                 app_paths.clone(),

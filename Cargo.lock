@@ -1066,6 +1066,7 @@ dependencies = [
  "anyhow",
  "axum",
  "cc-cli-adapters",
+ "cc-memory",
  "cc-panes-core",
  "clap",
  "dirs",

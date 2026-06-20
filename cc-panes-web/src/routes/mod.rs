@@ -3,6 +3,7 @@ pub mod history;
 pub mod launch_profiles;
 pub mod local_history;
 pub mod mcp;
+pub mod memory;
 pub mod resources;
 pub mod runner;
 pub mod skills;
@@ -227,6 +228,21 @@ pub fn build_router(state: AppState) -> Router {
             "/api/usage-stats/refresh",
             post(usage_stats::refresh_usage_stats),
         )
+        .route("/api/memories/search", post(memory::search_memory))
+        .route("/api/memories", get(memory::list_memories))
+        .route("/api/memories", post(memory::store_memory))
+        .route("/api/memories/stats", get(memory::get_memory_stats))
+        .route(
+            "/api/memories/session-context",
+            post(memory::prepare_session_context),
+        )
+        .route(
+            "/api/memories/format",
+            post(memory::format_memory_for_injection),
+        )
+        .route("/api/memories/{id}", get(memory::get_memory))
+        .route("/api/memories/{id}", patch(memory::update_memory))
+        .route("/api/memories/{id}", delete(memory::delete_memory))
         .route("/api/mcp/servers", get(mcp::list_mcp_servers))
         .route("/api/mcp/servers", put(mcp::upsert_mcp_server))
         .route("/api/mcp/servers", delete(mcp::remove_mcp_server))
