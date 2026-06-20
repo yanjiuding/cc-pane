@@ -1,15 +1,14 @@
 import { useState, useCallback, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { isTauriReady, handleErrorSilent } from "@/utils";
+import { handleErrorSilent } from "@/utils";
+import { getCurrentWindowIfTauri, invokeIfTauri, isTauriRuntime } from "@/services/runtime";
 
 export function useWindowControl() {
   const [isPinned, setIsPinned] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
 
   useEffect(() => {
-    if (!isTauriReady()) return;
-    const win = getCurrentWindow();
+    const win = getCurrentWindowIfTauri();
+    if (!win) return;
     win.isMaximized().then(setIsMaximized).catch((e) => handleErrorSilent(e, "check maximized"));
     let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const unlisten = win.onResized(() => {
@@ -25,50 +24,54 @@ export function useWindowControl() {
   }, []);
 
   const togglePin = useCallback(async () => {
+    if (!isTauriRuntime()) return;
     try {
-      const result = await invoke<boolean>("toggle_always_on_top");
-      setIsPinned(result);
+      const result = await invokeIfTauri<boolean>("toggle_always_on_top");
+      setIsPinned(Boolean(result));
     } catch (e) {
       handleErrorSilent(e, "toggle pin");
     }
   }, []);
 
   const closeWindow = useCallback(async () => {
+    if (!isTauriRuntime()) return;
     try {
-      await invoke("close_window");
+      await invokeIfTauri("close_window");
     } catch (e) {
       handleErrorSilent(e, "close window");
     }
   }, []);
 
   const minimizeWindow = useCallback(async () => {
+    if (!isTauriRuntime()) return;
     try {
-      await invoke("minimize_window");
+      await invokeIfTauri("minimize_window");
     } catch (e) {
       handleErrorSilent(e, "minimize window");
     }
   }, []);
 
   const maximizeWindow = useCallback(async () => {
+    if (!isTauriRuntime()) return;
     try {
-      await invoke("maximize_window");
+      await invokeIfTauri("maximize_window");
     } catch (e) {
       handleErrorSilent(e, "maximize window");
     }
   }, []);
 
   const toggleFullscreenWindow = useCallback(async () => {
+    if (!isTauriRuntime()) return;
     try {
-      const isFullscreen = await invoke<boolean>("is_fullscreen");
-      await invoke(isFullscreen ? "exit_fullscreen" : "enter_fullscreen");
+      const isFullscreen = await invokeIfTauri<boolean>("is_fullscreen");
+      await invokeIfTauri(isFullscreen ? "exit_fullscreen" : "enter_fullscreen");
     } catch (e) {
       handleErrorSilent(e, "toggle fullscreen");
     }
   }, []);
 
   const startDrag = useCallback(() => {
-    if (!isTauriReady()) return;
-    getCurrentWindow().startDragging().catch((e) => handleErrorSilent(e, "start drag"));
+    getCurrentWindowIfTauri()?.startDragging().catch((e) => handleErrorSilent(e, "start drag"));
   }, []);
 
   return {

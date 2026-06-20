@@ -41,6 +41,7 @@ import {
   getWorkspaceEnvironmentIssue,
   getWorkspaceLaunchIssueKey,
   getWorkspaceLaunchIssueValues,
+  isTauriRuntime,
   toWslPath,
 } from "@/utils";
 
@@ -347,6 +348,19 @@ export default function WorkspaceEnvironmentPanel() {
   }, [requestClose]);
 
   const handleBrowseLocalPath = useCallback(async () => {
+    if (!isTauriRuntime()) {
+      const selected = window.prompt(
+        t("selectWorkspaceRoot", {
+          ns: "sidebar",
+          defaultValue: "选择工作空间根目录",
+        }),
+        localPath,
+      );
+      if (selected) {
+        setLocalPath(selected);
+      }
+      return;
+    }
     const selected = await open({
       directory: true,
       multiple: false,
@@ -358,7 +372,7 @@ export default function WorkspaceEnvironmentPanel() {
     if (typeof selected === "string") {
       setLocalPath(selected);
     }
-  }, [t]);
+  }, [localPath, t]);
 
   const handleUseLocalPathForWsl = useCallback(() => {
     const derived = toWslPath(localPath);

@@ -1,6 +1,6 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
 import { handleErrorSilent } from "@/utils";
+import { invokeIfTauri, isTauriRuntime } from "@/services/runtime";
 
 interface FullscreenState {
   isFullscreen: boolean;
@@ -19,7 +19,7 @@ export const useFullscreenStore = create<FullscreenState>((set, get) => ({
 
   enterFullscreen: async (paneId, tabId) => {
     try {
-      await invoke("enter_fullscreen");
+      await invokeIfTauri("enter_fullscreen");
       set({ isFullscreen: true, fullscreenPaneId: paneId, fullscreenTabId: tabId });
     } catch (error) {
       handleErrorSilent(error, "enter fullscreen");
@@ -28,7 +28,7 @@ export const useFullscreenStore = create<FullscreenState>((set, get) => ({
 
   exitFullscreen: async () => {
     try {
-      await invoke("exit_fullscreen");
+      await invokeIfTauri("exit_fullscreen");
       set({ isFullscreen: false, fullscreenPaneId: null, fullscreenTabId: null });
     } catch (error) {
       handleErrorSilent(error, "exit fullscreen");
@@ -45,8 +45,9 @@ export const useFullscreenStore = create<FullscreenState>((set, get) => ({
   },
 
   checkFullscreenState: async () => {
+    if (!isTauriRuntime()) return;
     try {
-      const state = await invoke<boolean>("is_fullscreen");
+      const state = await invokeIfTauri<boolean>("is_fullscreen");
       if (!state && get().isFullscreen) {
         set({ isFullscreen: false, fullscreenPaneId: null, fullscreenTabId: null });
       }

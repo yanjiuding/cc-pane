@@ -1,23 +1,27 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { UsageQueryResult } from "@/types/usageStats";
+import { apiGet, apiJson, invokeOrApi } from "./apiClient";
 
 export const usageStatsService = {
   async queryUsage(
     rangeDays: number,
     workspaceFilter?: string | null,
   ): Promise<UsageQueryResult> {
-    return invoke<UsageQueryResult>("query_usage_stats", {
-      rangeDays,
-      workspaceFilter: workspaceFilter || null,
-    });
+    const args = { rangeDays, workspaceFilter: workspaceFilter || null };
+    return invokeOrApi<UsageQueryResult>("query_usage_stats", args, () =>
+      apiGet<UsageQueryResult>("/api/usage-stats", args),
+    );
   },
 
   async refreshUsage(): Promise<void> {
-    return invoke("refresh_usage_stats");
+    return invokeOrApi<void>("refresh_usage_stats", undefined, () =>
+      apiJson<void>("/api/usage-stats/refresh", "POST"),
+    );
   },
 
   async recordInputChars(sessionId: string, charCount: number): Promise<void> {
     if (charCount <= 0) return;
-    return invoke("record_terminal_input", { sessionId, charCount });
+    return invokeOrApi<void>("record_terminal_input", { sessionId, charCount }, () =>
+      apiJson<void>("/api/usage-stats/input", "POST", { sessionId, charCount }),
+    );
   },
 };

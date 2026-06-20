@@ -15,6 +15,7 @@ use cc_panes_core::models::{
 };
 use cc_panes_core::services::terminal_service::SessionOutput;
 use cc_panes_core::services::{SessionStatusInfo, TerminalBackend};
+use cc_panes_core::utils::normalize_session_request_for_current_host;
 use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -294,7 +295,7 @@ async fn create_session(
         .project_path
         .or(req.cwd)
         .unwrap_or_else(|| config.default_cwd().to_string());
-    let core_request = CoreCreateSessionRequest {
+    let core_request = normalize_session_request_for_current_host(CoreCreateSessionRequest {
         launch_id: req.core.launch_id,
         project_path,
         cols: req.core.cols.unwrap_or(120),
@@ -313,7 +314,7 @@ async fn create_session(
         initial_prompt: req.core.initial_prompt,
         ssh: req.core.ssh,
         wsl: req.core.wsl,
-    };
+    });
     let session_id = config
         .terminal_backend()
         .create_session(core_request)
@@ -913,17 +914,12 @@ mod tests {
             created[0].ssh.as_ref().map(|ssh| ssh.remote_path.as_str()),
             Some("/srv/repo")
         );
-        assert_eq!(
-            created[1].wsl.as_ref().map(|wsl| wsl.remote_path.as_str()),
-            Some("/mnt/c/repo")
-        );
-        assert_eq!(
-            created[1]
-                .wsl
-                .as_ref()
-                .and_then(|wsl| wsl.distro.as_deref()),
-            Some("Ubuntu")
-        );
+        if let Some(wsl) = created[1].wsl.as_ref() {
+            assert_eq!(wsl.remote_path.as_str(), "/mnt/c/repo");
+            assert_eq!(wsl.distro.as_deref(), Some("Ubuntu"));
+        } else {
+            assert_eq!(created[1].project_path.as_str(), "/mnt/c/repo");
+        }
     }
 
     #[tokio::test]

@@ -142,6 +142,7 @@ use commands::{
     // Local History - Diff
     get_version_diff,
     get_versions_diff,
+    get_web_access_status,
     get_windows_build_number,
     get_workflow,
     get_workspace,
@@ -207,6 +208,7 @@ use commands::{
     minimize_window,
     open_layout_switcher_window,
     open_path_in_explorer,
+    open_web_access,
     prepare_session_context,
     preview_launch_profile_resolution,
     preview_project_migration,
@@ -240,6 +242,7 @@ use commands::{
     resize_terminal,
     respond_orchestrator_query,
     restart_shared_mcp_server,
+    restart_web_access,
     restore_file_version,
     restore_to_label,
     rollback_project_migration,
@@ -278,10 +281,13 @@ use commands::{
     set_default_launch_profile,
     set_default_provider,
     set_project_cli_hook_enabled,
+    set_web_access_password,
     start_launch_history_backfill,
     start_shared_mcp_server,
+    start_web_access,
     stop_project_history,
     stop_shared_mcp_server,
+    stop_web_access,
     store_memory,
     submit_to_session,
     sync_spec_tasks,
@@ -331,7 +337,7 @@ use services::{
     SkillMarketService, SkillService, SpecService, SshCredentialService, SshMachineService,
     StartLocks, TaskBindingService, TerminalBackendKind, TerminalBackendState,
     TerminalDaemonEventBridge, TerminalDaemonLifecycle, TerminalService, TodoService,
-    UsageStatsService, WorkspaceService, WorktreeService,
+    UsageStatsService, WebAccessLifecycle, WorkspaceService, WorktreeService,
 };
 use std::sync::Arc;
 use utils::AppPaths;
@@ -1094,6 +1100,7 @@ pub fn run() {
     let layout_switcher_snapshot_store = commands::LayoutSwitcherSnapshotStore::default();
     let orchestrator_service = Arc::new(OrchestratorService::new());
     let start_locks = Arc::new(StartLocks::default());
+    let web_access_lifecycle = Arc::new(WebAccessLifecycle::default());
     boot_mark!("all services created");
 
     // 保存引用用于退出时清理
@@ -1103,6 +1110,7 @@ pub fn run() {
     let shared_mcp_cleanup = shared_mcp_service.clone();
     let session_restore_cleanup = session_restore_service.clone();
     let usage_stats_cleanup = usage_stats_service.clone();
+    let web_access_cleanup = web_access_lifecycle.clone();
 
     boot_mark!("building tauri app...");
     with_macos_app_menu(tauri::Builder::default())
@@ -1158,6 +1166,7 @@ pub fn run() {
         .manage(process_monitor_service)
         .manage(runner_service)
         .manage(start_locks)
+        .manage(web_access_lifecycle.clone())
         .manage(shared_mcp_service.clone())
         .manage(session_restore_service)
         .manage(popup_data_store)
@@ -1236,6 +1245,34 @@ pub fn run() {
                                 "[boot] terminal daemon unavailable; keeping in-process terminal backend"
                             );
                         }
+                    }
+                }
+            }
+
+            // ---- Web 端访问服务 lifecycle ----
+            {
+                let settings_svc = app.state::<Arc<SettingsService>>();
+                let settings = settings_svc.get_settings().web_access;
+                let web_access = app.state::<Arc<WebAccessLifecycle>>();
+                let paths = app.state::<Arc<AppPaths>>();
+                let resource_dir = app.path().resource_dir().ok();
+                match web_access.start(paths.inner().as_ref(), resource_dir.as_deref(), &settings) {
+                    Ok(status) => {
+                        info!(
+                            url = %status.url,
+                            running = status.running,
+                            enabled = status.enabled,
+                            "Web access lifecycle initialized"
+                        );
+                        if settings.auto_open && status.running {
+                            use tauri_plugin_opener::OpenerExt;
+                            if let Err(error) = app.opener().open_url(status.url, None::<&str>) {
+                                warn!(error = %error, "failed to auto-open Web access URL");
+                            }
+                        }
+                    }
+                    Err(error) => {
+                        warn!(error = %error, "Web access lifecycle failed to start");
                     }
                 }
             }
@@ -1988,6 +2025,13 @@ pub fn run() {
             restart_shared_mcp_server,
             update_shared_mcp_global_config,
             import_shared_mcp_from_claude,
+            // Web access 命令
+            get_web_access_status,
+            start_web_access,
+            stop_web_access,
+            restart_web_access,
+            open_web_access,
+            set_web_access_password,
             // Session Restore 命令
             save_terminal_sessions,
             load_terminal_sessions,
@@ -2028,6 +2072,7 @@ pub fn run() {
                 terminal_cleanup.cleanup_all();
                 history_cleanup.stop_all_watching();
                 workspace_cleanup.stop_watcher();
+                web_access_cleanup.stop();
             }
         });
 }

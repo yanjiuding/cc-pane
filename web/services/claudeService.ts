@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { apiGet, invokeOrApi } from "./apiClient";
 
 export interface ClaudeSession {
   id: string;
@@ -28,40 +28,51 @@ export const claudeService = {
    * 获取项目的 Claude 会话列表
    */
   async listSessions(projectPath: string): Promise<ClaudeSession[]> {
-    return invoke<ClaudeSession[]>("list_claude_sessions", {
-      projectPath,
-    });
+    return invokeOrApi<ClaudeSession[]>("list_claude_sessions", { projectPath }, () =>
+      apiGet<ClaudeSession[]>("/api/claude/sessions", { projectPath }),
+    );
   },
 
   /**
    * 获取所有 Claude 会话
    */
   async listAllSessions(): Promise<ClaudeSession[]> {
-    return invoke<ClaudeSession[]>("list_all_claude_sessions");
+    return invokeOrApi<ClaudeSession[]>("list_all_claude_sessions", undefined, () =>
+      apiGet<ClaudeSession[]>("/api/claude/sessions/all"),
+    );
   },
 
   /**
    * 扫描含有 thinking 块的损坏会话文件
    */
   async scanBrokenSessions(projectPath?: string): Promise<BrokenSession[]> {
-    return invoke<BrokenSession[]>("scan_broken_sessions", {
-      projectPath: projectPath || null,
-    });
+    return invokeOrApi<BrokenSession[]>(
+      "scan_broken_sessions",
+      { projectPath: projectPath || null },
+      async () => [],
+    );
   },
 
   /**
    * 清理单个会话文件
    */
   async cleanSessionFile(filePath: string): Promise<CleanResult> {
-    return invoke<CleanResult>("clean_session_file", { filePath });
+    return invokeOrApi<CleanResult>("clean_session_file", { filePath }, async () => ({
+      file_path: filePath,
+      removed_blocks: 0,
+      success: false,
+      error: "Session cleanup is only available in the desktop app",
+    }));
   },
 
   /**
    * 批量清理所有损坏的会话文件
    */
   async cleanAllBrokenSessions(projectPath?: string): Promise<CleanResult[]> {
-    return invoke<CleanResult[]>("clean_all_broken_sessions", {
-      projectPath: projectPath || null,
-    });
+    return invokeOrApi<CleanResult[]>(
+      "clean_all_broken_sessions",
+      { projectPath: projectPath || null },
+      async () => [],
+    );
   },
 };

@@ -7,6 +7,7 @@ import { writeText as tauriWriteText } from "@tauri-apps/plugin-clipboard-manage
 import { toast } from "sonner";
 import { terminalService, historyService, sessionRestoreService } from "@/services";
 import { ensureListeners } from "@/services/terminalService";
+import { isTauriRuntime } from "@/services/runtime";
 import { getErrorMessage } from "@/utils";
 import { pickCreateSessionResumeId } from "./terminalResume";
 import { devDebugLog } from "@/utils/devLogger";
@@ -956,40 +957,42 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           });
         }
 
-        try {
-          void getCurrentWebview()
-            .onDragDropEvent((event) => {
-              const payload = event.payload;
-              if (payload.type !== "drop") return;
+        if (isTauriRuntime()) {
+          try {
+            void getCurrentWebview()
+              .onDragDropEvent((event) => {
+                const payload = event.payload;
+                if (payload.type !== "drop") return;
 
-              const host = terminalRef.current;
-              if (!host || !isDropInsideTerminalHost(host, payload.position)) return;
+                const host = terminalRef.current;
+                if (!host || !isDropInsideTerminalHost(host, payload.position)) return;
 
-              const text = formatTerminalFilePaths(payload.paths);
-              if (!text) return;
+                const text = formatTerminalFilePaths(payload.paths);
+                if (!text) return;
 
-              debugLog("drag-drop.paste", {
-                pathCount: payload.paths.length,
-                textLength: text.length,
+                debugLog("drag-drop.paste", {
+                  pathCount: payload.paths.length,
+                  textLength: text.length,
+                });
+                pasteTextIntoTerminal(text, "file-drop");
+              })
+              .then((unlisten) => {
+                if (!isMounted) {
+                  unlisten();
+                  return;
+                }
+                dragDropUnlistenRef.current = unlisten;
+              })
+              .catch((error) => {
+                debugLog("drag-drop.listener.failed", {
+                  error: getErrorMessage(error),
+                });
               });
-              pasteTextIntoTerminal(text, "file-drop");
-            })
-            .then((unlisten) => {
-              if (!isMounted) {
-                unlisten();
-                return;
-              }
-              dragDropUnlistenRef.current = unlisten;
-            })
-            .catch((error) => {
-              debugLog("drag-drop.listener.failed", {
-                error: getErrorMessage(error),
-              });
+          } catch (error) {
+            debugLog("drag-drop.listener.failed", {
+              error: getErrorMessage(error),
             });
-        } catch (error) {
-          debugLog("drag-drop.listener.failed", {
-            error: getErrorMessage(error),
-          });
+          }
         }
 
         // Intercept paste so file clipboard data can be resolved through the Tauri backend.

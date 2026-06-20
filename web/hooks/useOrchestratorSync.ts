@@ -1,10 +1,10 @@
 import { useEffect } from "react";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   useOrchestratorStore,
   useWorkspacesStore,
 } from "@/stores";
 import type { TaskBindingChangedEvent } from "@/types";
+import { listenWebviewIfTauri } from "@/services/runtime";
 
 /**
  * 编排同步 Hook — 事件增量更新 TaskBinding，并保留轮询兜底。
@@ -19,8 +19,7 @@ export default function useOrchestratorSync() {
     let cancelled = false;
     const unlisteners: Array<() => void> = [];
 
-    getCurrentWebview()
-      .listen<TaskBindingChangedEvent>("task-binding-changed", (event) => {
+    listenWebviewIfTauri<TaskBindingChangedEvent>("task-binding-changed", (event) => {
         if (cancelled) return;
         applyChangedEvent(event.payload);
       })
@@ -31,8 +30,7 @@ export default function useOrchestratorSync() {
 
     // fix(C4) review: terminal-status 只由 useTerminalStatusStore 全局订阅，这里避免二次订阅。
 
-    getCurrentWebview()
-      .listen<{ sessionId: string; exitCode?: number }>("terminal-exit", async (event) => {
+    listenWebviewIfTauri<{ sessionId: string; exitCode?: number }>("terminal-exit", async (event) => {
         if (cancelled) return;
         const { sessionId, exitCode } = event.payload;
         const code = exitCode ?? 0;

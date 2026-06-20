@@ -1,10 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isTauriRuntime } from "./runtime";
 
 type QueryValue = string | number | boolean | null | undefined;
 
-export function isTauriRuntime(): boolean {
-  return typeof window !== "undefined" && window.__TAURI_INTERNALS__ !== undefined;
-}
+export { isTauriRuntime };
 
 export function invokeOrApi<T>(
   command: string,
@@ -56,6 +55,10 @@ export async function apiNoContent(
 
 export async function apiDelete(path: string): Promise<void> {
   await apiNoContent(path, { method: "DELETE" });
+}
+
+export async function apiDeleteJson<T>(path: string): Promise<T> {
+  return apiRequest<T>(path, { method: "DELETE" });
 }
 
 async function apiRequest<T>(

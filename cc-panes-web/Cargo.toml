@@ -27,3 +27,8 @@ anyhow = "1"
 tokio-tungstenite = "0.27"
 urlencoding = "2"
 encoding_rs = "0.8"
+chrono = "0.4"
+rand = "0.8"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

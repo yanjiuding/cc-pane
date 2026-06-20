@@ -9,6 +9,7 @@ export interface AppSettings {
   screenshot: ScreenshotSettings;
   voice: VoiceSettings;
   layoutSwitcher: LayoutSwitcherSettings;
+  webAccess: WebAccessSettings;
 }
 
 /** 代理设置 */
@@ -130,6 +131,32 @@ export interface LayoutSwitcherSettings {
   windowX: number | null;
   windowY: number | null;
   pinned: boolean;
+}
+
+export interface WebAccessSettings {
+  enabled: boolean;
+  autoOpen: boolean;
+  port: number;
+  allowLan: boolean;
+  ipWhitelist: string[];
+  authEnabled: boolean;
+  username: string;
+  passwordSalt: string | null;
+  passwordHash: string | null;
+  lockOnIdleMinutes: number;
+}
+
+export interface WebAccessStatus {
+  enabled: boolean;
+  running: boolean;
+  pid: number | null;
+  url: string;
+  bindHost: string;
+  port: number;
+  lanRequested: boolean;
+  lanActive: boolean;
+  authRequired: boolean;
+  passwordConfigured: boolean;
 }
 
 /** 数据目录信息 */

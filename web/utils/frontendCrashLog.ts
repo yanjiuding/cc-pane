@@ -1,5 +1,5 @@
-import { error as logError } from "@tauri-apps/plugin-log";
 import { logService } from "@/services/logService";
+import { isTauriRuntime, logErrorSafe } from "@/services/runtime";
 import { errorToString } from "./errorUtils";
 
 interface FrontendCrashLogInput {
@@ -66,20 +66,22 @@ export async function recordFrontendCrash(
   let written = true;
 
   try {
-    await logError(message);
+    await logErrorSafe(message);
   } catch (error) {
     written = false;
     console.error("[frontend-crash] Failed to write crash log:", error);
   }
 
   let logDir: string | null = null;
-  try {
-    const resolvedLogDir = await logService.getLogDir();
-    if (typeof resolvedLogDir === "string" && resolvedLogDir.trim()) {
-      logDir = resolvedLogDir;
+  if (isTauriRuntime()) {
+    try {
+      const resolvedLogDir = await logService.getLogDir();
+      if (typeof resolvedLogDir === "string" && resolvedLogDir.trim()) {
+        logDir = resolvedLogDir;
+      }
+    } catch (error) {
+      console.error("[frontend-crash] Failed to resolve log dir:", error);
     }
-  } catch (error) {
-    console.error("[frontend-crash] Failed to resolve log dir:", error);
   }
 
   return { logDir, loggedAt, written };

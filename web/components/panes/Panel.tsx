@@ -7,6 +7,7 @@ import type { Panel as PanelType, Tab } from "@/types";
 import { useShallow } from "zustand/react/shallow";
 import { useDialogStore, usePanesStore, useFullscreenStore, useFileTreeStore, useWorkspacesStore } from "@/stores";
 import { terminalService, popOutTab } from "@/services";
+import { isTauriRuntime } from "@/services/runtime";
 import type { PopupTabData } from "@/services/popupWindowService";
 import { computeGlobalTabNumbers } from "@/lib/tabNumbering";
 import { LayoutVisibilityContext } from "@/contexts/LayoutVisibilityContext";
@@ -496,7 +497,7 @@ export default memo(function Panel({ pane }: PanelProps) {
             onCloseTabsToRight={handleCloseTabsToRight}
             onCloseOtherTabs={handleCloseOtherTabs}
             onRevealInExplorer={handleRevealInExplorer}
-            onPopOutTab={handlePopOutTab}
+            onPopOutTab={isTauriRuntime() ? handlePopOutTab : undefined}
             canEditWorkspaceEnvironment={canEditWorkspaceEnvironment}
             onEditWorkspaceEnvironment={handleEditWorkspaceEnvironment}
           />

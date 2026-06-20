@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { apiGet, invokeOrApi } from "./apiClient";
 
 /** Codex 会话（结构与后端 codex_session_service::CodexSession 对应） */
 export interface CodexSession {
@@ -18,10 +18,15 @@ export const codexService = {
     runtimeKind?: string,
     wslDistro?: string,
   ): Promise<CodexSession[]> {
-    return invoke<CodexSession[]>("list_codex_sessions", {
-      projectPath,
-      runtimeKind,
-      wslDistro,
-    });
+    return invokeOrApi<CodexSession[]>(
+      "list_codex_sessions",
+      { projectPath, runtimeKind, wslDistro },
+      () =>
+        apiGet<CodexSession[]>("/api/codex/sessions", {
+          projectPath,
+          runtimeKind,
+          wslDistro,
+        }),
+    );
   },
 };

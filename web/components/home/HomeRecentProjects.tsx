@@ -48,6 +48,11 @@ export default function HomeRecentProjects({ records, onOpenTerminal }: HomeRece
   const machines = useSshMachinesStore((state) => state.machines);
   const formatRelativeTime = useFormatRelativeTime();
 
+  const openRecentProject = (opts: OpenTerminalOptions) => {
+    setAppViewMode("panes");
+    onOpenTerminal(opts);
+  };
+
   const uniqueRecords = deduplicateRecords(records).slice(0, 8);
 
   if (uniqueRecords.length === 0) {
@@ -164,7 +169,7 @@ export default function HomeRecentProjects({ records, onOpenTerminal }: HomeRece
                 className="p-1.5 rounded-md cursor-pointer transition-colors text-[var(--app-text-secondary)] hover:bg-[var(--app-accent)] hover:text-[var(--primary-foreground)]"
                 title={t("open")}
                 onClick={() =>
-                  onOpenTerminal({
+                  openRecentProject({
                     path: record.projectPath,
                     workspaceName: record.workspaceName,
                     providerId: record.providerId,
@@ -180,7 +185,7 @@ export default function HomeRecentProjects({ records, onOpenTerminal }: HomeRece
                   className="p-1.5 rounded-md cursor-pointer transition-colors text-[var(--app-accent)] hover:bg-[var(--app-accent)] hover:text-[var(--primary-foreground)]"
                   title={t("resume")}
                   onClick={() =>
-                    onOpenTerminal(buildLaunchRecordTerminalOptions(record, workspaces, machines))
+                    openRecentProject(buildLaunchRecordTerminalOptions(record, workspaces, machines))
                   }
                 >
                   <RotateCcw className="w-3.5 h-3.5" />

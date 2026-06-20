@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { Pin, Minimize2, Sun, Moon, Terminal, ArrowUpCircle, Eye, EyeOff } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Pin, Minimize2, Sun, Moon, Terminal, ArrowUpCircle, Eye, EyeOff, LockKeyhole } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import {
   Tooltip,
@@ -18,13 +17,14 @@ import {
 } from "@/stores";
 import { useCCChanStore } from "@/stores/useCCChanStore";
 import { triggerUpdate } from "@/services";
+import { webAuthService, type WebAuthStatus } from "@/services/webAuthService";
 import { useWindowControl } from "@/hooks/useWindowControl";
 import { isBusyStatus } from "@/types";
+import { invokeIfTauri, isTauriRuntime } from "@/services/runtime";
 
 export default function StatusBar() {
   const { t, i18n } = useTranslation();
   const isDark = useThemeStore((s) => s.isDark);
-  const toggleTheme = useThemeStore((s) => s.toggleTheme);
   const enterMiniMode = useMiniModeStore((s) => s.enterMiniMode);
   const miniModeTransitioning = useMiniModeStore((s) => s.isTransitioning);
   const selectedWorkspace = useWorkspacesStore((s) => s.selectedWorkspace);
@@ -35,6 +35,7 @@ export default function StatusBar() {
   const loadCCChan = useCCChanStore((s) => s.load);
   const setCCChanVisible = useCCChanStore((s) => s.setWindowVisible);
   const [updating, setUpdating] = useState(false);
+  const [webAuthStatus, setWebAuthStatus] = useState<WebAuthStatus | null>(null);
   const { isPinned, togglePin } = useWindowControl();
 
   const activeWorkspace = selectedWorkspace();
@@ -44,6 +45,31 @@ export default function StatusBar() {
   useEffect(() => {
     void loadCCChan();
   }, [loadCCChan]);
+
+  const refreshWebAuthStatus = useCallback(async () => {
+    if (isTauriRuntime()) return;
+    try {
+      const status = await webAuthService.status();
+      setWebAuthStatus(status);
+    } catch (e) {
+      handleErrorSilent(e, "load web auth status");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (isTauriRuntime()) return;
+    let cancelled = false;
+    webAuthService.status()
+      .then((status) => {
+        if (!cancelled) setWebAuthStatus(status);
+      })
+      .catch((e) => handleErrorSilent(e, "load web auth status"));
+    window.addEventListener("focus", refreshWebAuthStatus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refreshWebAuthStatus);
+    };
+  }, [refreshWebAuthStatus]);
 
   const handleUpdate = async () => {
     setUpdating(true);
@@ -65,14 +91,42 @@ export default function StatusBar() {
   }
 
   async function handleToggleCCChan() {
+    if (!isTauriRuntime()) return;
     const nextVisible = !useCCChanStore.getState().settings.windowVisible;
     try {
-      await invoke(nextVisible ? "show_ccchan" : "hide_ccchan");
+      await invokeIfTauri(nextVisible ? "show_ccchan" : "hide_ccchan");
       setCCChanVisible(nextVisible);
     } catch (e) {
       handleErrorSilent(e, "toggle ccchan");
     }
   }
+
+  async function handleToggleTheme() {
+    const nextTheme = isDark ? "light" : "dark";
+    useThemeStore.getState().setThemeMode(nextTheme);
+    const store = useSettingsStore.getState();
+    if (store.settings) {
+      const updated = { ...store.settings, theme: { ...store.settings.theme, mode: nextTheme } };
+      try {
+        await store.saveSettings(updated);
+      } catch (e) {
+        handleErrorSilent(e, "save theme");
+      }
+    }
+  }
+
+  async function handleLockWeb() {
+    try {
+      await webAuthService.lock();
+      setWebAuthStatus((current) => current ? { ...current, authenticated: false } : current);
+      window.dispatchEvent(new CustomEvent("cc-panes:web-locked"));
+    } catch (e) {
+      handleErrorSilent(e, "lock web");
+    }
+  }
+
+  const showWebLock = !isTauriRuntime() && webAuthStatus !== null;
+  const canLockWeb = showWebLock && webAuthStatus.authRequired && webAuthStatus.authenticated;
 
   return (
     <div
@@ -125,7 +179,7 @@ export default function StatusBar() {
         */}
 
         {/* 版本更新提示 */}
-        {updateAvailable && updateVersion && (
+        {isTauriRuntime() && updateAvailable && updateVersion && (
           <Tooltip>
             <TooltipTrigger asChild>
               <button
@@ -150,7 +204,26 @@ export default function StatusBar() {
 
       {/* 右侧工具 */}
       <div className="flex items-center gap-0.5">
+        {showWebLock && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded transition-colors hover:bg-[var(--app-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={!canLockWeb}
+                onClick={() => void handleLockWeb()}
+              >
+                <LockKeyhole className="w-3 h-3" />
+                <span className="text-[10px] font-medium">锁定 Web</span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p>{canLockWeb ? "锁定 Web 端" : "需要先启用账号密码并设置密码"}</p>
+            </TooltipContent>
+          </Tooltip>
+        )}
+
         {/* 置顶 */}
+        {isTauriRuntime() && (
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -166,8 +239,10 @@ export default function StatusBar() {
             <p>{t("alwaysOnTop", { ns: "sidebar" })}</p>
           </TooltipContent>
         </Tooltip>
+        )}
 
         {/* 迷你模式 */}
+        {isTauriRuntime() && (
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -182,11 +257,15 @@ export default function StatusBar() {
             <p>{t("miniMode", { ns: "sidebar" })}</p>
           </TooltipContent>
         </Tooltip>
+        )}
 
         {/* 分隔线 */}
-        <div className="w-px h-3 mx-1" style={{ background: "var(--app-border)" }} />
+        {isTauriRuntime() && (
+          <div className="w-px h-3 mx-1" style={{ background: "var(--app-border)" }} />
+        )}
 
         {/* cc酱 浮窗 */}
+        {isTauriRuntime() && (
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -202,6 +281,7 @@ export default function StatusBar() {
             <p>{ccChanVisible ? "隐藏 cc酱" : "显示 cc酱"}</p>
           </TooltipContent>
         </Tooltip>
+        )}
 
         {/* 语言切换 */}
         <Tooltip>
@@ -225,7 +305,7 @@ export default function StatusBar() {
               className={`p-0.5 rounded transition-colors hover:bg-[var(--app-hover)] ${
                 isDark ? "text-amber-400" : ""
               }`}
-              onClick={toggleTheme}
+              onClick={() => void handleToggleTheme()}
             >
               {isDark ? <Sun className="w-3 h-3" /> : <Moon className="w-3 h-3" />}
             </button>

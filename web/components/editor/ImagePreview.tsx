@@ -9,6 +9,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { filesystemService } from "@/services/filesystemService";
+import { isTauriRuntime } from "@/services/runtime";
 import EditorBreadcrumb from "./EditorBreadcrumb";
 
 interface ImagePreviewProps {
@@ -39,9 +40,10 @@ export default function ImagePreview({ filePath }: ImagePreviewProps) {
   const [naturalSize, setNaturalSize] = useState<{ w: number; h: number } | null>(null);
   const [fileSize, setFileSize] = useState<number | null>(null);
   const [imgError, setImgError] = useState(false);
+  const [webAssetUrl, setWebAssetUrl] = useState<string | null>(null);
   const imgRef = useRef<HTMLImageElement>(null);
 
-  const assetUrl = convertFileSrc(filePath);
+  const assetUrl = isTauriRuntime() ? convertFileSrc(filePath) : webAssetUrl;
   const extLabel = getExtensionLabel(filePath);
 
   // 获取文件大小
@@ -51,6 +53,15 @@ export default function ImagePreview({ filePath }: ImagePreviewProps) {
       if (!cancelled) setFileSize(info.size);
     }).catch(() => { /* 忽略 */ });
     return () => { cancelled = true; };
+  }, [filePath]);
+
+  useEffect(() => {
+    setImgError(false);
+    if (isTauriRuntime()) {
+      setWebAssetUrl(null);
+      return;
+    }
+    setWebAssetUrl(`/api/fs/raw?path=${encodeURIComponent(filePath)}`);
   }, [filePath]);
 
   const handleImageLoad = useCallback(() => {
@@ -243,7 +254,7 @@ export default function ImagePreview({ filePath }: ImagePreviewProps) {
       >
         <img
           ref={imgRef}
-          src={assetUrl}
+          src={assetUrl ?? undefined}
           alt={filePath.split(/[/\\]/).pop() || "image"}
           style={getImageStyle()}
           onLoad={handleImageLoad}

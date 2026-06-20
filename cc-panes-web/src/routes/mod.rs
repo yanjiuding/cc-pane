@@ -1,20 +1,28 @@
+pub mod agent_sessions;
 pub mod git;
 pub mod history;
+pub mod journal;
 pub mod launch_profiles;
 pub mod local_history;
 pub mod mcp;
 pub mod memory;
 pub mod plans;
+pub mod process;
 pub mod resources;
 pub mod runner;
 pub mod skills;
 pub mod ssh_machines;
 pub mod static_files;
+pub mod system;
 pub mod terminal;
 pub mod usage_stats;
 pub mod workflow;
 
+#[cfg(test)]
+mod auth_tests;
+
 use axum::{
+    middleware,
     routing::{delete, get, patch, post, put},
     Router,
 };
@@ -145,6 +153,37 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/worktrees", get(git::list_worktrees))
         .route("/api/worktrees", post(git::add_worktree))
         .route("/api/worktrees", delete(git::remove_worktree))
+        .route("/api/runtime/cwd", get(system::get_app_cwd))
+        .route("/api/cli-tools", get(system::list_cli_tools))
+        .route("/api/project-cli-hooks", get(system::get_project_cli_hooks))
+        .route(
+            "/api/project-cli-hooks",
+            put(system::set_project_cli_hook_enabled),
+        )
+        .route("/api/processes/claude", get(process::scan_claude_processes))
+        .route(
+            "/api/processes/claude",
+            post(process::kill_claude_processes),
+        )
+        .route(
+            "/api/processes/claude/{pid}",
+            delete(process::kill_claude_process),
+        )
+        .route("/api/journal/session", post(journal::add_journal_session))
+        .route("/api/journal/index", get(journal::get_journal_index))
+        .route("/api/journal/recent", get(journal::get_recent_journal))
+        .route(
+            "/api/claude/sessions",
+            get(agent_sessions::list_claude_sessions),
+        )
+        .route(
+            "/api/claude/sessions/all",
+            get(agent_sessions::list_all_claude_sessions),
+        )
+        .route(
+            "/api/codex/sessions",
+            get(agent_sessions::list_codex_sessions),
+        )
         .route("/api/runner/profiles", get(runner::list_profiles))
         .route("/api/runner/profiles", put(runner::upsert_profile))
         .route("/api/runner/profiles/{id}", get(runner::get_profile))
@@ -479,8 +518,13 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/providers/{id}", delete(resources::remove_provider))
         .route("/api/settings", get(resources::get_settings))
         .route("/api/settings", put(resources::update_settings))
+        .route(
+            "/api/settings/web-access/password",
+            post(resources::set_web_access_password),
+        )
         .route("/api/fs/list", get(resources::fs_list_directory))
         .route("/api/fs/read", get(resources::fs_read_file))
+        .route("/api/fs/raw", get(resources::fs_read_raw_file))
         .route("/api/fs/write", post(resources::fs_write_file))
         .route("/api/fs/create-file", post(resources::fs_create_file))
         .route(
@@ -589,10 +633,21 @@ pub fn build_router(state: AppState) -> Router {
         );
 
     let ws = Router::new().route("/ws/{session_id}", get(ws_upgrade));
-
-    Router::new()
+    let auth = Router::new()
+        .route("/api/auth/status", get(crate::web_auth::status))
+        .route("/api/auth/login", post(crate::web_auth::login))
+        .route("/api/auth/logout", post(crate::web_auth::logout));
+    let protected = Router::new()
         .merge(api)
         .merge(ws)
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::web_auth::access_control,
+        ));
+
+    Router::new()
+        .merge(auth)
+        .merge(protected)
         .fallback(static_files::static_handler)
         .layer(CorsLayer::permissive())
         .with_state(state)

@@ -20,7 +20,7 @@ import {
   useFileBrowserStore,
   useEditorTabsStore,
 } from "@/stores";
-import { isTauriReady } from "@/utils";
+import { isTauriRuntime } from "@/services/runtime";
 import { computeGlobalTabNumbers } from "@/lib/tabNumbering";
 
 import type { CliTool, LaunchProviderSelection, PaneNode, Panel, SshConnectionInfo, WslLaunchInfo } from "@/types";
@@ -60,7 +60,7 @@ function collectPanels(node: PaneNode): Panel[] {
 
 export function useOrchestratorListener() {
   useEffect(() => {
-    if (!isTauriReady()) return;
+    if (!isTauriRuntime()) return;
 
     const unlisteners: (() => void)[] = [];
 

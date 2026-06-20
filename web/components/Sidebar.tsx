@@ -1,9 +1,8 @@
 import { useEffect, useCallback, useRef, useState } from "react";
-import { handleErrorSilent } from "@/utils";
+import { handleErrorSilent, isTauriRuntime, waitForTauri } from "@/utils";
 import { useWorkspacesStore, useProvidersStore, useSshMachinesStore } from "@/stores";
 import type { ActivityView } from "@/stores/useActivityBarStore";
 import { historyService, localHistoryService } from "@/services";
-import { waitForTauri } from "@/utils";
 import ExplorerView from "@/components/sidebar/ExplorerView";
 import WorkspaceEnvironmentPanel from "@/components/sidebar/WorkspaceEnvironmentPanel";
 import SessionsView from "@/components/sidebar/SessionsView";
@@ -16,6 +15,10 @@ const SIDEBAR_WIDTH_KEY = "cc-panes-sidebar-width";
 const DEFAULT_WIDTH = 280;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 500;
+
+async function waitForRuntimeReady(): Promise<boolean> {
+  return isTauriRuntime() ? waitForTauri() : true;
+}
 
 function loadSidebarWidth(): number {
   try {
@@ -85,7 +88,7 @@ export default function Sidebar({
   }, []);
 
   useEffect(() => {
-    waitForTauri().then(async (ready) => {
+    waitForRuntimeReady().then(async (ready) => {
       if (!ready) return;
       await loadWorkspaces();
       historyService.list(1).catch(() => {}); // warm up

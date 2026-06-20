@@ -1,9 +1,9 @@
 import { Copy, Play, FolderOpen, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
-import { formatFullTime } from "@/utils";
+import { formatFullTime, isTauriRuntime } from "@/utils";
 import type { LaunchRecord } from "@/services";
-import { invoke } from "@tauri-apps/api/core";
+import { providerService } from "@/services/providerService";
 import { toast } from "sonner";
 
 interface ResumeDetailPopoverProps {
@@ -44,7 +44,12 @@ export default function ResumeDetailPopover({ record, onResume, onDelete, childr
   const handleOpenFolder = async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      await invoke("plugin:opener|reveal_item_in_dir", { path: record.projectPath });
+      if (!isTauriRuntime()) {
+        await navigator.clipboard.writeText(record.projectPath);
+        toast.success(t("copiedToClipboard"));
+        return;
+      }
+      await providerService.openPathInExplorer(record.projectPath);
     } catch {
       // ignore
     }

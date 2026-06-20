@@ -627,10 +627,19 @@ impl OrchestratorService {
             ));
         }
 
-        let port_holder = *self.port.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(port) = port_holder {
-            warn!("[orchestrator] Server already running on port {}", port);
-            return Ok(());
+        {
+            let mut port_guard = self.port.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(port) = *port_guard {
+                if local_orchestrator_endpoint_reachable(port) {
+                    warn!("[orchestrator] Server already running on port {}", port);
+                    return Ok(());
+                }
+                warn!(
+                    "[orchestrator] Stored port {} is not reachable; restarting server",
+                    port
+                );
+                *port_guard = None;
+            }
         }
 
         let port_mutex = Arc::new(Mutex::new(None::<u16>));
@@ -7167,6 +7176,11 @@ fn strip_unc_prefix(path: String) -> String {
 #[cfg(not(windows))]
 fn strip_unc_prefix(path: String) -> String {
     path
+}
+
+fn local_orchestrator_endpoint_reachable(port: u16) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(250)).is_ok()
 }
 
 #[cfg(test)]

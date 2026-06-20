@@ -1,10 +1,10 @@
 import { useEffect } from "react";
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { emitTo } from "@tauri-apps/api/event";
 import { usePanesStore } from "@/stores";
 import { collectPanels } from "@/stores/paneTreeHelpers";
 import { collectTerminalLeaves } from "@/lib/paneSessions";
 import { layoutSwitcherService, type LayoutSwitcherSnapshot } from "@/services/layoutSwitcherService";
-import { isTauriReady } from "@/utils";
+import { isTauriRuntime, listenIfTauri } from "@/services/runtime";
 import type { PaneNode, Panel } from "@/types";
 
 const STATE_EVENT = "layout-switcher:state";
@@ -48,7 +48,7 @@ function emitSnapshot() {
 
 export default function useLayoutSwitcherSync() {
   useEffect(() => {
-    if (!isTauriReady()) return;
+    if (!isTauriRuntime()) return;
 
     let disposed = false;
     let unlistenRequest: (() => void) | null = null;
@@ -58,7 +58,7 @@ export default function useLayoutSwitcherSync() {
       emitSnapshot();
     });
 
-    listen(REQUEST_STATE_EVENT, () => {
+    listenIfTauri(REQUEST_STATE_EVENT, () => {
       emitSnapshot();
     }).then((unlisten) => {
       if (disposed) {
@@ -68,7 +68,7 @@ export default function useLayoutSwitcherSync() {
       }
     }).catch(() => {});
 
-    listen<{ layoutId?: string }>(SWITCH_EVENT, (event) => {
+    listenIfTauri<{ layoutId?: string }>(SWITCH_EVENT, (event) => {
       const layoutId = event.payload?.layoutId;
       if (!layoutId) return;
       usePanesStore.getState().switchLayout(layoutId);

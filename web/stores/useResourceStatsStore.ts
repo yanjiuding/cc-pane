@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { ResourceStats } from "@/types";
+import { listenWebviewIfTauri } from "@/services/runtime";
 
 interface ResourceStatsState {
   stats: ResourceStats | null;
@@ -20,7 +20,7 @@ export const useResourceStatsStore = create<ResourceStatsState>((set, get) => ({
     if (get()._initialized) return;
     set({ _initialized: true });
 
-    const unlistenFn = await getCurrentWebview().listen<ResourceStats>(
+    const unlistenFn = await listenWebviewIfTauri<ResourceStats>(
       "resource-stats",
       (event) => {
         set({ stats: event.payload });

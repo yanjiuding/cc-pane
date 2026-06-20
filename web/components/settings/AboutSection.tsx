@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
+import packageJson from "../../../package.json";
 import { useUpdateStore } from "@/stores";
 import { logService } from "@/services";
 import { Button } from "@/components/ui/button";
 import { RefreshCw, FolderOpen } from "lucide-react";
+import { isTauriRuntime } from "@/services/runtime";
 
 export default function AboutSection() {
   const { t } = useTranslation("settings");
@@ -14,6 +16,10 @@ export default function AboutSection() {
   const updateVersion = useUpdateStore((s) => s.version);
 
   useEffect(() => {
+    if (!isTauriRuntime()) {
+      setVersion(packageJson.version);
+      return;
+    }
     getVersion().then(setVersion);
   }, []);
 
@@ -21,6 +27,7 @@ export default function AboutSection() {
     setChecking(true);
     try {
       // 动态 import 防止 updater 插件未注册时导致整个组件不渲染
+      if (!isTauriRuntime()) return;
       const { checkForAppUpdates } = await import("@/services/updaterService");
       await checkForAppUpdates(true);
     } catch (error) {
@@ -69,6 +76,7 @@ export default function AboutSection() {
       )}
 
       <div className="flex gap-2 mt-2">
+        {isTauriRuntime() && (
         <Button
           variant="outline"
           size="sm"
@@ -78,7 +86,9 @@ export default function AboutSection() {
           <RefreshCw className={`w-4 h-4 mr-1.5 ${checking ? "animate-spin" : ""}`} />
           {checking ? t("checking") : t("checkUpdate")}
         </Button>
+        )}
 
+        {isTauriRuntime() && (
         <Button
           variant="outline"
           size="sm"
@@ -93,6 +103,7 @@ export default function AboutSection() {
           <FolderOpen className="w-4 h-4 mr-1.5" />
           {t("openLogDir")}
         </Button>
+        )}
       </div>
     </div>
   );

@@ -12,7 +12,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/sidebar/WorkspaceDialogs";
 import { worktreeService, type WorktreeInfo } from "@/services";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { providerService } from "@/services/providerService";
+import { isTauriRuntime } from "@/services/runtime";
 import { handleError, handleErrorSilent } from "@/utils";
 
 interface WorktreeManagerProps {
@@ -86,6 +87,15 @@ export default function WorktreeManager({ open, onOpenChange, projectPath, onOpe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingRemove, projectPath, t]);
 
+  const revealWorktree = useCallback(async (path: string) => {
+    if (!isTauriRuntime()) {
+      await navigator.clipboard.writeText(path).catch((e) => handleErrorSilent(e, "copy path"));
+      toast.info(t("sidebar:filetree.pathCopied", { defaultValue: "Path copied" }));
+      return;
+    }
+    await providerService.openPathInExplorer(path).catch((e) => handleErrorSilent(e, "open path"));
+  }, [t]);
+
   return (
     <>
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -146,7 +156,7 @@ export default function WorktreeManager({ open, onOpenChange, projectPath, onOpe
                       <Button variant="ghost" size="sm" onClick={() => onOpenWorktree(wt.path)} title={t("sidebar:openHere")}>
                         <Terminal size={14} />
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={() => openPath(wt.path).catch((e) => handleErrorSilent(e, "open path"))} title={t("sidebar:openFolder")}>
+                      <Button variant="ghost" size="sm" onClick={() => revealWorktree(wt.path)} title={t("sidebar:openFolder")}>
                         <FolderOpen size={14} />
                       </Button>
                       {!wt.isMain && (

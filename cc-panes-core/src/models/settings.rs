@@ -4,6 +4,8 @@ use std::collections::HashMap;
 const DEFAULT_TERMINAL_FONT_SIZE: u16 = 15;
 const MIN_TERMINAL_FONT_SIZE: u16 = 10;
 const MAX_TERMINAL_FONT_SIZE: u16 = 32;
+const DEFAULT_WEB_ACCESS_PORT: u16 = 18080;
+const WEB_PASSWORD_HASH_ITERATIONS: usize = 120_000;
 
 /// 应用设置
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -29,6 +31,8 @@ pub struct AppSettings {
     pub ccchan: CCChanSettings,
     #[serde(default)]
     pub layout_switcher: LayoutSwitcherSettings,
+    #[serde(default)]
+    pub web_access: WebAccessSettings,
 }
 
 impl AppSettings {
@@ -37,6 +41,7 @@ impl AppSettings {
         self.shortcuts.merge_missing_defaults();
         self.voice.merge_missing_defaults();
         self.ccchan.merge_missing_defaults();
+        self.web_access.merge_missing_defaults();
     }
 }
 
@@ -302,6 +307,100 @@ pub struct LayoutSwitcherSettings {
     pub pinned: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebAccessSettings {
+    /// 桌面端启动时是否自动启动 Web UI 服务。
+    #[serde(default = "default_web_access_enabled")]
+    pub enabled: bool,
+    /// 启动 Web UI 服务后是否自动打开浏览器。
+    #[serde(default)]
+    pub auto_open: bool,
+    #[serde(default = "default_web_access_port")]
+    pub port: u16,
+    /// 是否允许局域网访问。关闭时只监听 127.0.0.1。
+    #[serde(default)]
+    pub allow_lan: bool,
+    /// 精确 IP 白名单；为空表示允许同网段客户端访问。
+    #[serde(default)]
+    pub ip_whitelist: Vec<String>,
+    /// 启用账号密码登录。若未配置密码，运行时会降级为仅本机访问。
+    #[serde(default)]
+    pub auth_enabled: bool,
+    #[serde(default = "default_web_access_username")]
+    pub username: String,
+    #[serde(default)]
+    pub password_salt: Option<String>,
+    #[serde(default)]
+    pub password_hash: Option<String>,
+    /// Web 端空闲自动锁屏分钟数；0 表示不自动锁屏。
+    #[serde(default = "default_web_lock_on_idle_minutes")]
+    pub lock_on_idle_minutes: u16,
+}
+
+impl WebAccessSettings {
+    pub fn merge_missing_defaults(&mut self) {
+        if !(1..=65535).contains(&self.port) {
+            self.port = default_web_access_port();
+        }
+        if self.username.trim().is_empty() {
+            self.username = default_web_access_username();
+        } else {
+            self.username = self.username.trim().to_string();
+        }
+        self.ip_whitelist = self
+            .ip_whitelist
+            .iter()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .collect();
+        if self.lock_on_idle_minutes > 24 * 60 {
+            self.lock_on_idle_minutes = default_web_lock_on_idle_minutes();
+        }
+        if self.password_hash.as_deref().is_some_and(str::is_empty) {
+            self.password_hash = None;
+        }
+        if self.password_salt.as_deref().is_some_and(str::is_empty) {
+            self.password_salt = None;
+        }
+    }
+
+    pub fn password_configured(&self) -> bool {
+        self.password_hash.is_some() && self.password_salt.is_some()
+    }
+
+    pub fn auth_required(&self) -> bool {
+        self.auth_enabled && self.password_configured()
+    }
+
+    pub fn set_password(&mut self, password: &str) -> anyhow::Result<()> {
+        let trimmed = password.trim();
+        if trimmed.is_empty() {
+            self.password_salt = None;
+            self.password_hash = None;
+            return Ok(());
+        }
+        let salt = generate_salt_hex();
+        let hash = hash_web_password(trimmed, &salt)?;
+        self.password_salt = Some(salt);
+        self.password_hash = Some(hash);
+        Ok(())
+    }
+
+    pub fn verify_password(&self, password: &str) -> bool {
+        let Some(salt) = self.password_salt.as_deref() else {
+            return false;
+        };
+        let Some(expected) = self.password_hash.as_deref() else {
+            return false;
+        };
+        let Ok(actual) = hash_web_password(password, salt) else {
+            return false;
+        };
+        constant_time_eq(actual.as_bytes(), expected.as_bytes())
+    }
+}
+
 impl CCChanSettings {
     pub fn merge_missing_defaults(&mut self) {
         if !matches!(self.ai_engine.as_str(), "claude" | "codex") {
@@ -347,6 +446,80 @@ fn default_voice_mimo_model() -> String {
 
 fn default_voice_max_record_seconds() -> u32 {
     60
+}
+
+fn default_web_access_enabled() -> bool {
+    true
+}
+
+fn default_web_access_port() -> u16 {
+    DEFAULT_WEB_ACCESS_PORT
+}
+
+fn default_web_access_username() -> String {
+    "admin".to_string()
+}
+
+fn default_web_lock_on_idle_minutes() -> u16 {
+    30
+}
+
+fn generate_salt_hex() -> String {
+    use rand::{rngs::OsRng, RngCore};
+
+    let mut bytes = [0_u8; 16];
+    OsRng.fill_bytes(&mut bytes);
+    bytes_to_hex(&bytes)
+}
+
+fn hash_web_password(password: &str, salt_hex: &str) -> anyhow::Result<String> {
+    use sha2::{Digest, Sha256};
+
+    let salt = hex_to_bytes(salt_hex)?;
+    let mut digest = Vec::with_capacity(password.len() + salt.len());
+    digest.extend_from_slice(password.as_bytes());
+    digest.extend_from_slice(&salt);
+
+    for _ in 0..WEB_PASSWORD_HASH_ITERATIONS {
+        let mut hasher = Sha256::new();
+        hasher.update(&digest);
+        hasher.update(&salt);
+        digest = hasher.finalize().to_vec();
+    }
+
+    Ok(format!(
+        "sha256:{}:{}",
+        WEB_PASSWORD_HASH_ITERATIONS,
+        bytes_to_hex(&digest)
+    ))
+}
+
+fn hex_to_bytes(value: &str) -> anyhow::Result<Vec<u8>> {
+    let value = value.trim();
+    if !value.len().is_multiple_of(2) {
+        anyhow::bail!("invalid hex length");
+    }
+    let mut bytes = Vec::with_capacity(value.len() / 2);
+    for chunk in value.as_bytes().chunks(2) {
+        let hex = std::str::from_utf8(chunk)?;
+        bytes.push(u8::from_str_radix(hex, 16)?);
+    }
+    Ok(bytes)
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let diff = left
+        .iter()
+        .zip(right.iter())
+        .fold(0_u8, |acc, (left, right)| acc | (left ^ right));
+    diff == 0
 }
 
 // ---- 默认值实现 ----
@@ -471,6 +644,23 @@ impl Default for CCChanSettings {
             window_visible: true,
             window_x: None,
             window_y: None,
+        }
+    }
+}
+
+impl Default for WebAccessSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_web_access_enabled(),
+            auto_open: false,
+            port: default_web_access_port(),
+            allow_lan: false,
+            ip_whitelist: Vec::new(),
+            auth_enabled: false,
+            username: default_web_access_username(),
+            password_salt: None,
+            password_hash: None,
+            lock_on_idle_minutes: default_web_lock_on_idle_minutes(),
         }
     }
 }

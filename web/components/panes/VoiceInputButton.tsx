@@ -6,6 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { terminalService, voiceService } from "@/services";
 import { useSettingsStore, useVoiceInputStore } from "@/stores";
 import { cn } from "@/lib/utils";
+import { isTauriRuntime } from "@/services/runtime";
 
 type VoiceStatus = "idle" | "recording" | "transcribing";
 type VoiceButtonPosition = { right: number; bottom: number };
@@ -208,6 +209,7 @@ export default function VoiceInputButton({ sessionId, paneId, disabled = false }
   }, []);
 
   const unavailableReason = useMemo(() => {
+    if (!isTauriRuntime()) return t("voiceUnavailable");
     if (!sessionId) return t("voiceNoSession");
     if (disabled) return t("voiceUnavailable");
     if (!voice?.enabled) return t("voiceEnableInSettings");

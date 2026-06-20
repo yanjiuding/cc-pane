@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { apiGet, apiJson, apiNoContent, invokeOrApi } from "./apiClient";
 
 export interface WorktreeInfo {
   path: string;
@@ -15,14 +15,18 @@ export const worktreeService = {
    * 检查项目是否为 Git 仓库
    */
   async isGitRepo(projectPath: string): Promise<boolean> {
-    return invoke<boolean>("is_git_repo", { projectPath });
+    return invokeOrApi<boolean>("is_git_repo", { projectPath }, () =>
+      apiGet<boolean>("/api/worktrees/is-git-repo", { projectPath }),
+    );
   },
 
   /**
    * 列出所有 worktree
    */
   async list(projectPath: string): Promise<WorktreeInfo[]> {
-    return invoke<WorktreeInfo[]>("list_worktrees", { projectPath });
+    return invokeOrApi<WorktreeInfo[]>("list_worktrees", { projectPath }, () =>
+      apiGet<WorktreeInfo[]>("/api/worktrees", { projectPath }),
+    );
   },
 
   /**
@@ -33,13 +37,25 @@ export const worktreeService = {
     name: string,
     branch?: string
   ): Promise<string> {
-    return invoke<string>("add_worktree", { projectPath, name, branch });
+    return invokeOrApi<string>("add_worktree", { projectPath, name, branch }, () =>
+      apiJson<string>("/api/worktrees", "POST", {
+        projectPath,
+        name,
+        branch: branch ?? null,
+      }),
+    );
   },
 
   /**
    * 删除 worktree
    */
   async remove(projectPath: string, worktreePath: string): Promise<void> {
-    return invoke("remove_worktree", { projectPath, worktreePath });
+    return invokeOrApi<void>("remove_worktree", { projectPath, worktreePath }, () =>
+      apiNoContent("/api/worktrees", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ projectPath, worktreePath }),
+      }),
+    );
   },
 };

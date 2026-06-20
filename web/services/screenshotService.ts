@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeOrApi } from "./apiClient";
 
 export interface ScreenshotResult {
   filePath: string;
@@ -10,9 +10,9 @@ export interface ScreenshotResult {
 export const screenshotService = {
   /** 更新截图快捷键 */
   updateShortcut(oldShortcut: string, newShortcut: string): Promise<void> {
-    return invoke("screenshot_update_shortcut", { oldShortcut, newShortcut });
+    return invokeOrApi<void>("screenshot_update_shortcut", { oldShortcut, newShortcut }, async () => {});
   },
   saveClipboardImage(): Promise<ScreenshotResult | null> {
-    return invoke<ScreenshotResult | null>("screenshot_save_clipboard_image");
+    return invokeOrApi<ScreenshotResult | null>("screenshot_save_clipboard_image", undefined, async () => null);
   },
 };

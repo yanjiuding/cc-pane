@@ -3,11 +3,13 @@ import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getErrorMessage } from "@/utils";
 import { useUpdateStore } from "@/stores";
+import { isTauriRuntime } from "./runtime";
 
 /**
  * 静默检查更新，结果写入 useUpdateStore（不弹窗）
  */
 export async function checkUpdateSilent(): Promise<void> {
+  if (!isTauriRuntime()) return;
   try {
     const update = await check();
     if (update) {
@@ -25,6 +27,12 @@ export async function checkUpdateSilent(): Promise<void> {
  * @param userInitiated - true: 无更新也弹提示；false: 仅写入 store
  */
 export async function checkForAppUpdates(userInitiated: boolean): Promise<void> {
+  if (!isTauriRuntime()) {
+    if (userInitiated) {
+      console.info("[updater] Updates are only available in the desktop app");
+    }
+    return;
+  }
   try {
     const update = await check();
 
@@ -58,6 +66,7 @@ export async function checkForAppUpdates(userInitiated: boolean): Promise<void> 
  * 重新 check → 弹确认 → 下载安装 → 重启
  */
 export async function triggerUpdate(): Promise<void> {
+  if (!isTauriRuntime()) return;
   try {
     const update = await check();
     if (!update) {

@@ -25,7 +25,8 @@ fs.mkdirSync(d, { recursive: true });
 for (const f of fs.readdirSync(d).filter(f =>
   f.startsWith("cc-panes-hook") ||
   f.startsWith("cc-panes-cli-hook") ||
-  f.startsWith("cc-panes-daemon")
+  f.startsWith("cc-panes-daemon") ||
+  f.startsWith("cc-panes-web")
 )) {
   fs.unlinkSync(path.join(d, f));
 }
@@ -55,6 +56,7 @@ function copyBinary(baseName) {
 
 copyBinary("cc-panes-cli-hook");
 copyBinary("cc-panes-daemon");
+copyBinary("cc-panes-web");
 
 // 2. 复制 .claude/ skills 和 agents 到 src-tauri/resources/claude-bundle/
 const srcClaude = ".claude";

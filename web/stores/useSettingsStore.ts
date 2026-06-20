@@ -5,7 +5,7 @@ import { handleErrorSilent } from "@/utils";
 import { getDefaultSidebarFavoriteLaunchActionIds } from "@/components/sidebar/launchMenu";
 import { DEFAULT_CCCHAN_SETTINGS } from "./useCCChanStore";
 import type { CCChanSettings } from "@/ccchan/types";
-import type { LayoutSwitcherSettings } from "@/types";
+import type { LayoutSwitcherSettings, WebAccessSettings } from "@/types";
 
 const defaultCloseToTray = () => {
   if (typeof navigator === "undefined") {
@@ -30,6 +30,19 @@ const DEFAULT_LAYOUT_SWITCHER_SETTINGS: LayoutSwitcherSettings = {
   pinned: false,
 };
 
+const DEFAULT_WEB_ACCESS_SETTINGS: WebAccessSettings = {
+  enabled: true,
+  autoOpen: false,
+  port: 18080,
+  allowLan: false,
+  ipWhitelist: [],
+  authEnabled: false,
+  username: "admin",
+  passwordSalt: null,
+  passwordHash: null,
+  lockOnIdleMinutes: 30,
+};
+
 function withCCChanSettings(settings: AppSettings): AppSettingsWithCCChan {
   const maybeWithCCChan = settings as Partial<AppSettingsWithCCChan>;
   return {
@@ -37,6 +50,10 @@ function withCCChanSettings(settings: AppSettings): AppSettingsWithCCChan {
     layoutSwitcher: {
       ...DEFAULT_LAYOUT_SWITCHER_SETTINGS,
       ...settings.layoutSwitcher,
+    },
+    webAccess: {
+      ...DEFAULT_WEB_ACCESS_SETTINGS,
+      ...settings.webAccess,
     },
     ccchan: {
       ...DEFAULT_CCCHAN_SETTINGS,
@@ -170,5 +187,6 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       maxRecordSeconds: 60,
     },
     layoutSwitcher: DEFAULT_LAYOUT_SWITCHER_SETTINGS,
+    webAccess: DEFAULT_WEB_ACCESS_SETTINGS,
   }),
 }));

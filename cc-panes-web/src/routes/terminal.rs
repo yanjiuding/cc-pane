@@ -9,6 +9,7 @@ use cc_panes_core::{
         SshConnectionInfo, TerminalReplaySnapshot,
     },
     services::{terminal_service::SessionOutput, SessionStatusInfo},
+    utils::normalize_session_request_for_current_host,
 };
 use serde::{Deserialize, Serialize};
 
@@ -103,7 +104,7 @@ pub async fn create_session(
         .or(req.cwd)
         .unwrap_or_else(|| state.default_cwd.clone());
 
-    let core_request = CoreCreateSessionRequest {
+    let core_request = normalize_session_request_for_current_host(CoreCreateSessionRequest {
         launch_id: req.core.launch_id,
         project_path,
         cols: req.core.cols.unwrap_or(120),
@@ -122,7 +123,7 @@ pub async fn create_session(
         initial_prompt: req.core.initial_prompt,
         ssh: req.core.ssh,
         wsl: req.core.wsl,
-    };
+    });
 
     let session_id = state
         .terminal_backend
@@ -471,6 +472,15 @@ mod tests {
                 process_monitor_service.clone(),
             )),
             process_monitor_service,
+            project_cli_hooks_service: Arc::new(
+                cc_panes_core::services::ProjectCliHooksService::new(Arc::new(
+                    cc_cli_adapters::CliToolRegistry::new(),
+                )),
+            ),
+            journal_service: Arc::new(cc_panes_core::services::JournalService::new(
+                app_paths.workspaces_dir(),
+            )),
+            cli_registry: Arc::new(cc_cli_adapters::CliToolRegistry::new()),
             mcp_config_service: Arc::new(McpConfigService::new()),
             shared_mcp_service: Arc::new(SharedMcpService::new(&app_paths)),
             skill_service: Arc::new(cc_panes_core::services::SkillService::new()),
@@ -483,6 +493,7 @@ mod tests {
             )),
             usage_stats_service,
             ws_emitter: Arc::new(WsEmitter::new()),
+            web_auth: Arc::new(crate::web_auth::WebAuthStore::default()),
             default_cwd: "/default/project".to_string(),
             output_mode: crate::state::TerminalOutputMode::Emitter,
         }

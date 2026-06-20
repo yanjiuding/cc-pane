@@ -150,6 +150,18 @@ export function createTestSettings(overrides?: Partial<AppSettings>): AppSetting
       windowY: null,
       pinned: false,
     },
+    webAccess: {
+      enabled: true,
+      autoOpen: false,
+      port: 18080,
+      allowLan: false,
+      ipWhitelist: [],
+      authEnabled: false,
+      username: "admin",
+      passwordSalt: null,
+      passwordHash: null,
+      lockOnIdleMinutes: 30,
+    },
     ...overrides,
   };
 }

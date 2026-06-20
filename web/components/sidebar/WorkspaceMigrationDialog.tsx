@@ -33,7 +33,7 @@ import type {
   WorkspaceMigrationTargetKind,
   WslDistro,
 } from "@/types";
-import { detectAppPlatform, formatSize, getErrorMessage, toWslPath } from "@/utils";
+import { detectAppPlatform, formatSize, getErrorMessage, isTauriRuntime, toWslPath } from "@/utils";
 
 interface WorkspaceMigrationDialogProps {
   open: boolean;
@@ -112,6 +112,13 @@ export default function WorkspaceMigrationDialog({
   }, [isWindows, loadWslOptions, open, targetKind]);
 
   const handleBrowseLocalRoot = useCallback(async () => {
+    if (!isTauriRuntime()) {
+      const selected = window.prompt("选择迁移目标目录", targetRoot);
+      if (selected) {
+        setTargetRoot(selected);
+      }
+      return;
+    }
     const selected = await openDialog({
       directory: true,
       multiple: false,
@@ -120,7 +127,7 @@ export default function WorkspaceMigrationDialog({
     if (typeof selected === "string") {
       setTargetRoot(selected);
     }
-  }, []);
+  }, [targetRoot]);
 
   const handlePreview = useCallback(async () => {
     if (!currentRequest) return;

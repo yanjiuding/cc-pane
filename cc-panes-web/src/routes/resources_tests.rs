@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use axum::{
+    body::to_bytes,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, StatusCode},
+    response::IntoResponse,
     Json,
 };
 use cc_panes_core::{
@@ -164,6 +166,13 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
             process_monitor_service.clone(),
         )),
         process_monitor_service,
+        project_cli_hooks_service: Arc::new(cc_panes_core::services::ProjectCliHooksService::new(
+            Arc::new(cc_cli_adapters::CliToolRegistry::new()),
+        )),
+        journal_service: Arc::new(cc_panes_core::services::JournalService::new(
+            app_paths.workspaces_dir(),
+        )),
+        cli_registry: Arc::new(cc_cli_adapters::CliToolRegistry::new()),
         mcp_config_service: Arc::new(McpConfigService::new()),
         shared_mcp_service: Arc::new(SharedMcpService::new(&app_paths)),
         skill_service: Arc::new(cc_panes_core::services::SkillService::new()),
@@ -176,6 +185,7 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
         )),
         usage_stats_service,
         ws_emitter: Arc::new(WsEmitter::new()),
+        web_auth: Arc::new(crate::web_auth::WebAuthStore::default()),
         default_cwd: root.to_string_lossy().to_string(),
         output_mode: TerminalOutputMode::Emitter,
     };
@@ -582,4 +592,34 @@ async fn filesystem_routes_match_core_service_operations() {
     )
     .await
     .expect("delete file");
+}
+
+#[tokio::test]
+async fn fs_raw_route_returns_binary_bytes_with_content_type() {
+    let (_state, root) = test_state("filesystem-raw");
+    let image = root.join("tiny.png");
+    let bytes = [
+        0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n', 0x00, 0x00, 0x00, 0x00,
+    ];
+    std::fs::write(&image, bytes).expect("write image");
+
+    let response = fs_read_raw_file(Query(FsPathQuery {
+        path: image.to_string_lossy().to_string(),
+    }))
+    .await
+    .expect("read raw")
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("image/png")
+    );
+    let body = to_bytes(response.into_body(), 1024)
+        .await
+        .expect("body bytes");
+    assert_eq!(&body[..], &bytes);
 }

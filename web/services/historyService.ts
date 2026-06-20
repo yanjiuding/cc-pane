@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { CliTool, LaunchProviderSelection } from "@/types";
+import { apiDelete, apiGet, apiJson, apiNoContent, invokeOrApi } from "./apiClient";
 
 export interface LaunchRecord {
   id: number;
@@ -47,7 +47,7 @@ export const historyService = {
     workspaceSnapshotId?: string,
     launchProfileId?: string,
   ): Promise<number> {
-    return invoke("add_launch_history", {
+    const payload = {
       projectId,
       projectName,
       projectPath,
@@ -61,40 +61,71 @@ export const historyService = {
       providerSelection: providerSelection ?? null,
       launchProfileId: launchProfileId ?? null,
       workspaceSnapshotId: workspaceSnapshotId ?? null,
-    });
+    };
+    return invokeOrApi<number>("add_launch_history", payload, () =>
+      apiJson<number>("/api/launch-history", "POST", payload),
+    );
   },
 
   async list(limit = 20): Promise<LaunchRecord[]> {
-    return invoke("list_launch_history", { limit });
+    return invokeOrApi<LaunchRecord[]>("list_launch_history", { limit }, () =>
+      apiGet<LaunchRecord[]>("/api/launch-history", { limit }),
+    );
   },
 
   async delete(id: number): Promise<void> {
-    await invoke("delete_launch_history", { id });
+    await invokeOrApi<void>("delete_launch_history", { id }, () =>
+      apiDelete(`/api/launch-history/${id}`),
+    );
   },
 
   async clear(): Promise<void> {
-    await invoke("clear_launch_history");
+    await invokeOrApi<void>("clear_launch_history", undefined, () =>
+      apiDelete("/api/launch-history"),
+    );
   },
 
   async readSessionState(projectPath: string): Promise<SessionState | null> {
-    return invoke("read_session_state", { projectPath });
+    return invokeOrApi<SessionState | null>("read_session_state", { projectPath }, () =>
+      apiGet<SessionState | null>("/api/session-state", { projectPath }),
+    );
   },
 
   async updateSessionId(id: number, resumeSessionId: string): Promise<void> {
-    await invoke("update_launch_session_id", { id, resumeSessionId });
+    await invokeOrApi<void>("update_launch_session_id", { id, resumeSessionId }, () =>
+      apiNoContent(`/api/launch-history/${id}/session-id`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ resumeSessionId }),
+      }),
+    );
   },
 
   /** 标记启动记录的 resume id 来源（manual 手动绑定等） */
   async updateResumeSource(id: number, source: string): Promise<void> {
-    await invoke("update_launch_resume_source", { id, source });
+    await invokeOrApi<void>("update_launch_resume_source", { id, source }, () =>
+      apiNoContent(`/api/launch-history/${id}/resume-source`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source }),
+      }),
+    );
   },
 
   async updateLastPrompt(id: number, lastPrompt: string): Promise<void> {
-    await invoke("update_launch_last_prompt", { id, lastPrompt });
+    await invokeOrApi<void>("update_launch_last_prompt", { id, lastPrompt }, () =>
+      apiNoContent(`/api/launch-history/${id}/last-prompt`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lastPrompt }),
+      }),
+    );
   },
 
   async touchBySessionId(resumeSessionId: string): Promise<number | null> {
-    return invoke("touch_launch_by_session", { resumeSessionId });
+    return invokeOrApi<number | null>("touch_launch_by_session", { resumeSessionId }, () =>
+      apiJson<number | null>("/api/launch-history/touch-by-session", "POST", { resumeSessionId }),
+    );
   },
 
   async detectResumeSession(
@@ -105,14 +136,18 @@ export const historyService = {
     workspacePath?: string,
     afterTs?: string,
   ): Promise<string | null> {
-    return invoke("detect_resume_session", {
-      cliTool,
-      runtimeKind: runtimeKind ?? null,
-      wslDistro: wslDistro ?? null,
-      projectPath,
-      workspacePath: workspacePath ?? null,
-      afterTs: afterTs ?? new Date().toISOString(),
-    });
+    return invokeOrApi<string | null>(
+      "detect_resume_session",
+      {
+        cliTool,
+        runtimeKind: runtimeKind ?? null,
+        wslDistro: wslDistro ?? null,
+        projectPath,
+        workspacePath: workspacePath ?? null,
+        afterTs: afterTs ?? new Date().toISOString(),
+      },
+      async () => null,
+    );
   },
 
   async startLaunchHistoryBackfill(
@@ -125,15 +160,19 @@ export const historyService = {
     workspacePath?: string,
     afterTs?: string,
   ): Promise<void> {
-    await invoke("start_launch_history_backfill", {
-      launchId,
-      ptySessionId,
+    await invokeOrApi<void>(
+      "start_launch_history_backfill",
+      {
       cliTool,
-      runtimeKind,
+      runtimeKind: runtimeKind ?? null,
       wslDistro: wslDistro ?? null,
       projectPath,
       workspacePath: workspacePath ?? null,
+      launchId,
+      ptySessionId,
       afterTs: afterTs ?? null,
-    });
+      },
+      async () => {},
+    );
   },
 };

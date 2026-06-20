@@ -1,6 +1,5 @@
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import {
   Folder, Trash2, Plus, Pencil, Clock, Globe,
@@ -12,6 +11,8 @@ import {
 } from "@/components/ui/context-menu";
 import { useDialogStore, useSshMachinesStore } from "@/stores";
 import { specService } from "@/services/specService";
+import { providerService } from "@/services/providerService";
+import { isTauriRuntime } from "@/services/runtime";
 import {
   detectAppPlatform,
   getWorkspaceLaunchIssueKey,
@@ -124,15 +125,25 @@ export default function ProjectListView({
   const handleOpenSpec = useCallback(async (projectPath: string, spec: SpecEntry) => {
     try {
       const specPath = `${projectPath}/.ccpanes/specs/${spec.fileName}`;
-      await openPath(specPath);
+      if (!isTauriRuntime()) {
+        await navigator.clipboard.writeText(specPath);
+        toast.info(t("copiedToClipboard"));
+        return;
+      }
+      await providerService.openPathInExplorer(specPath);
     } catch (e) {
       toast.error(String(e));
     }
-  }, []);
+  }, [t]);
 
   const handleRevealFolder = useCallback(async (path: string) => {
+    if (!isTauriRuntime()) {
+      await navigator.clipboard.writeText(path).catch(() => {});
+      toast.info(t("copiedToClipboard"));
+      return;
+    }
     try {
-      await openPath(path);
+      await providerService.openPathInExplorer(path);
     } catch (e) {
       toast.error(t("openFolderFailed", { error: e }));
     }

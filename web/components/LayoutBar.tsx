@@ -11,6 +11,7 @@ import type { TFunction } from "i18next";
 import { toast } from "sonner";
 import { useActivityBarStore, usePanesStore, useTerminalStatusStore } from "@/stores";
 import { terminalService, getPoppedTabs, markTabReclaimed as popupMarkReclaimed } from "@/services";
+import { isTauriRuntime } from "@/services/runtime";
 import { handleErrorSilent } from "@/utils";
 import { aggregatePaneStatus } from "@/utils/layoutStatus";
 import { collectTerminalLeaves, collectTerminalSessionIdsFromTree, collectTerminalTabs } from "@/lib/paneSessions";
@@ -101,6 +102,7 @@ function summarizeLayoutDelete(layout: LayoutEntry): DeleteSummary {
 }
 
 async function closePoppedWindows(tabIds: string[]) {
+  if (!isTauriRuntime()) return;
   const poppedTabs = getPoppedTabs();
   await Promise.all(tabIds.map(async (tabId) => {
     const label = poppedTabs.get(tabId);

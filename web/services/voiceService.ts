@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeOrApi } from "./apiClient";
 
 export interface VoiceTranscribeRequest {
   audioBase64: string;
@@ -16,6 +16,8 @@ export interface VoiceTranscribeResponse {
 
 export const voiceService = {
   async transcribe(request: VoiceTranscribeRequest): Promise<VoiceTranscribeResponse> {
-    return invoke<VoiceTranscribeResponse>("transcribe_voice_input", { request });
+    return invokeOrApi<VoiceTranscribeResponse>("transcribe_voice_input", { request }, async () => {
+      throw new Error("Voice transcription is only available in the desktop app");
+    });
   },
 };

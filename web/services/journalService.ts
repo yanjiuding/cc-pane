@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { apiGet, apiJson, invokeOrApi } from "./apiClient";
 
 export interface JournalIndex {
   activeFile: string;
@@ -19,25 +19,32 @@ export const journalService = {
     summary: string,
     commits: string[] = []
   ): Promise<number> {
-    return invoke<number>("add_journal_session", {
+    const body = {
       workspaceName,
       title,
       summary,
       commits,
-    });
+    };
+    return invokeOrApi<number>("add_journal_session", body, () =>
+      apiJson<number>("/api/journal/session", "POST", body),
+    );
   },
 
   /**
    * 获取 journal 索引信息
    */
   async getIndex(workspaceName: string): Promise<JournalIndex> {
-    return invoke<JournalIndex>("get_journal_index", { workspaceName });
+    return invokeOrApi<JournalIndex>("get_journal_index", { workspaceName }, () =>
+      apiGet<JournalIndex>("/api/journal/index", { workspaceName }),
+    );
   },
 
   /**
    * 获取最近的 journal 内容
    */
   async getRecentJournal(workspaceName: string): Promise<string> {
-    return invoke<string>("get_recent_journal", { workspaceName });
+    return invokeOrApi<string>("get_recent_journal", { workspaceName }, () =>
+      apiGet<string>("/api/journal/recent", { workspaceName }),
+    );
   },
 };

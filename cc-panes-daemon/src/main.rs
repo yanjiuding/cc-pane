@@ -13,7 +13,7 @@ use cc_panes_core::{
         ProjectCliHooksService, ProviderService, SettingsService, SharedMcpService,
         SshCredentialService, TerminalBackend, TerminalService, WorkspaceService,
     },
-    utils::AppPaths,
+    utils::{AppPaths, APP_DIR_NAME},
 };
 use clap::Parser;
 use tracing::info;
@@ -49,6 +49,133 @@ struct Args {
     data_dir: Option<String>,
 }
 
+struct DaemonPathResolution {
+    default_data_dir: Option<String>,
+    config_path: Option<PathBuf>,
+    source: &'static str,
+}
+
+fn resolve_daemon_paths(explicit_data_dir: Option<&str>) -> DaemonPathResolution {
+    if let Some(dir) = non_empty_path(explicit_data_dir) {
+        let path = normalize_current_host_path(dir);
+        let config_path = path.join("config.toml");
+        return DaemonPathResolution {
+            default_data_dir: Some(path.to_string_lossy().to_string()),
+            config_path: config_path.exists().then_some(config_path),
+            source: "cli",
+        };
+    }
+
+    if let Some(dir) = non_empty_path(std::env::var("CCPANES_DAEMON_DATA_DIR").ok().as_deref()) {
+        let path = normalize_current_host_path(dir);
+        let config_path = path.join("config.toml");
+        return DaemonPathResolution {
+            default_data_dir: Some(path.to_string_lossy().to_string()),
+            config_path: config_path.exists().then_some(config_path),
+            source: "env",
+        };
+    }
+
+    if let Some(path) = detect_windows_desktop_app_dir() {
+        return DaemonPathResolution {
+            config_path: Some(path.join("config.toml")),
+            default_data_dir: Some(path.to_string_lossy().to_string()),
+            source: "windows-desktop",
+        };
+    }
+
+    DaemonPathResolution {
+        default_data_dir: None,
+        config_path: None,
+        source: "app-default",
+    }
+}
+
+fn resolve_data_dir(
+    explicit_data_dir: Option<&str>,
+    settings_data_dir: Option<String>,
+    daemon_paths: &DaemonPathResolution,
+) -> Option<String> {
+    if let Some(dir) = non_empty_path(explicit_data_dir) {
+        return Some(
+            normalize_current_host_path(dir)
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
+    if let Some(dir) = non_empty_path(settings_data_dir.as_deref()) {
+        return Some(
+            normalize_current_host_path(dir)
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
+    daemon_paths.default_data_dir.clone()
+}
+
+fn non_empty_path(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn normalize_current_host_path(path: &str) -> PathBuf {
+    windows_path_to_wsl_path(path).unwrap_or_else(|| PathBuf::from(path))
+}
+
+fn detect_windows_desktop_app_dir() -> Option<PathBuf> {
+    if !running_under_wsl() {
+        return None;
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(profile) = windows_user_profile_from_cmd() {
+        if let Some(path) = windows_path_to_wsl_path(&profile) {
+            candidates.push(path.join(APP_DIR_NAME));
+        }
+    }
+    if let Ok(user) = std::env::var("USER") {
+        candidates.push(PathBuf::from("/mnt/c/Users").join(user).join(APP_DIR_NAME));
+    }
+
+    candidates
+        .into_iter()
+        .find(|path| path.join("workspaces").exists() || path.join("config.toml").exists())
+}
+
+fn running_under_wsl() -> bool {
+    std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|release| {
+            let release = release.to_ascii_lowercase();
+            release.contains("microsoft") || release.contains("wsl")
+        })
+        .unwrap_or(false)
+}
+
+fn windows_user_profile_from_cmd() -> Option<String> {
+    let output = std::process::Command::new("cmd.exe")
+        .args(["/C", "echo %USERPROFILE%"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let profile = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!profile.is_empty() && !profile.contains('%')).then_some(profile)
+}
+
+fn windows_path_to_wsl_path(path: &str) -> Option<PathBuf> {
+    let normalized = path.trim().trim_matches('"').replace('\\', "/");
+    let bytes = normalized.as_bytes();
+    if bytes.len() < 2 || bytes[1] != b':' {
+        return None;
+    }
+    let drive = (bytes[0] as char).to_ascii_lowercase();
+    if !drive.is_ascii_alphabetic() {
+        return None;
+    }
+    let rest = normalized[2..].trim_start_matches('/');
+    Some(PathBuf::from(format!("/mnt/{drive}/{rest}")))
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -68,13 +195,10 @@ async fn main() -> anyhow::Result<()> {
         std::fs::canonicalize(&args.cwd).unwrap_or_else(|_| std::path::PathBuf::from(&args.cwd));
     let cwd_str = cwd.to_string_lossy().to_string();
 
-    let data_dir = args.data_dir.unwrap_or_else(|| {
-        dirs::home_dir()
-            .map(|home| home.join(".cc-panes-daemon").to_string_lossy().to_string())
-            .unwrap_or_else(|| "/tmp/.cc-panes-daemon".to_string())
-    });
+    let daemon_paths = resolve_daemon_paths(args.data_dir.as_deref());
     let ws_emitter = Arc::new(WsEmitter::new());
-    let terminal_backend = create_terminal_backend(data_dir, ws_emitter.clone());
+    let terminal_backend =
+        create_terminal_backend(args.data_dir.as_deref(), daemon_paths, ws_emitter.clone());
     let config = DaemonConfig::new(
         token,
         local_addr,
@@ -97,13 +221,24 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn create_terminal_backend(
-    data_dir: String,
+    explicit_data_dir: Option<&str>,
+    daemon_paths: DaemonPathResolution,
     ws_emitter: Arc<WsEmitter>,
 ) -> Arc<dyn TerminalBackend> {
-    let app_paths = Arc::new(AppPaths::new(Some(data_dir)));
-    let settings_service = Arc::new(SettingsService::new());
+    let settings_service = Arc::new(match &daemon_paths.config_path {
+        Some(path) => SettingsService::new_with_config_path(path.clone()),
+        None => SettingsService::new(),
+    });
+    let settings_data_dir = settings_service.get_settings().general.data_dir;
+    let data_dir = resolve_data_dir(explicit_data_dir, settings_data_dir, &daemon_paths);
+    let app_paths = Arc::new(AppPaths::new(data_dir));
+    info!(
+        data_dir = %app_paths.data_dir().display(),
+        source = daemon_paths.source,
+        "CC-Panes daemon data directory resolved"
+    );
     let provider_service = Arc::new(ProviderService::new(app_paths.providers_path()));
-    let cli_registry = Arc::new(CliToolRegistry::new());
+    let cli_registry = Arc::new(CliToolRegistry::with_builtin_adapters());
     let external_skill_registry = Arc::new(ExternalSkillRegistry::new(cli_registry.clone()));
     let launch_profile_service = Arc::new(LaunchProfileService::new_with_external_skill_registry(
         app_paths.launch_profiles_path(),

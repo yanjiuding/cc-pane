@@ -1,12 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { toast } from "sonner";
 import { useWorkspacesStore, usePanesStore, useDialogStore } from "@/stores";
 import { worktreeService, type WorktreeInfo } from "@/services";
+import { apiGet, invokeOrApi } from "@/services/apiClient";
 import { scanDirectory, type ScannedRepo } from "@/services/workspaceService";
-import { getProjectName } from "@/utils";
+import { getProjectName, isTauriRuntime } from "@/utils";
 import type { Workspace, WorkspaceProject, OpenTerminalOptions } from "@/types";
 
 interface UseWorkspaceActionsParams {
@@ -85,7 +85,9 @@ export function useWorkspaceActions({ onOpenTerminal }: UseWorkspaceActionsParam
   // Git 分支
   const fetchGitBranch = useCallback(async (path: string): Promise<string | null> => {
     try {
-      return await invoke<string | null>("get_git_branch", { path });
+      return await invokeOrApi<string | null>("get_git_branch", { path }, () =>
+        apiGet<string | null>("/api/git/branch", { path }),
+      );
     } catch {
       return null;
     }
@@ -142,6 +144,11 @@ export function useWorkspaceActions({ onOpenTerminal }: UseWorkspaceActionsParam
   }
 
   async function handleSelectNewWorkspacePath() {
+    if (!isTauriRuntime()) {
+      const selected = window.prompt("Workspace path", newWorkspacePath);
+      if (selected) setNewWorkspacePath(selected);
+      return;
+    }
     try {
       const selected = await open({ directory: true, multiple: false, title: "选择工作空间根目录" });
       if (selected) {
@@ -197,9 +204,11 @@ export function useWorkspaceActions({ onOpenTerminal }: UseWorkspaceActionsParam
 
   async function handleImportProject(ws: Workspace) {
     try {
-      const selected = await open({ directory: true, multiple: false, title: tSidebar("selectProjectDir") });
+      const selected = isTauriRuntime()
+        ? await open({ directory: true, multiple: false, title: tSidebar("selectProjectDir") })
+        : window.prompt(tSidebar("selectProjectDir"));
       if (selected) {
-        await addProject(ws.name, selected);
+        await addProject(ws.name, String(selected));
       }
     } catch (e) {
       toast.error(tNotify("importFailed", { error: String(e) }));
@@ -257,10 +266,12 @@ export function useWorkspaceActions({ onOpenTerminal }: UseWorkspaceActionsParam
 
   async function handleScanImport(ws: Workspace) {
     try {
-      const selected = await open({ directory: true, multiple: false, title: tSidebar("selectScanDir") });
+      const selected = isTauriRuntime()
+        ? await open({ directory: true, multiple: false, title: tSidebar("selectScanDir") })
+        : window.prompt(tSidebar("selectScanDir"));
       if (!selected) return;
       setScanTargetWorkspace(ws);
-      const results = await scanDirectory(selected);
+      const results = await scanDirectory(String(selected));
       if (results.length === 0) {
         toast.info(tNotify("noGitRepoFound"));
         return;

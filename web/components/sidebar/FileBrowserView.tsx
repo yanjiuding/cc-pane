@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { handleError, handleErrorSilent } from "@/utils";
+import { handleError, handleErrorSilent, isTauriRuntime } from "@/utils";
 import {
   FilePlus, FolderPlus, RefreshCw, ChevronsDownUp, Crosshair, Home,
   ArrowLeft, ArrowRight, ArrowUp,
@@ -58,7 +58,7 @@ export default function FileBrowserView() {
       const ws = useWorkspacesStore.getState().selectedWorkspace();
       if (ws?.path) {
         navigateTo(ws.path);
-      } else {
+      } else if (isTauriRuntime()) {
         homeDir().then((home) => {
           if (home) navigateTo(home.replace(/\\/g, "/").replace(/\/+$/, ""));
         }).catch((e) => handleErrorSilent(e, "get home dir"));
@@ -87,6 +87,12 @@ export default function FileBrowserView() {
   }, [currentPath, collapseAll]);
 
   const handleGoHome = useCallback(() => {
+    if (!isTauriRuntime()) {
+      selfChatService.getAppCwd().then((cwd) => {
+        navigateTo(cwd);
+      }).catch((err) => handleErrorSilent(err, "get app cwd"));
+      return;
+    }
     settingsService.getDataDirInfo().then((info) => {
       navigateTo(info.currentPath);
     }).catch((err) => handleErrorSilent(err, "get app data dir"));

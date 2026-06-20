@@ -6,7 +6,6 @@
  * Map.set 的覆盖语义确保同一 sessionId 永远只有一个回调，杜绝输出翻倍。
  */
 
-import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type {
@@ -19,6 +18,7 @@ import type {
 import type { EnvironmentInfoRaw } from "@/types/settings";
 import { usageStatsService } from "./usageStatsService";
 import { devDebugLog } from "@/utils/devLogger";
+import { apiDelete, apiGet, apiJson, invokeOrApi, isTauriRuntime } from "./apiClient";
 
 export interface TerminalReplaySnapshot {
   data: string;
@@ -86,6 +86,7 @@ function compactCreateSessionRequest(request: CreateSessionRequest): CreateSessi
 const outputCallbacks = new Map<string, (data: string) => void>();
 const exitCallbacks = new Map<string, (exitCode: number) => void>();
 const pendingBuffers = new Map<string, string[]>();
+const webSockets = new Map<string, WebSocket>();
 /** 已 kill 的 session ID 集合，用于事件监听器跳过已死 session */
 export const killedSessions = new Set<string>();
 const MAX_PENDING_CHUNKS = 1000;
@@ -102,6 +103,8 @@ export async function ensureListeners(): Promise<void> {
   if (listenersInitialized) return;
   listenersInitialized = true;
   debugTerminalService("listeners.init", {});
+
+  if (!isTauriRuntime()) return;
 
   const webviewWindow = getCurrentWebview();
 
@@ -171,6 +174,8 @@ if (import.meta.hot) {
     exitCallbacks.clear();
     pendingBuffers.clear();
     killedSessions.clear();
+    for (const socket of webSockets.values()) socket.close();
+    webSockets.clear();
   });
 }
 
@@ -185,6 +190,75 @@ export function _resetListenersForTest(): void {
   listenersInitialized = false;
   unlistenOutput = null;
   unlistenExit = null;
+  for (const socket of webSockets.values()) socket.close();
+  webSockets.clear();
+}
+
+function ensureWebSocket(sessionId: string): void {
+  if (isTauriRuntime() || killedSessions.has(sessionId)) return;
+  const existing = webSockets.get(sessionId);
+  if (
+    existing &&
+    (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)
+  ) {
+    return;
+  }
+
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const url = `${protocol}//${window.location.host}/ws/${encodeURIComponent(sessionId)}`;
+  const socket = new WebSocket(url);
+  webSockets.set(sessionId, socket);
+
+  socket.onmessage = (event) => {
+    if (killedSessions.has(sessionId)) return;
+    const data = parseWebSocketOutput(event.data);
+    if (!data) return;
+    const cb = outputCallbacks.get(sessionId);
+    if (cb) {
+      cb(data);
+      return;
+    }
+    const buf = pendingBuffers.get(sessionId);
+    if (buf) {
+      if (buf.length >= MAX_PENDING_CHUNKS) {
+        buf.splice(0, buf.length - MAX_PENDING_CHUNKS / 2);
+      }
+      buf.push(data);
+    } else {
+      pendingBuffers.set(sessionId, [data]);
+    }
+  };
+
+  socket.onclose = () => {
+    webSockets.delete(sessionId);
+    if (!killedSessions.has(sessionId)) {
+      exitCallbacks.get(sessionId)?.(0);
+    }
+  };
+
+  socket.onerror = (event) => {
+    console.warn("[terminal-websocket] connection failed:", event);
+  };
+}
+
+function closeWebSocket(sessionId: string): void {
+  const socket = webSockets.get(sessionId);
+  if (!socket) return;
+  socket.close();
+  webSockets.delete(sessionId);
+}
+
+function parseWebSocketOutput(message: unknown): string {
+  if (typeof message !== "string") return "";
+  try {
+    const parsed = JSON.parse(message) as { type?: string; data?: unknown };
+    if (parsed.type === "output" && typeof parsed.data === "string") {
+      return parsed.data;
+    }
+  } catch {
+    return message;
+  }
+  return message;
 }
 
 // ── 服务对象 ──────────────────────────────────────────────
@@ -193,9 +267,19 @@ export const terminalService = {
   /** 创建终端会话 */
   async createSession(request: CreateSessionRequest | null | undefined): Promise<string> {
     assertCreateSessionRequest(request);
-    return invoke<string>("create_terminal_session", {
-      request: compactCreateSessionRequest(request),
-    });
+    return invokeOrApi<string>(
+      "create_terminal_session",
+      { request: compactCreateSessionRequest(request) },
+      async () => {
+        const response = await apiJson<{ sessionId: string }>(
+          "/api/sessions",
+          "POST",
+          compactCreateSessionRequest(request),
+        );
+        ensureWebSocket(response.sessionId);
+        return response.sessionId;
+      },
+    );
   },
 
   /** 向终端写入数据 */
@@ -204,7 +288,9 @@ export const terminalService = {
     data: string,
     options: TerminalWriteOptions = { source: "user-keyboard" },
   ): Promise<void> {
-    await invoke("write_terminal", { sessionId, data });
+    await invokeOrApi<void>("write_terminal", { sessionId, data }, () =>
+      apiJson<void>(`/api/sessions/${encodeURIComponent(sessionId)}/write`, "POST", { data }),
+    );
     if (options.source === "user-keyboard") {
       const charCount = countTerminalInputChars(data);
       void usageStatsService.recordInputChars(sessionId, charCount).catch((error) => {
@@ -215,35 +301,64 @@ export const terminalService = {
 
   /** 调整终端大小 */
   async resize(request: ResizeRequest): Promise<void> {
-    return invoke("resize_terminal", { request });
+    return invokeOrApi<void>("resize_terminal", { request }, () =>
+      apiJson<void>(`/api/sessions/${encodeURIComponent(request.sessionId)}/resize`, "POST", {
+        cols: request.cols,
+        rows: request.rows,
+      }),
+    );
   },
 
   /** 关闭终端会话 */
   async kill(sessionId: string): Promise<void> {
-    return invoke("kill_terminal", { sessionId });
+    return invokeOrApi<void>("kill_terminal", { sessionId }, () =>
+      apiDelete(`/api/sessions/${encodeURIComponent(sessionId)}`),
+    );
   },
 
   /** 幂等关闭终端会话：不存在或已退出也视为成功 */
   async killIdempotent(sessionId: string): Promise<void> {
-    return invoke("kill_terminal_idempotent", { sessionId });
+    return invokeOrApi<void>("kill_terminal_idempotent", { sessionId }, async () => {
+      await apiDelete(`/api/sessions/${encodeURIComponent(sessionId)}`).catch(() => {});
+    });
   },
 
   /** 向会话提交文本并自动发送 Enter */
   async submitToSession(sessionId: string, text: string): Promise<void> {
-    return invoke("submit_to_session", { sessionId, text });
+    return invokeOrApi<void>("submit_to_session", { sessionId, text }, () =>
+      apiJson<void>(`/api/sessions/${encodeURIComponent(sessionId)}/submit`, "POST", { text }),
+    );
   },
 
   /** 读取最近 N 行纯文本输出 */
   async getRecentOutput(sessionId: string, lines = 200): Promise<TerminalSessionOutput> {
-    return invoke<TerminalSessionOutput>("get_terminal_recent_output", { sessionId, lines });
+    return invokeOrApi<TerminalSessionOutput>(
+      "get_terminal_recent_output",
+      { sessionId, lines },
+      () => apiGet<TerminalSessionOutput>(`/api/sessions/${encodeURIComponent(sessionId)}/output`, { lines }),
+    );
   },
 
   async getAllStatus(): Promise<TerminalStatusInfo[]> {
-    return invoke<TerminalStatusInfo[]>("get_all_terminal_status");
+    return invokeOrApi<TerminalStatusInfo[]>("get_all_terminal_status", undefined, () =>
+      apiGet<TerminalStatusInfo[]>("/api/sessions"),
+    );
   },
 
   async getReplaySnapshot(sessionId: string): Promise<TerminalReplaySnapshot | null> {
-    return invoke<TerminalReplaySnapshot | null>("get_terminal_replay_snapshot", { sessionId });
+    return invokeOrApi<TerminalReplaySnapshot | null>(
+      "get_terminal_replay_snapshot",
+      { sessionId },
+      async () => {
+        try {
+          return await apiGet<TerminalReplaySnapshot | null>(
+            `/api/sessions/${encodeURIComponent(sessionId)}/snapshot`,
+          );
+        } catch {
+          return null;
+        }
+      },
+    );
   },
 
   // ── 断连 API（分屏重连用） ──────────────────────────────
@@ -257,6 +372,7 @@ export const terminalService = {
     });
     outputCallbacks.delete(sessionId);
     pendingBuffers.delete(sessionId);
+    closeWebSocket(sessionId);
   },
 
   /** 断连：仅移除退出回调 */
@@ -282,7 +398,10 @@ export const terminalService = {
     pendingBuffers.delete(sessionId);
     // 幂等关闭：reload cleanup 常杀已退/不存在的 session，用 idempotent 命令把
     // NOT_FOUND / already-exited 视为成功，避免 [UNHANDLED REJECTION] Session not found。
-    return invoke("kill_terminal_idempotent", { sessionId });
+    closeWebSocket(sessionId);
+    return invokeOrApi<void>("kill_terminal_idempotent", { sessionId }, async () => {
+      await apiDelete(`/api/sessions/${encodeURIComponent(sessionId)}`).catch(() => {});
+    });
   },
 
   // ── 单例监听器 API ─────────────────────────────────────
@@ -293,6 +412,7 @@ export const terminalService = {
     callback: (data: string) => void
   ): Promise<void> {
     await ensureListeners();
+    ensureWebSocket(sessionId);
     debugTerminalService("callback.register.output", {
       sessionId,
       replacedExisting: outputCallbacks.has(sessionId),
@@ -330,6 +450,7 @@ export const terminalService = {
     callback: (exitCode: number) => void
   ): Promise<void> {
     await ensureListeners();
+    ensureWebSocket(sessionId);
     debugTerminalService("callback.register.exit", {
       sessionId,
       replacedExisting: exitCallbacks.has(sessionId),
@@ -348,12 +469,15 @@ export const terminalService = {
 
   /** 获取 Windows Build Number（用于 xterm.js windowsPty 配置） */
   async getWindowsBuildNumber(): Promise<number> {
-    return invoke<number>("get_windows_build_number");
+    return invokeOrApi<number>("get_windows_build_number", undefined, async () => 0);
   },
 
   /** 检测开发环境（Node.js + CLI 工具） */
   async checkEnvironment(): Promise<EnvironmentInfo> {
-    const raw = await invoke<EnvironmentInfoRaw>("check_environment");
+    const raw = await invokeOrApi<EnvironmentInfoRaw>("check_environment", undefined, async () => ({
+      node: { installed: false, version: null },
+      cliTools: [],
+    }));
     return normalizeEnvironmentInfo(raw);
   },
 };

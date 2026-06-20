@@ -913,7 +913,7 @@ dependencies = [
 
 [[package]]
 name = "cc-panes"
-version = "0.9.50"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1068,17 +1068,20 @@ dependencies = [
  "cc-cli-adapters",
  "cc-memory",
  "cc-panes-core",
+ "chrono",
  "clap",
  "dirs",
  "encoding_rs",
  "futures-util",
  "mime_guess",
  "parking_lot",
+ "rand 0.8.5",
  "rust-embed",
  "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.27.0",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",

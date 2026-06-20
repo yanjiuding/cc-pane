@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-import { Settings, Globe, Terminal, Keyboard, Info, Cloud, Bell, Camera, Share2, Mic, Bot } from "lucide-react";
+import { Settings, Globe, Terminal, Keyboard, Info, Cloud, Bell, Camera, Share2, Mic, Bot, Wifi } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -21,6 +21,7 @@ import AboutSection from "./settings/AboutSection";
 import ScreenshotSection from "./settings/ScreenshotSection";
 import SharedMcpSection from "./settings/SharedMcpSection";
 import VoiceSection from "./settings/VoiceSection";
+import WebAccessSection from "./settings/WebAccessSection";
 import CCChanSettings from "./settings/CCChanSettings";
 import { DEFAULT_CCCHAN_SETTINGS, useCCChanStore } from "@/stores/useCCChanStore";
 import type { CCChanSettings as CCChanSettingsValue } from "@/ccchan/types";
@@ -56,6 +57,7 @@ export default function SettingsPanel({ open, onOpenChange }: SettingsPanelProps
   const sections = [
     { id: "general", label: t("general"), icon: Settings },
     { id: "notification", label: t("notification"), icon: Bell },
+    { id: "web-access", label: "Web", icon: Wifi },
     { id: "provider", label: t("provider"), icon: Cloud },
     { id: "proxy", label: t("proxy"), icon: Globe },
     { id: "terminal", label: t("terminal"), icon: Terminal },
@@ -76,8 +78,17 @@ export default function SettingsPanel({ open, onOpenChange }: SettingsPanelProps
 
   async function handleSave() {
     try {
+      const current = useSettingsStore.getState().settings;
+      const settingsToSave: SettingsDraft = {
+        ...draft,
+        webAccess: {
+          ...draft.webAccess,
+          passwordSalt: current?.webAccess.passwordSalt ?? draft.webAccess.passwordSalt,
+          passwordHash: current?.webAccess.passwordHash ?? draft.webAccess.passwordHash,
+        },
+      };
       await useCCChanStore.getState().saveSettings(draft.ccchan);
-      await saveSettings(draft);
+      await saveSettings(settingsToSave);
       toast.success(t("saved"));
       onOpenChange(false);
     } catch (e) {
@@ -127,6 +138,9 @@ export default function SettingsPanel({ open, onOpenChange }: SettingsPanelProps
             )}
             {activeSection === "notification" && (
               <NotificationSection value={draft.notification} onChange={(v) => setDraft({ ...draft, notification: v })} />
+            )}
+            {activeSection === "web-access" && (
+              <WebAccessSection value={draft.webAccess} onChange={(v) => setDraft({ ...draft, webAccess: v })} />
             )}
             {activeSection === "provider" && <ProviderSection />}
             {activeSection === "proxy" && (

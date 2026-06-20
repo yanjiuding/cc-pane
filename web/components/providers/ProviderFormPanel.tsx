@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { useProvidersStore } from "@/stores";
 import { providerService } from "@/services/providerService";
 import { filesystemService } from "@/services/filesystemService";
+import { isTauriRuntime } from "@/services/runtime";
 import { isJsonFile } from "@/utils/json";
 import ProviderAvatar from "./ProviderAvatar";
 import {
@@ -310,6 +311,14 @@ export default function ProviderFormPanel({ editProvider, preset, activeTab, onB
   }
 
   async function handleBrowseConfigDir() {
+    if (!isTauriRuntime()) {
+      const selected = window.prompt(t("selectConfigDir"), form.configDir);
+      if (selected) {
+        updateForm({ configDir: selected });
+        loadConfigDirInfo(selected);
+      }
+      return;
+    }
     const selected = await open({ directory: true, multiple: false, title: t("selectConfigDir") });
     if (selected) {
       updateForm({ configDir: selected as string });
@@ -318,6 +327,14 @@ export default function ProviderFormPanel({ editProvider, preset, activeTab, onB
   }
 
   async function handleBrowseConfigFile() {
+    if (!isTauriRuntime()) {
+      const selected = window.prompt(t("selectCcswitchFile"), form.configDir);
+      if (selected) {
+        updateForm({ configDir: selected });
+        loadConfigDirInfo(selected);
+      }
+      return;
+    }
     const selected = await open({
       directory: false, multiple: false,
       title: t("selectCcswitchFile"),

@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { readText as tauriReadText } from "@tauri-apps/plugin-clipboard-manager";
 import { screenshotService } from "@/services";
 import { getErrorMessage } from "@/utils";
+import { isTauriRuntime } from "@/services/runtime";
 
 export type TerminalPastePayload =
   | { kind: "image"; text: string; filePath: string }
@@ -40,6 +41,7 @@ export async function readClipboardText(textHint?: string | null): Promise<strin
   }
 
   try {
+    if (!isTauriRuntime()) return "";
     return await tauriReadText();
   } catch {
     return "";
@@ -52,6 +54,9 @@ export function formatTerminalFilePaths(paths: string[]): string {
 
 export async function readClipboardFilePaths(): Promise<ClipboardFilePathsResult> {
   try {
+    if (!isTauriRuntime()) {
+      return { paths: [] };
+    }
     const paths = await invoke<string[]>("read_clipboard_file_paths");
     return {
       paths: Array.isArray(paths)

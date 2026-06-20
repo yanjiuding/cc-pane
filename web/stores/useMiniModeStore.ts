@@ -1,7 +1,6 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { isTauriReady, handleErrorSilent } from "@/utils";
+import { handleErrorSilent } from "@/utils";
+import { getCurrentWindowIfTauri, invokeIfTauri, isTauriRuntime } from "@/services/runtime";
 
 interface MiniModeState {
   isMiniMode: boolean;
@@ -24,8 +23,8 @@ export const useMiniModeStore = create<MiniModeState>((set, get) => ({
     let switchedView = false;
     try {
       set({ isTransitioning: true });
-      if (!isTauriReady()) return;
-      const win = getCurrentWindow();
+      const win = getCurrentWindowIfTauri();
+      if (!win) return;
       const factor = await win.scaleFactor();
       const physicalSize = await win.innerSize();
       set({
@@ -35,7 +34,7 @@ export const useMiniModeStore = create<MiniModeState>((set, get) => ({
 
       set({ isMiniMode: true });
       switchedView = true;
-      await invoke("enter_mini_mode");
+      await invokeIfTauri("enter_mini_mode");
     } catch (e) {
       if (switchedView) set({ isMiniMode: false });
       handleErrorSilent(e, "enter mini mode");
@@ -49,7 +48,11 @@ export const useMiniModeStore = create<MiniModeState>((set, get) => ({
     try {
       set({ isTransitioning: true });
       const { savedWidth, savedHeight } = get();
-      await invoke("exit_mini_mode", {
+      if (!isTauriRuntime()) {
+        set({ isMiniMode: false });
+        return;
+      }
+      await invokeIfTauri("exit_mini_mode", {
         width: savedWidth,
         height: savedHeight,
       });

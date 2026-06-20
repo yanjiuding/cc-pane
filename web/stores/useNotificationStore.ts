@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { listen } from "@tauri-apps/api/event";
+import { listenIfTauri } from "@/services/runtime";
 
 const NOTIFICATION_STORAGE_KEY = "cc-panes-orchestration-notifications";
 const MAX_NOTIFICATIONS = 100;
@@ -110,7 +110,7 @@ export const useNotificationStore = create<NotificationStoreState>((set, get) =>
   init: async () => {
     if (get()._initialized) return;
     set({ _initialized: true });
-    const unlisten = await listen<NotificationSentPayload>("notification-sent", (event) => {
+    const unlisten = await listenIfTauri<NotificationSentPayload>("notification-sent", (event) => {
       get().add(normalizeNotification(event.payload ?? {}));
     });
     set({ _unlisten: unlisten });

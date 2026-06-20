@@ -419,6 +419,18 @@ impl CliToolRegistry {
         }
     }
 
+    pub fn with_builtin_adapters() -> Self {
+        let mut registry = Self::new();
+        registry.register(Arc::new(ClaudeAdapter::new()));
+        registry.register(Arc::new(CodexAdapter::new()));
+        registry.register(Arc::new(GeminiAdapter::new()));
+        registry.register(Arc::new(KimiAdapter::new()));
+        registry.register(Arc::new(GlmAdapter::new()));
+        registry.register(Arc::new(OpenCodeAdapter::new()));
+        registry.register(Arc::new(CursorAdapter::new()));
+        registry
+    }
+
     /// 注册一个适配器（id 从 adapter.info().id 取得）
     pub fn register(&mut self, adapter: Arc<dyn CliToolAdapter>) {
         let id = adapter.info().id.clone();
@@ -489,6 +501,28 @@ impl CliToolRegistry {
 impl Default for CliToolRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod registry_tests {
+    use super::*;
+
+    #[test]
+    fn builtin_registry_matches_desktop_adapter_set() {
+        let registry = CliToolRegistry::with_builtin_adapters();
+        let ids = registry
+            .list_tools()
+            .into_iter()
+            .map(|tool| tool.id.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            ids,
+            vec!["claude", "codex", "gemini", "kimi", "glm", "opencode", "cursor"]
+        );
+        assert!(registry.get("claude").is_some());
+        assert!(registry.get("codex").is_some());
     }
 }
 

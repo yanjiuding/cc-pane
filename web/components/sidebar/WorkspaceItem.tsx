@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState, type ButtonHTMLAttributes } from "react";
 import { useTranslation } from "react-i18next";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { toast } from "sonner";
 import {
   ChevronRight,
@@ -30,6 +29,8 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useLaunchProfilesStore, useProvidersStore, useSettingsStore, useSshMachinesStore } from "@/stores";
 import { projectCliHooksService } from "@/services";
+import { providerService } from "@/services/providerService";
+import { isTauriRuntime } from "@/services/runtime";
 import {
   detectAppPlatform,
   getWorkspaceDefaultEnvironment,
@@ -327,8 +328,13 @@ export default function WorkspaceItem({
 
   const handleRevealFolder = useCallback(async () => {
     if (!rootPath) return;
+    if (!isTauriRuntime()) {
+      await navigator.clipboard.writeText(rootPath).catch(() => {});
+      toast.info(t("filetree.pathCopied", { defaultValue: "Path copied" }));
+      return;
+    }
     try {
-      await openPath(rootPath);
+      await providerService.openPathInExplorer(rootPath);
     } catch (error) {
       toast.error(t("openFolderFailed", { error }));
     }

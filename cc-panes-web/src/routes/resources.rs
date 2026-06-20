@@ -1,9 +1,11 @@
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::IntoResponse,
     Json,
 };
 use cc_panes_core::{
+    constants::fs_limits::MAX_READ_SIZE,
     models::{
         filesystem::{DirListing, FileContent, FsEntry},
         provider::Provider,
@@ -548,6 +550,28 @@ pub async fn update_settings(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetWebAccessPasswordRequest {
+    pub password: String,
+}
+
+pub async fn set_web_access_password(
+    State(state): State<AppState>,
+    Json(request): Json<SetWebAccessPasswordRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let mut settings = state.settings_service.get_settings();
+    settings
+        .web_access
+        .set_password(&request.password)
+        .map_err(service_error)?;
+    state
+        .settings_service
+        .update_settings(settings)
+        .map_err(service_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 pub async fn fs_list_directory(
     State(state): State<AppState>,
     Query(query): Query<FsListQuery>,
@@ -568,6 +592,40 @@ pub async fn fs_read_file(
         .read_file(&query.path)
         .map(Json)
         .map_err(service_error)
+}
+
+pub async fn fs_read_raw_file(
+    Query(query): Query<FsPathQuery>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    validate_path(&query.path).map_err(service_error)?;
+    let file_path = std::path::Path::new(&query.path);
+    let metadata = std::fs::metadata(file_path).map_err(service_error)?;
+    if !metadata.is_file() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("'{}' is not a file", query.path),
+        ));
+    }
+    if metadata.len() > MAX_READ_SIZE {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "File too large ({:.1}MB). Maximum is {}MB",
+                metadata.len() as f64 / 1024.0 / 1024.0,
+                MAX_READ_SIZE / 1024 / 1024
+            ),
+        ));
+    }
+
+    let bytes = std::fs::read(file_path).map_err(service_error)?;
+    let mime = mime_guess::from_path(file_path).first_or_octet_stream();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(mime.as_ref())
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    Ok((headers, bytes))
 }
 
 pub async fn fs_write_file(

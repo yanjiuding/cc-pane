@@ -2,8 +2,8 @@
  * 弹出窗口服务 - 管理终端标签弹出为独立系统窗口
  */
 
-import { invoke } from "@tauri-apps/api/core";
 import type { LaunchProviderSelection } from "@/types";
+import { invokeIfTauri, isTauriRuntime } from "./runtime";
 
 export interface PopupTabData {
   tabId: string;
@@ -23,9 +23,12 @@ const poppedTabs = new Map<string, string>();
 
 /** 弹出标签为独立窗口 */
 export async function popOutTab(data: PopupTabData): Promise<void> {
+  if (!isTauriRuntime()) {
+    throw new Error("Pop-out windows are only available in the desktop app");
+  }
   const label = `popup-${data.tabId}`;
   const tabDataJson = JSON.stringify(data);
-  await invoke("create_popup_terminal_window", {
+  await invokeIfTauri("create_popup_terminal_window", {
     tabData: tabDataJson,
     label,
   });
@@ -49,9 +52,10 @@ export function getPoppedTabs(): Map<string, string> {
 
 /** 弹出窗口启动后从 Rust PopupDataStore 获取 tabData（one-shot，带重试） */
 export async function getPopupTabData(): Promise<PopupTabData | null> {
+  if (!isTauriRuntime()) return null;
   // 重试机制：WebView JS 可能在 Rust 写入数据之前就执行
   for (let i = 0; i < 5; i++) {
-    const raw = await invoke<string | null>("get_popup_tab_data");
+    const raw = await invokeIfTauri<string | null>("get_popup_tab_data");
     if (raw) {
       try {
         return JSON.parse(raw) as PopupTabData;

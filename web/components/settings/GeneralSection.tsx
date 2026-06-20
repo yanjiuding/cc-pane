@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-import { handleErrorSilent } from "@/utils";
+import { handleErrorSilent, isTauriRuntime } from "@/utils";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -21,12 +21,14 @@ export default function GeneralSection({ value, onChange }: GeneralSectionProps)
   const { t, i18n } = useTranslation("settings");
   const [dataDirInfo, setDataDirInfo] = useState<DataDirInfo | null>(null);
   const [migrating, setMigrating] = useState(false);
+  const isDesktopRuntime = isTauriRuntime();
   const loadSettings = useSettingsStore((s) => s.loadSettings);
   const { tools: cliTools } = useCliTools();
 
   useEffect(() => {
+    if (!isDesktopRuntime) return;
     settingsService.getDataDirInfo().then(setDataDirInfo).catch((e) => handleErrorSilent(e, "get data dir info"));
-  }, []);
+  }, [isDesktopRuntime]);
 
   function update<K extends keyof GeneralSettings>(key: K, v: GeneralSettings[K]) {
     if (key === "language") {
@@ -183,6 +185,7 @@ export default function GeneralSection({ value, onChange }: GeneralSectionProps)
       </div>
 
       {/* 数据目录 */}
+      {isDesktopRuntime && (
       <div className="flex flex-col gap-1 mt-1 pt-3" style={{ borderTop: "1px solid var(--app-border)" }}>
         <Label>{t("dataDir")}</Label>
         <p className="text-xs m-0" style={{ color: "var(--app-text-tertiary)" }}>
@@ -225,6 +228,7 @@ export default function GeneralSection({ value, onChange }: GeneralSectionProps)
           {t("dataDirRestartHint")}
         </p>
       </div>
+      )}
 
       {/* 新手引导 */}
       <div className="flex flex-col gap-1 mt-1 pt-3" style={{ borderTop: "1px solid var(--app-border)" }}>

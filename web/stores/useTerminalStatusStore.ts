@@ -1,9 +1,8 @@
 import { create } from "zustand";
-import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import type { TerminalStatusType, TerminalStatusInfo } from "@/types";
-import { killedSessions } from "@/services/terminalService";
+import { killedSessions, terminalService } from "@/services/terminalService";
+import { isTauriRuntime, listenWebviewIfTauri } from "@/services/runtime";
 
 const STATUS_REFRESH_INTERVAL_MS = 15000;
 
@@ -40,7 +39,7 @@ export const useTerminalStatusStore = create<TerminalStatusState>((set, get) => 
 
   refreshLiveStatuses: async () => {
     try {
-      const statuses = await invoke<TerminalStatusInfo[]>("get_all_terminal_status");
+      const statuses = await terminalService.getAllStatus();
       if (!Array.isArray(statuses)) return;
       set({
         statusMap: new Map(
@@ -62,7 +61,7 @@ export const useTerminalStatusStore = create<TerminalStatusState>((set, get) => 
 
     let unlistenFn: UnlistenFn;
     try {
-      unlistenFn = await getCurrentWebview().listen<TerminalStatusInfo>("terminal-status", (event) => {
+      unlistenFn = await listenWebviewIfTauri<TerminalStatusInfo>("terminal-status", (event) => {
         if (killedSessions.has(event.payload.sessionId)) return;
         const current = get().statusMap.get(event.payload.sessionId);
         if (
@@ -90,7 +89,7 @@ export const useTerminalStatusStore = create<TerminalStatusState>((set, get) => 
     }
     set({ _unlisten: unlistenFn });
 
-    // Idle 阈值 30 秒，检查间隔 15 秒足够（无需 5 秒精度）
+    // Web runtime 没有 Tauri event bridge，用 HTTP 轮询兜底；桌面则事件 + 轮询校正。
     const interval = setInterval(() => {
       const now = Date.now();
       set((state) => {
@@ -105,7 +104,7 @@ export const useTerminalStatusStore = create<TerminalStatusState>((set, get) => 
         return changed ? { statusMap: newMap } : state;
       });
       void get().refreshLiveStatuses();
-    }, STATUS_REFRESH_INTERVAL_MS);
+    }, isTauriRuntime() ? STATUS_REFRESH_INTERVAL_MS : 3000);
     set({ _idleCheckInterval: interval });
   },
 

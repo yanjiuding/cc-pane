@@ -162,6 +162,13 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
             process_monitor_service.clone(),
         )),
         process_monitor_service,
+        project_cli_hooks_service: Arc::new(cc_panes_core::services::ProjectCliHooksService::new(
+            Arc::new(cc_cli_adapters::CliToolRegistry::new()),
+        )),
+        journal_service: Arc::new(cc_panes_core::services::JournalService::new(
+            app_paths.workspaces_dir(),
+        )),
+        cli_registry: Arc::new(cc_cli_adapters::CliToolRegistry::new()),
         mcp_config_service: Arc::new(McpConfigService::new()),
         shared_mcp_service: Arc::new(SharedMcpService::new(&app_paths)),
         skill_service: Arc::new(cc_panes_core::services::SkillService::new()),
@@ -174,6 +181,7 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
         )),
         usage_stats_service,
         ws_emitter: Arc::new(WsEmitter::new()),
+        web_auth: Arc::new(crate::web_auth::WebAuthStore::default()),
         default_cwd: root.to_string_lossy().to_string(),
         output_mode: TerminalOutputMode::Emitter,
     };

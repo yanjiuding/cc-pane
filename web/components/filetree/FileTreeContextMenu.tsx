@@ -1,6 +1,5 @@
 import { useState, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { handleError } from "@/utils";
 import {
@@ -19,6 +18,8 @@ import {
 import { useFileTreeStore } from "@/stores";
 import { usePanesStore } from "@/stores";
 import type { FileTreeNode } from "@/types/filesystem";
+import { isTauriRuntime } from "@/services/runtime";
+import { providerService } from "@/services/providerService";
 
 interface FileTreeContextMenuProps {
   children: React.ReactNode;
@@ -63,8 +64,13 @@ export default function FileTreeContextMenu({
   const handleOpenInExplorer = useCallback(async () => {
     const n = nodeRef.current;
     if (!n) return;
+    if (!isTauriRuntime()) {
+      toast.info(t("sidebar:filetree.pathCopied"));
+      await navigator.clipboard.writeText(n.entry.path);
+      return;
+    }
     try {
-      await invoke("open_path_in_explorer", { path: n.entry.path });
+      await providerService.openPathInExplorer(n.entry.path);
     } catch (err) {
       handleError(err, "open in explorer");
     }

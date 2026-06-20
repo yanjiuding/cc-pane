@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
+use cc_cli_adapters::CliToolRegistry;
 use cc_panes_core::services::{
-    ExternalSkillRegistry, FileSystemService, HistoryService, LaunchHistoryService,
+    ExternalSkillRegistry, FileSystemService, HistoryService, JournalService, LaunchHistoryService,
     LaunchProfileService, McpConfigService, MemoryService, PlanService, ProcessMonitorService,
-    ProjectService, ProviderService, RunnerService, SessionRestoreService, SettingsService,
-    SharedMcpService, SkillService, SpecService, SshMachineService, TaskBindingService,
-    TerminalBackend, TodoService, UsageStatsService, UserSkillService, WorkspaceService,
-    WorktreeService,
+    ProjectCliHooksService, ProjectService, ProviderService, RunnerService, SessionRestoreService,
+    SettingsService, SharedMcpService, SkillService, SpecService, SshMachineService,
+    TaskBindingService, TerminalBackend, TodoService, UsageStatsService, UserSkillService,
+    WorkspaceService, WorktreeService,
 };
 
+use crate::web_auth::WebAuthStore;
 use crate::ws_emitter::WsEmitter;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +40,9 @@ pub struct AppState {
     pub worktree_service: Arc<WorktreeService>,
     pub runner_service: Arc<RunnerService>,
     pub process_monitor_service: Arc<ProcessMonitorService>,
+    pub project_cli_hooks_service: Arc<ProjectCliHooksService>,
+    pub journal_service: Arc<JournalService>,
+    pub cli_registry: Arc<CliToolRegistry>,
     pub mcp_config_service: Arc<McpConfigService>,
     pub shared_mcp_service: Arc<SharedMcpService>,
     pub skill_service: Arc<SkillService>,
@@ -46,6 +51,7 @@ pub struct AppState {
     pub user_skill_service: Arc<UserSkillService>,
     pub usage_stats_service: Arc<UsageStatsService>,
     pub ws_emitter: Arc<WsEmitter>,
+    pub web_auth: Arc<WebAuthStore>,
     pub default_cwd: String,
     pub output_mode: TerminalOutputMode,
 }

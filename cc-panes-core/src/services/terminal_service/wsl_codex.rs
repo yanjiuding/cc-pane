@@ -385,24 +385,6 @@ fi"#
     );
 }
 
-/// 把 `selected_shared_mcp_config_toml_for_codex` 产出的 TOML（`{mcp_servers:{NAME:{...}}}`）
-/// 解析回 `(name, value)` 列表，供 build_wsl_command 逐个转成内联表 `-c`。空串返回空列表。
-fn parse_selected_mcp_servers(selected_mcp_config_toml: &str) -> Vec<(String, toml::Value)> {
-    if selected_mcp_config_toml.trim().is_empty() {
-        return Vec::new();
-    }
-    let Ok(toml::Value::Table(root)) = selected_mcp_config_toml.parse::<toml::Value>() else {
-        return Vec::new();
-    };
-    let Some(toml::Value::Table(servers)) = root.get("mcp_servers") else {
-        return Vec::new();
-    };
-    servers
-        .iter()
-        .map(|(name, value)| (name.clone(), value.clone()))
-        .collect()
-}
-
 fn is_wsl_home_path(path: &str) -> bool {
     matches!(path.trim(), "~" | "~/")
 }
@@ -962,7 +944,7 @@ impl TerminalService {
         shared_mcp_urls: &HashMap<String, String>,
         allowed_mcp_server_ids: &[String],
         disable_unlisted_mcp_servers: bool,
-        selected_mcp_config_toml: &str,
+        _selected_mcp_config_toml: &str,
         yolo_mode: bool,
     ) -> Result<(String, Vec<String>)> {
         let mut remote_parts = Vec::new();
@@ -1016,18 +998,6 @@ impl TerminalService {
                         "mcp_servers.{}.url={}",
                         format_toml_key_segment_for_cli(name),
                         format_toml_value_for_cli(&toml::Value::String(mcp_url))
-                    ));
-                }
-
-                // 注入 allowed 的共享 MCP（command/args/env 型）——去隔离后不再写隔离 config，
-                // 改为每个 server 一条内联表 -c mcp_servers.NAME={command=...,args=[...],env={...}}。
-                // 实测 codex 接受内联表 -c，等价于原先追加到隔离 config 的效果。
-                for (name, value) in parse_selected_mcp_servers(selected_mcp_config_toml) {
-                    codex_args.push("-c".to_string());
-                    codex_args.push(format!(
-                        "mcp_servers.{}={}",
-                        format_toml_key_segment_for_cli(&name),
-                        format_toml_value_for_cli(&value)
                     ));
                 }
 
@@ -1138,8 +1108,7 @@ impl TerminalService {
 #[cfg(test)]
 mod tests {
     use super::{
-        append_codex_resume_args, parse_selected_mcp_servers,
-        push_codex_developer_instructions_arg, push_codex_yolo_mode_arg,
+        append_codex_resume_args, push_codex_developer_instructions_arg, push_codex_yolo_mode_arg,
         push_wsl_codex_mcp_isolation_prelude, render_wsl_launch_script,
     };
     #[cfg(windows)]
@@ -1264,18 +1233,6 @@ mod tests {
         // 未开隔离：只初始化空变量，不枚举、不禁用。
         assert!(script.contains("CCPANES_CODEX_MCP_DISABLE=\"\""));
         assert!(!script.contains("mcp_servers.$CCPANES_MCP_NAME.enabled=false"));
-    }
-
-    #[test]
-    fn parse_selected_mcp_servers_extracts_named_servers() {
-        let toml = "[mcp_servers.fetch]\ncommand = \"uvx\"\nargs = [\"x\"]\n";
-        let servers = parse_selected_mcp_servers(toml);
-        assert_eq!(servers.len(), 1);
-        assert_eq!(servers[0].0, "fetch");
-        assert!(servers[0].1.get("command").is_some());
-        // 空串/无 mcp_servers 返回空。
-        assert!(parse_selected_mcp_servers("").is_empty());
-        assert!(parse_selected_mcp_servers("model = \"x\"").is_empty());
     }
 
     #[test]

@@ -83,6 +83,8 @@ export type {
   ScreenshotSettings,
   VoiceSettings,
   LayoutSwitcherSettings,
+  WebAccessSettings,
+  WebAccessStatus,
   EnvironmentInfo,
 } from "./settings";
 export { BUSY_STATUSES, isBusyStatus } from "./settings";

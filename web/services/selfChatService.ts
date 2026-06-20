@@ -4,13 +4,15 @@
  * 提供应用级上下文收集（工作空间、Todo、可用 Skill），
  * 以及 getAppCwd() 获取 CC-Panes 项目根目录。
  */
-import { invoke } from "@tauri-apps/api/core";
 import { useWorkspacesStore } from "@/stores";
 import { todoService } from "./todoService";
+import { apiGet, invokeOrApi } from "./apiClient";
 
 /** 获取应用当前工作目录 */
 async function getAppCwd(): Promise<string> {
-  return invoke<string>("get_app_cwd");
+  return invokeOrApi<string>("get_app_cwd", undefined, () =>
+    apiGet<string>("/api/runtime/cwd"),
+  );
 }
 
 /** 收集应用级上下文并组装 prompt */

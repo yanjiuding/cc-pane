@@ -19,7 +19,7 @@ vi.hoisted(() => {
 });
 
 // 现在安全导入
-import { useThemeStore } from "./useThemeStore";
+import { resolveThemeMode, useThemeStore } from "./useThemeStore";
 
 describe("useThemeStore", () => {
   beforeEach(() => {
@@ -82,6 +82,24 @@ describe("useThemeStore", () => {
       useThemeStore.getState().toggleTheme();
 
       expect(useThemeStore.getState().isDark).toBe(false);
+    });
+  });
+
+  describe("setThemeMode", () => {
+    it("应将 dark/light 模式同步到 store 和 DOM", () => {
+      useThemeStore.getState().setThemeMode("dark");
+      expect(useThemeStore.getState().isDark).toBe(true);
+      expect(document.documentElement.classList.contains("dark")).toBe(true);
+
+      useThemeStore.getState().setThemeMode("light");
+      expect(useThemeStore.getState().isDark).toBe(false);
+      expect(document.documentElement.classList.contains("dark")).toBe(false);
+    });
+
+    it("应将未知值回退到 dark", () => {
+      expect(resolveThemeMode(null)).toBe("dark");
+      expect(resolveThemeMode(undefined)).toBe("dark");
+      expect(resolveThemeMode("system")).toBe("light");
     });
   });
 });

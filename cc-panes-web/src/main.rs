@@ -1,9 +1,10 @@
 mod routes;
 mod state;
+mod web_auth;
 mod ws_emitter;
 mod ws_handler;
 
-use std::sync::Arc;
+use std::{net::SocketAddr, path::PathBuf, process::Command, sync::Arc};
 
 use cc_cli_adapters::CliToolRegistry;
 use cc_panes_core::{
@@ -14,14 +15,14 @@ use cc_panes_core::{
     },
     services::{
         DaemonTerminalBackend, FileSystemService, HistoryService, InProcessTerminalBackend,
-        LaunchHistoryService, LaunchProfileService, McpConfigService, MemoryService, PlanService,
-        ProcessMonitorService, ProjectCliHooksService, ProjectService, ProviderService,
-        RunnerService, SessionRestoreService, SettingsService, SharedMcpService, SkillService,
-        SpecService, SshCredentialService, SshMachineService, TaskBindingService, TerminalBackend,
-        TerminalDaemonClient, TerminalService, TodoService, UsageStatsService, UserSkillService,
-        WorkspaceService, WorktreeService,
+        JournalService, LaunchHistoryService, LaunchProfileService, McpConfigService,
+        MemoryService, PlanService, ProcessMonitorService, ProjectCliHooksService, ProjectService,
+        ProviderService, RunnerService, SessionRestoreService, SettingsService, SharedMcpService,
+        SkillService, SpecService, SshCredentialService, SshMachineService, TaskBindingService,
+        TerminalBackend, TerminalDaemonClient, TerminalService, TodoService, UsageStatsService,
+        UserSkillService, WorkspaceService, WorktreeService,
     },
-    utils::AppPaths,
+    utils::{AppPaths, APP_DIR_NAME},
 };
 use clap::Parser;
 use tracing::info;
@@ -36,6 +37,10 @@ struct Args {
     #[arg(short, long, default_value_t = 8080)]
     port: u16,
 
+    /// Host address to bind. Defaults to 127.0.0.1 unless LAN access is enabled in settings.
+    #[arg(long)]
+    host: Option<String>,
+
     /// Default working directory for new terminal sessions
     #[arg(long, default_value = ".")]
     cwd: String,
@@ -44,13 +49,140 @@ struct Args {
     #[arg(long)]
     shell: Option<String>,
 
-    /// Data directory for cc-panes config/db
+    /// Data directory for cc-panes config/db. Defaults to the desktop dev/release data dir.
     #[arg(long)]
     data_dir: Option<String>,
 
     /// Connect terminal operations to an existing cc-panes-daemon manifest.
     #[arg(long, env = "CCPANES_TERMINAL_DAEMON_MANIFEST")]
     daemon_manifest: Option<String>,
+}
+
+struct WebPathResolution {
+    default_data_dir: Option<String>,
+    config_path: Option<PathBuf>,
+    source: &'static str,
+}
+
+fn resolve_web_paths(explicit_data_dir: Option<&str>) -> WebPathResolution {
+    if let Some(dir) = non_empty_path(explicit_data_dir) {
+        let path = normalize_current_host_path(dir);
+        let config_path = path.join("config.toml");
+        return WebPathResolution {
+            default_data_dir: Some(path.to_string_lossy().to_string()),
+            config_path: Some(config_path),
+            source: "cli",
+        };
+    }
+
+    if let Some(dir) = non_empty_path(std::env::var("CCPANES_WEB_DATA_DIR").ok().as_deref()) {
+        let path = normalize_current_host_path(dir);
+        let config_path = path.join("config.toml");
+        return WebPathResolution {
+            default_data_dir: Some(path.to_string_lossy().to_string()),
+            config_path: Some(config_path),
+            source: "env",
+        };
+    }
+
+    if let Some(path) = detect_windows_desktop_app_dir() {
+        return WebPathResolution {
+            config_path: Some(path.join("config.toml")),
+            default_data_dir: Some(path.to_string_lossy().to_string()),
+            source: "windows-desktop",
+        };
+    }
+
+    WebPathResolution {
+        default_data_dir: None,
+        config_path: None,
+        source: "app-default",
+    }
+}
+
+fn resolve_data_dir(
+    explicit_data_dir: Option<&str>,
+    settings_data_dir: Option<String>,
+    web_paths: &WebPathResolution,
+) -> Option<String> {
+    if let Some(dir) = non_empty_path(explicit_data_dir) {
+        return Some(
+            normalize_current_host_path(dir)
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
+    if let Some(dir) = non_empty_path(settings_data_dir.as_deref()) {
+        return Some(
+            normalize_current_host_path(dir)
+                .to_string_lossy()
+                .to_string(),
+        );
+    }
+    web_paths.default_data_dir.clone()
+}
+
+fn non_empty_path(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn normalize_current_host_path(path: &str) -> PathBuf {
+    windows_path_to_wsl_path(path).unwrap_or_else(|| PathBuf::from(path))
+}
+
+fn detect_windows_desktop_app_dir() -> Option<PathBuf> {
+    if !running_under_wsl() {
+        return None;
+    }
+
+    let mut candidates = Vec::new();
+    if let Some(profile) = windows_user_profile_from_cmd() {
+        if let Some(path) = windows_path_to_wsl_path(&profile) {
+            candidates.push(path.join(APP_DIR_NAME));
+        }
+    }
+    if let Ok(user) = std::env::var("USER") {
+        candidates.push(PathBuf::from("/mnt/c/Users").join(user).join(APP_DIR_NAME));
+    }
+
+    candidates
+        .into_iter()
+        .find(|path| path.join("workspaces").exists() || path.join("config.toml").exists())
+}
+
+fn running_under_wsl() -> bool {
+    std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|release| {
+            let release = release.to_ascii_lowercase();
+            release.contains("microsoft") || release.contains("wsl")
+        })
+        .unwrap_or(false)
+}
+
+fn windows_user_profile_from_cmd() -> Option<String> {
+    let output = Command::new("cmd.exe")
+        .args(["/C", "echo %USERPROFILE%"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let profile = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!profile.is_empty() && !profile.contains('%')).then_some(profile)
+}
+
+fn windows_path_to_wsl_path(path: &str) -> Option<PathBuf> {
+    let normalized = path.trim().trim_matches('"').replace('\\', "/");
+    let bytes = normalized.as_bytes();
+    if bytes.len() < 2 || bytes[1] != b':' {
+        return None;
+    }
+    let drive = (bytes[0] as char).to_ascii_lowercase();
+    if !drive.is_ascii_alphabetic() {
+        return None;
+    }
+    let rest = normalized[2..].trim_start_matches('/');
+    Some(PathBuf::from(format!("/mnt/{drive}/{rest}")))
 }
 
 #[tokio::main]
@@ -70,12 +202,20 @@ async fn main() -> anyhow::Result<()> {
         std::fs::canonicalize(&args.cwd).unwrap_or_else(|_| std::path::PathBuf::from(&args.cwd));
     let cwd_str = cwd.to_string_lossy().to_string();
 
-    let data_dir = args.data_dir.unwrap_or_else(|| {
-        dirs::home_dir()
-            .map(|h| h.join(".cc-panes-web").to_string_lossy().to_string())
-            .unwrap_or_else(|| "/tmp/.cc-panes-web".to_string())
+    let web_paths = resolve_web_paths(args.data_dir.as_deref());
+    let settings_service = Arc::new(match &web_paths.config_path {
+        Some(path) => SettingsService::new_with_config_path(path.clone()),
+        None => SettingsService::new(),
     });
-    let app_paths = Arc::new(AppPaths::new(Some(data_dir.clone())));
+    let loaded_settings = settings_service.get_settings();
+    let settings_data_dir = loaded_settings.general.data_dir.clone();
+    let data_dir = resolve_data_dir(args.data_dir.as_deref(), settings_data_dir, &web_paths);
+    let app_paths = Arc::new(AppPaths::new(data_dir));
+    info!(
+        data_dir = %app_paths.data_dir().display(),
+        source = web_paths.source,
+        "CC-Panes Web data directory resolved"
+    );
     let database = Arc::new(
         Database::new(app_paths.database_path())
             .map_err(|error| anyhow::anyhow!(error.to_string()))?,
@@ -102,13 +242,14 @@ async fn main() -> anyhow::Result<()> {
         process_monitor_service.clone(),
     ));
     let provider_service = Arc::new(ProviderService::new(app_paths.providers_path()));
-    let settings_service = Arc::new(SettingsService::new());
     let filesystem_service = Arc::new(FileSystemService::new());
     let mcp_config_service = Arc::new(McpConfigService::new());
     let shared_mcp_service = Arc::new(SharedMcpService::new(&app_paths));
     let skill_service = Arc::new(SkillService::new());
     let plan_service = Arc::new(PlanService::new());
-    let cli_registry = Arc::new(CliToolRegistry::new());
+    let cli_registry = Arc::new(CliToolRegistry::with_builtin_adapters());
+    let project_cli_hooks_service = Arc::new(ProjectCliHooksService::new(cli_registry.clone()));
+    let journal_service = Arc::new(JournalService::new(app_paths.workspaces_dir()));
     let ssh_credential_service = Arc::new(SshCredentialService::new());
     let ssh_machine_service = Arc::new(SshMachineService::new(
         app_paths.data_dir().join("ssh-machines.json"),
@@ -147,7 +288,7 @@ async fn main() -> anyhow::Result<()> {
         shared_mcp_service: shared_mcp_service.clone(),
         launch_profile_service: launch_profile_service.clone(),
         ssh_credential_service,
-        cli_registry,
+        cli_registry: cli_registry.clone(),
         daemon_manifest: args.daemon_manifest,
     };
     let backend_state = create_terminal_backend(backend_config, ws_emitter.clone())?;
@@ -171,6 +312,9 @@ async fn main() -> anyhow::Result<()> {
         worktree_service,
         runner_service,
         process_monitor_service,
+        project_cli_hooks_service,
+        journal_service,
+        cli_registry,
         mcp_config_service,
         shared_mcp_service,
         skill_service,
@@ -179,19 +323,31 @@ async fn main() -> anyhow::Result<()> {
         user_skill_service,
         usage_stats_service,
         ws_emitter,
+        web_auth: Arc::new(web_auth::WebAuthStore::default()),
         default_cwd: cwd_str.clone(),
         output_mode: backend_state.output_mode,
     };
 
     let app = routes::build_router(state);
 
-    let addr = format!("0.0.0.0:{}", args.port);
-    info!(addr, cwd = cwd_str, "CC-Panes Web starting");
+    let host = args.host.unwrap_or_else(|| {
+        if loaded_settings.web_access.allow_lan && loaded_settings.web_access.auth_required() {
+            "0.0.0.0".to_string()
+        } else {
+            "127.0.0.1".to_string()
+        }
+    });
+    let addr: SocketAddr = format!("{host}:{}", args.port).parse()?;
+    info!(addr = %addr, cwd = cwd_str, "CC-Panes Web starting");
 
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     info!("Listening on http://{}", addr);
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -318,6 +474,17 @@ mod tests {
             cli_registry,
             daemon_manifest,
         }
+    }
+
+    #[test]
+    fn explicit_data_dir_owns_config_path_even_when_missing() {
+        let root = test_dir("explicit-data-dir");
+        let paths = resolve_web_paths(Some(&root));
+        let root_path = PathBuf::from(&root);
+
+        assert_eq!(paths.default_data_dir, Some(root));
+        assert_eq!(paths.config_path, Some(root_path.join("config.toml")));
+        assert_eq!(paths.source, "cli");
     }
 
     fn json_response(status: &str, body: &str) -> String {

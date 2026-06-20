@@ -1,9 +1,8 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { toast } from "sonner";
-import { isTauriReady } from "@/utils";
+import { isTauriRuntime, listenWebviewIfTauri } from "@/services/runtime";
 import { FolderOpen } from "lucide-react";
 import {
   Dialog,
@@ -79,6 +78,10 @@ export default function GitCloneDialog({
   }, [url, folderNameManual]);
 
   async function handleSelectDir() {
+    if (!isTauriRuntime()) {
+      toast.info(t("selectParentDir"));
+      return;
+    }
     try {
       const selected = await open({ directory: true, multiple: false, title: t("selectCloneDir") });
       if (selected) {
@@ -104,8 +107,8 @@ export default function GitCloneDialog({
     setProgress(null);
 
     let unlisten: (() => void) | undefined;
-    if (isTauriReady()) {
-      unlisten = await getCurrentWebview().listen<GitCloneProgress>("git-clone-progress", (e) => {
+    if (isTauriRuntime()) {
+      unlisten = await listenWebviewIfTauri<GitCloneProgress>("git-clone-progress", (e) => {
         setProgress(e.payload);
       });
     }

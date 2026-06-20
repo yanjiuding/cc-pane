@@ -23,6 +23,7 @@ import { useWorkspacesStore } from "@/stores";
 import { useActivityBarStore } from "@/stores/useActivityBarStore";
 import { useDialogStore } from "@/stores/useDialogStore";
 import { worktreeService } from "@/services";
+import { isTauriRuntime } from "@/services/runtime";
 import WorktreeManager from "@/components/WorktreeManager";
 import { useWorkspaceActions } from "./useWorkspaceActions";
 import WorkspaceDialogs from "./WorkspaceDialogs";
@@ -143,9 +144,11 @@ export default function WorkspaceTree({ onOpenTerminal }: WorkspaceTreeProps) {
   // 工作空间路径管理
   const handleSetWorkspacePath = useCallback(async (ws: Workspace) => {
     try {
-      const selected = await open({ directory: true, multiple: false, title: t("selectWorkspaceRoot") });
+      const selected = isTauriRuntime()
+        ? await open({ directory: true, multiple: false, title: t("selectWorkspaceRoot") })
+        : window.prompt(t("selectWorkspaceRoot"), ws.path ?? "");
       if (selected) {
-        await updateWorkspacePath(ws.name, selected);
+        await updateWorkspacePath(ws.name, String(selected));
         toast.success(t("workspacePathSet"));
       }
     } catch (e) {

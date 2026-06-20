@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { apiDelete, apiGet, apiJson, apiNoContent, invokeOrApi } from "./apiClient";
 import type {
   SharedMcpConfig,
   SharedMcpServerConfig,
@@ -7,31 +7,45 @@ import type {
 
 export const sharedMcpService = {
   getConfig(): Promise<SharedMcpConfig> {
-    return invoke<SharedMcpConfig>("get_shared_mcp_config");
+    return invokeOrApi<SharedMcpConfig>("get_shared_mcp_config", undefined, () =>
+      apiGet<SharedMcpConfig>("/api/shared-mcp/config"),
+    );
   },
 
   getStatus(): Promise<SharedMcpServerInfo[]> {
-    return invoke<SharedMcpServerInfo[]>("get_shared_mcp_status");
+    return invokeOrApi<SharedMcpServerInfo[]>("get_shared_mcp_status", undefined, () =>
+      apiGet<SharedMcpServerInfo[]>("/api/shared-mcp/status"),
+    );
   },
 
   upsertServer(name: string, config: SharedMcpServerConfig): Promise<void> {
-    return invoke("upsert_shared_mcp_server", { name, config });
+    return invokeOrApi<void>("upsert_shared_mcp_server", { name, config }, () =>
+      apiJson<void>("/api/shared-mcp/servers", "PUT", { name, config }),
+    );
   },
 
   removeServer(name: string): Promise<void> {
-    return invoke("remove_shared_mcp_server", { name });
+    return invokeOrApi<void>("remove_shared_mcp_server", { name }, () =>
+      apiDelete(`/api/shared-mcp/servers/${encodeURIComponent(name)}`),
+    );
   },
 
   startServer(name: string): Promise<void> {
-    return invoke("start_shared_mcp_server", { name });
+    return invokeOrApi<void>("start_shared_mcp_server", { name }, () =>
+      apiJson<void>(`/api/shared-mcp/servers/${encodeURIComponent(name)}/start`, "POST"),
+    );
   },
 
   stopServer(name: string): Promise<void> {
-    return invoke("stop_shared_mcp_server", { name });
+    return invokeOrApi<void>("stop_shared_mcp_server", { name }, () =>
+      apiJson<void>(`/api/shared-mcp/servers/${encodeURIComponent(name)}/stop`, "POST"),
+    );
   },
 
   restartServer(name: string): Promise<void> {
-    return invoke("restart_shared_mcp_server", { name });
+    return invokeOrApi<void>("restart_shared_mcp_server", { name }, () =>
+      apiJson<void>(`/api/shared-mcp/servers/${encodeURIComponent(name)}/restart`, "POST"),
+    );
   },
 
   updateGlobalConfig(
@@ -40,15 +54,24 @@ export const sharedMcpService = {
     healthCheckIntervalSecs: number,
     maxRestarts: number,
   ): Promise<void> {
-    return invoke("update_shared_mcp_global_config", {
+    const body = {
       portRangeStart,
       portRangeEnd,
       healthCheckIntervalSecs,
       maxRestarts,
-    });
+    };
+    return invokeOrApi<void>("update_shared_mcp_global_config", body, () =>
+      apiNoContent("/api/shared-mcp/config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
   },
 
   importFromClaude(): Promise<string[]> {
-    return invoke<string[]>("import_shared_mcp_from_claude");
+    return invokeOrApi<string[]>("import_shared_mcp_from_claude", undefined, () =>
+      apiJson<string[]>("/api/shared-mcp/servers/import-from-claude", "POST"),
+    );
   },
 };

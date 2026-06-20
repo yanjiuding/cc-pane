@@ -27,6 +27,7 @@ import OrchestrationOverlay from "@/components/orchestration/OrchestrationOverla
 import BorderlessFloatingButton from "@/components/BorderlessFloatingButton";
 import OnboardingGuide from "@/components/OnboardingGuide";
 import ErrorBoundary from "@/components/ErrorBoundary";
+import WebAuthGate from "@/components/WebAuthGate";
 import { LayoutVisibilityContext } from "@/contexts/LayoutVisibilityContext";
 
 import RecentFilesPicker from "@/components/RecentFilesPicker";
@@ -55,11 +56,8 @@ import { useOrchestratorListener } from "@/hooks/useOrchestratorListener";
 import useOrchestratorSync from "@/hooks/useOrchestratorSync";
 import useLayoutSwitcherSync from "@/hooks/useLayoutSwitcherSync";
 import { historyService, terminalService, localHistoryService, checkUpdateSilent, markTabReclaimed as popupMarkReclaimed, getPoppedTabs, sessionRestoreService } from "@/services";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { listen } from "@tauri-apps/api/event";
-import { isTauriReady, waitForTauri } from "@/utils";
+import { waitForTauri } from "@/utils";
+import { getCurrentWindowIfTauri, invokeIfTauri, isTauriRuntime, listenIfTauri, listenWebviewIfTauri } from "@/services/runtime";
 import { playNotificationSound } from "@/utils/notificationSound";
 import { findPaneFocusTarget, readPaneFocusRects, type PaneFocusDirection } from "@/utils/paneFocus";
 import { registerGlobalApi } from "@/utils/globalApi";
@@ -91,6 +89,10 @@ function resolveRuntimeKind(opts: Pick<OpenTerminalOptions, "ssh" | "wsl">): str
   return "local";
 }
 
+async function waitForDesktopRuntime(): Promise<boolean> {
+  return isTauriRuntime() ? waitForTauri() : true;
+}
+
 export default function App() {
   // 弹出窗口路由：mode=popup 时渲染纯终端视图（tabData 通过 IPC 获取）
   const params = new URLSearchParams(window.location.search);
@@ -103,7 +105,9 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <MainApp />
+      <WebAuthGate>
+        <MainApp />
+      </WebAuthGate>
     </ErrorBoundary>
   );
 }
@@ -122,6 +126,7 @@ function MainApp() {
   const appViewMode = useActivityBarStore((s) => s.appViewMode);
   const orchestrationOverlayOpen = useActivityBarStore((s) => s.orchestrationOverlayOpen);
   const closeOrchestrationOverlay = useActivityBarStore((s) => s.closeOrchestrationOverlay);
+  const themeMode = useSettingsStore((s) => s.settings?.theme.mode);
 
   const selectedWorkspace = useWorkspacesStore((s) => s.selectedWorkspace);
   const showOrchestrationOverlay =
@@ -176,9 +181,10 @@ function MainApp() {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
 
-    waitForTauri().then(async (ready) => {
+    if (!isTauriRuntime()) return;
+    waitForDesktopRuntime().then(async (ready) => {
       if (!ready || cancelled) return;
-      const cleanup = await listen("notification-sent", () => {
+      const cleanup = await listenIfTauri("notification-sent", () => {
         playNotificationSound().catch((error) => {
           console.warn("Notification sound failed:", error);
         });
@@ -205,12 +211,11 @@ function MainApp() {
 
   // 保留 terminal-exit 的 Spec 收尾链路；历史卡片回填已迁到后端，不再在这里处理。
   useEffect(() => {
-    if (!isTauriReady()) return;
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    getCurrentWebview().listen<{ sessionId: string }>("terminal-exit", async (event) => {
+    listenWebviewIfTauri<{ sessionId: string }>("terminal-exit", async (event) => {
       if (cancelled) return;
-      invoke("handle_terminal_exit_spec_by_session", {
+      invokeIfTauri("handle_terminal_exit_spec_by_session", {
         sessionId: event.payload.sessionId,
       }).catch((err: unknown) => console.warn("Spec exit handling failed:", err));
     }).then((fn) => {
@@ -228,10 +233,9 @@ function MainApp() {
 
   // 统一桥接后端发来的 history-updated 事件，保持现有页面订阅方式不变。
   useEffect(() => {
-    if (!isTauriReady()) return;
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    listen<{ ptySessionId?: string; resumeSessionId?: string; resumeSource?: string }>("history-updated", (event) => {
+    listenIfTauri<{ ptySessionId?: string; resumeSessionId?: string; resumeSource?: string }>("history-updated", (event) => {
       if (cancelled) return;
       const payload = event.payload ?? {};
       if (payload.ptySessionId && payload.resumeSessionId) {
@@ -295,26 +299,29 @@ function MainApp() {
         }));
     };
 
-    // 等待 Tauri IPC 就绪后再注册窗口关闭监听
+    // 等待 Tauri IPC 就绪后再注册窗口关闭监听；Web runtime 只保留周期保存。
     let unlistenClose: (() => void) | undefined;
     let timer: ReturnType<typeof setInterval> | undefined;
 
-    waitForTauri().then(async (ready) => {
-      if (!ready) return;
+    waitForDesktopRuntime().then(async (ready) => {
+      if (isTauriRuntime() && !ready) return;
 
       // 监听窗口关闭请求
-      unlistenClose = await getCurrentWindow().onCloseRequested(async () => {
-        try {
-          const sessions = collectSessions();
-          if (sessions.length > 0) {
-            await sessionRestoreService.save(sessions);
-            console.info(`[SessionRestore] Saved ${sessions.length} sessions on close`);
+      const currentWindow = getCurrentWindowIfTauri();
+      if (currentWindow) {
+        unlistenClose = await currentWindow.onCloseRequested(async () => {
+          try {
+            const sessions = collectSessions();
+            if (sessions.length > 0) {
+              await sessionRestoreService.save(sessions);
+              console.info(`[SessionRestore] Saved ${sessions.length} sessions on close`);
+            }
+          } catch (err) {
+            console.error("[SessionRestore] Failed to save sessions on close:", err);
           }
-        } catch (err) {
-          console.error("[SessionRestore] Failed to save sessions on close:", err);
-        }
-        // 不阻止关闭
-      });
+          // 不阻止关闭
+        });
+      }
 
       // 周期性保存（每 60 秒）
       timer = setInterval(async () => {
@@ -333,11 +340,11 @@ function MainApp() {
     };
   }, []);
 
-  // 初始化设置 + TerminalStatusStore（等待 Tauri IPC 就绪）
+  // 初始化设置 + TerminalStatusStore。桌面等待 IPC；Web 直接走 HTTP adapters。
   useEffect(() => {
     let cancelled = false;
-    waitForTauri().then(async (ready) => {
-      if (cancelled || !ready) return;
+    waitForDesktopRuntime().then(async (ready) => {
+      if (cancelled || (isTauriRuntime() && !ready)) return;
       await useSettingsStore.getState().loadSettings();
       if (cancelled) return;
       // 从 Settings 同步语言到 i18n
@@ -358,13 +365,17 @@ function MainApp() {
           console.warn("[SessionRestore] Failed to restore live daemon sessions:", error);
         });
       useNotificationStore.getState().init().catch(console.error);
-      useResourceStatsStore.getState().init();
+      if (isTauriRuntime()) {
+        useResourceStatsStore.getState().init();
+      }
       useEnvironmentStore.getState().init();
       useLaunchProfilesStore.getState().load().catch(console.error);
       // 重启恢复报告：把各 tab 的 resumeId 绑定状态写入应用日志（[restore-report]）
       logRestoreReport().catch(console.error);
       // 应用启动后静默检查更新（仅写入 store，不弹窗）
-      checkUpdateSilent().catch(console.error);
+      if (isTauriRuntime()) {
+        checkUpdateSilent().catch(console.error);
+      }
       // [暂时禁用] macOS 下 Dialog 按钮不可点击，暂停 onboarding 引导
       // const loadedSettings = useSettingsStore.getState().settings;
       // if (loadedSettings && !loadedSettings.general.onboardingCompleted) {
@@ -381,10 +392,16 @@ function MainApp() {
     };
   }, []);
 
+  useEffect(() => {
+    if (themeMode === "dark" || themeMode === "light" || themeMode === "system") {
+      useThemeStore.getState().setThemeMode(themeMode);
+    }
+  }, [themeMode]);
+
   // 重启时为 rehydrated Claude tabs touch 历史记录时间戳
   useEffect(() => {
-    waitForTauri().then((ready) => {
-      if (!ready) return;
+    waitForDesktopRuntime().then((ready) => {
+      if (isTauriRuntime() && !ready) return;
       const allPanels = usePanesStore.getState().allPanelsAcrossLayouts();
       for (const panel of allPanels) {
         for (const tab of panel.tabs) {
@@ -414,10 +431,9 @@ function MainApp() {
 
   // 监听 Rust 侧 popup 窗口关闭通知（on_window_event 发射）
   useEffect(() => {
-    if (!isTauriReady()) return;
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    listen<string>("popup-window-closing", (e) => {
+    listenIfTauri<string>("popup-window-closing", (e) => {
       if (cancelled) return;
       const label = e.payload;
       const poppedTabs = getPoppedTabs();
@@ -443,10 +459,9 @@ function MainApp() {
 
   // Fallback: 监听 popup 窗口销毁事件，防止 reclaim 事件丢失
   useEffect(() => {
-    if (!isTauriReady()) return;
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    listen<{ label: string }>("tauri://window-destroyed", (e) => {
+    listenIfTauri<{ label: string }>("tauri://window-destroyed", (e) => {
       if (cancelled) return;
       const label = (e.payload as { label?: string })?.label ?? "";
       if (!label.startsWith("popup-")) return;

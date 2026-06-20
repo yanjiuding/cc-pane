@@ -1,4 +1,4 @@
-import { info as logInfo } from "@tauri-apps/plugin-log";
+import { logInfoSafe } from "@/services/runtime";
 
 function serializeDevPayload(payload: Record<string, unknown>): string {
   try {
@@ -29,5 +29,5 @@ export function devDebugLog(
 
   console.debug(`[${tag}] ${event}`, payload);
 
-  logInfo(`[${tag}] ${event} ${serializeDevPayload(payload)}`).catch(() => {});
+  logInfoSafe(`[${tag}] ${event} ${serializeDevPayload(payload)}`).catch(() => {});
 }

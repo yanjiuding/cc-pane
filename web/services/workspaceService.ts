@@ -311,7 +311,9 @@ export interface GitCloneRequest {
 }
 
 export async function gitClone(request: GitCloneRequest): Promise<string> {
-  return invoke<string>("git_clone", { request });
+  return invokeOrApi<string>("git_clone", { request }, () =>
+    apiJson<string>("/api/git/clone", "POST", request),
+  );
 }
 
 // ============ Pinned / Hidden / Reorder ============

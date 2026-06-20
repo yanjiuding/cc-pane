@@ -1,11 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
+import packageJson from "../../../package.json";
 import { ArrowRight } from "lucide-react";
 import { historyService } from "@/services";
 import type { LaunchRecord } from "@/services";
 import { useActivityBarStore } from "@/stores/useActivityBarStore";
 import { waitForTauri } from "@/utils";
+import { isTauriRuntime } from "@/services/runtime";
 import HomeHeader from "./HomeHeader";
 import HomeQuickActions from "./HomeQuickActions";
 import HomeRecentProjects from "./HomeRecentProjects";
@@ -37,6 +39,11 @@ export default function HomeDashboard({ onOpenTerminal }: HomeDashboardProps) {
 
   useEffect(() => {
     let cancelled = false;
+    if (!isTauriRuntime()) {
+      setVersion(packageJson.version);
+      void loadRecords();
+      return () => { cancelled = true; };
+    }
     waitForTauri().then(async (ready) => {
       if (cancelled || !ready) return;
       try {

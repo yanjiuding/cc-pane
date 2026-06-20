@@ -142,7 +142,7 @@ pub fn spawn_pty(config: PtyConfig) -> Result<PtySpawnResult> {
     };
 
     cmd.cwd(&config.cwd);
-    for key in &config.env_remove {
+    for key in env_remove_keys(config.env_remove) {
         cmd.env_remove(key);
     }
     for (key, value) in &config.env {
@@ -164,6 +164,37 @@ pub fn spawn_pty(config: PtyConfig) -> Result<PtySpawnResult> {
         reader,
         writer,
     })
+}
+
+fn env_remove_keys(mut env_remove: Vec<String>) -> Vec<String> {
+    if !env_remove.iter().any(|key| key == "NO_COLOR") {
+        env_remove.push("NO_COLOR".to_string());
+    }
+    env_remove
+}
+
+#[cfg(test)]
+mod tests {
+    use super::env_remove_keys;
+
+    #[test]
+    fn env_remove_keys_adds_no_color_once() {
+        let keys = env_remove_keys(vec!["TERM".to_string()]);
+        assert!(keys.iter().any(|key| key == "TERM"));
+        assert_eq!(
+            keys.iter().filter(|key| key.as_str() == "NO_COLOR").count(),
+            1
+        );
+    }
+
+    #[test]
+    fn env_remove_keys_does_not_duplicate_no_color() {
+        let keys = env_remove_keys(vec!["NO_COLOR".to_string(), "TERM".to_string()]);
+        assert_eq!(
+            keys.iter().filter(|key| key.as_str() == "NO_COLOR").count(),
+            1
+        );
+    }
 }
 
 /// 跨平台按 PID 终止进程树

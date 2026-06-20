@@ -10,6 +10,7 @@ export { journalService } from "./journalService";
 export { worktreeService } from "./worktreeService";
 export * as workspaceService from "./workspaceService";
 export { settingsService } from "./settingsService";
+export { webAuthService } from "./webAuthService";
 export { layoutSwitcherService } from "./layoutSwitcherService";
 export { providerService } from "./providerService";
 export { launchProfileService } from "./launchProfileService";

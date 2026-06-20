@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import type { CCChanSettings, PetMeta } from "@/ccchan/types";
+import { invokeIfTauri, isTauriRuntime } from "@/services/runtime";
 
 const fallbackSprite = `data:image/svg+xml;utf8,${encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
@@ -74,9 +74,17 @@ export const useCCChanStore = create<CCChanStoreState>((set, get) => ({
     if (get().loading) return;
     set({ loading: true });
     try {
+      if (!isTauriRuntime()) {
+        set({
+          settings: DEFAULT_CCCHAN_SETTINGS,
+          pets: [FALLBACK_PET],
+          loaded: true,
+        });
+        return;
+      }
       const [settings, pets] = await Promise.all([
-        invoke<CCChanSettings>("get_ccchan_settings").catch(() => DEFAULT_CCCHAN_SETTINGS),
-        invoke<PetMeta[]>("get_ccchan_pets").catch(() => [FALLBACK_PET]),
+        invokeIfTauri<CCChanSettings>("get_ccchan_settings").catch(() => DEFAULT_CCCHAN_SETTINGS),
+        invokeIfTauri<PetMeta[]>("get_ccchan_pets").catch(() => [FALLBACK_PET]),
       ]);
       set({
         settings: normalizeSettings(settings),
@@ -90,7 +98,7 @@ export const useCCChanStore = create<CCChanStoreState>((set, get) => ({
 
   saveSettings: async (settings) => {
     const normalized = normalizeSettings(settings);
-    await invoke("save_ccchan_settings", { settings: normalized });
+    await invokeIfTauri("save_ccchan_settings", { settings: normalized });
     set({ settings: normalized });
   },
 

@@ -694,6 +694,11 @@ pub struct OrchestratorInfo {
     pub token: String,
 }
 
+fn local_orchestrator_endpoint_reachable(port: u16) -> bool {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
+}
+
 struct DeadBufferEntry {
     output_buffer: Arc<Mutex<OutputBuffer>>,
     replay_buffer: Arc<Mutex<ReplayBuffer>>,
@@ -1347,18 +1352,20 @@ impl TerminalService {
             env_vars.insert("CC_PANES_WORKSPACE_PATH".to_string(), ws_path.to_string());
         }
 
+        let orchestrator_info_for_launch = if is_ssh {
+            None
+        } else {
+            self.healthy_orchestrator_info()
+        };
+
         // 注入 Orchestrator API 信息到所有 PTY 会话（仅本地模式）
-        if !is_ssh {
-            if let Ok(info_guard) = self.orchestrator_info.lock() {
-                if let Some(info) = info_guard.as_ref() {
-                    env_vars.insert("CC_PANES_API_PORT".to_string(), info.port.to_string());
-                    env_vars.insert("CC_PANES_API_TOKEN".to_string(), info.token.clone());
-                    env_vars.insert(
-                        "CC_PANES_API_BASE_URL".to_string(),
-                        format!("http://127.0.0.1:{}", info.port),
-                    );
-                }
-            }
+        if let Some(info) = orchestrator_info_for_launch.as_ref() {
+            env_vars.insert("CC_PANES_API_PORT".to_string(), info.port.to_string());
+            env_vars.insert("CC_PANES_API_TOKEN".to_string(), info.token.clone());
+            env_vars.insert(
+                "CC_PANES_API_BASE_URL".to_string(),
+                format!("http://127.0.0.1:{}", info.port),
+            );
         }
 
         // WSL 透传：把 CC_PANES_* env 通过 WSLENV 暴露给 WSL 子进程
@@ -1644,7 +1651,6 @@ impl TerminalService {
                 let effective_prompt =
                     merge_session_prompts([launch_append_system_prompt.clone(), spec_prompt]);
 
-                let orch_info = self.orchestrator_info.lock().ok().and_then(|g| g.clone());
                 let ctx = CliAdapterContext {
                     session_id: session_id.clone(),
                     project_path: project_path.to_string(),
@@ -1656,8 +1662,10 @@ impl TerminalService {
                     yolo_mode: effective_yolo_mode,
                     append_system_prompt: effective_prompt,
                     initial_prompt: initial_prompt.map(|s| s.to_string()),
-                    orchestrator_port: orch_info.as_ref().map(|i| i.port),
-                    orchestrator_token: orch_info.as_ref().map(|i| i.token.clone()),
+                    orchestrator_port: orchestrator_info_for_launch.as_ref().map(|i| i.port),
+                    orchestrator_token: orchestrator_info_for_launch
+                        .as_ref()
+                        .map(|i| i.token.clone()),
                     launch_id: launch_id.map(|s| s.to_string()),
                     data_dir: self.app_paths.data_dir().to_path_buf(),
                     shared_mcp_urls: effective_shared_mcp_urls,
@@ -2806,6 +2814,27 @@ impl TerminalService {
         }
     }
 
+    fn healthy_orchestrator_info(&self) -> Option<OrchestratorInfo> {
+        let info = self.orchestrator_info.lock().ok().and_then(|g| g.clone())?;
+        if local_orchestrator_endpoint_reachable(info.port) {
+            return Some(info);
+        }
+
+        warn!(
+            port = info.port,
+            "orchestrator endpoint is not reachable; skipping ccpanes MCP injection"
+        );
+        if let Ok(mut guard) = self.orchestrator_info.lock() {
+            if guard
+                .as_ref()
+                .is_some_and(|current| current.port == info.port)
+            {
+                *guard = None;
+            }
+        }
+        None
+    }
+
     /// 注入 SessionStateMachine 引用（setup 阶段调用）。
     ///
     /// 阶段 2.8：用于 ANSI 推断降级判定 —— hook 在 30s 内有上报时，
@@ -3114,6 +3143,38 @@ mod tests {
             Arc::new(SshCredentialService::new_memory()),
         ));
         (service, temp_dir)
+    }
+
+    #[test]
+    fn healthy_orchestrator_info_drops_unreachable_port() {
+        let (service, _temp_dir) = terminal_service_for_test();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test port");
+        let port = listener.local_addr().expect("listener addr").port();
+        drop(listener);
+
+        service.set_orchestrator_info(port, "token".to_string());
+
+        assert!(service.healthy_orchestrator_info().is_none());
+        assert!(service
+            .orchestrator_info
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .is_none());
+    }
+
+    #[test]
+    fn healthy_orchestrator_info_keeps_reachable_port() {
+        let (service, _temp_dir) = terminal_service_for_test();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test port");
+        let port = listener.local_addr().expect("listener addr").port();
+
+        service.set_orchestrator_info(port, "token".to_string());
+
+        let info = service
+            .healthy_orchestrator_info()
+            .expect("reachable orchestrator info");
+        assert_eq!(info.port, port);
+        assert_eq!(info.token, "token");
     }
 
     fn install_recording_session(

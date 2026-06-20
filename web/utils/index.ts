@@ -19,6 +19,7 @@ export { buildLaunchRecordTerminalOptions } from "./launchHistory";
 export { parseEnvLines, formatEnvLines } from "./env";
 export { handleError, handleErrorSilent } from "./errorHandler";
 export { translateError } from "./errorTranslation";
+export { isTauriRuntime, isWebRuntime } from "@/services/runtime";
 
 /**
  * 从 catch 到的未知错误中提取可读消息。

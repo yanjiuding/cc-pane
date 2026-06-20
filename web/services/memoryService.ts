@@ -1,7 +1,6 @@
 /**
- * Memory 服务层 — 封装所有 Memory 相关的 Tauri invoke 调用
+ * Memory 服务层 — 封装所有 Memory 相关的 Tauri/API 调用
  */
-import { invoke } from "@tauri-apps/api/core";
 import type {
   Memory,
   MemoryQuery,
@@ -11,16 +10,21 @@ import type {
   StoreMemoryRequest,
   UpdateMemoryRequest,
 } from "@/types";
+import { apiDeleteJson, apiGet, apiJson, invokeOrApi } from "./apiClient";
 
 export const memoryService = {
   /** 搜索 Memory（支持全文搜索 + 筛选） */
   async search(query: MemoryQuery): Promise<MemoryQueryResult> {
-    return invoke<MemoryQueryResult>("search_memory", { query });
+    return invokeOrApi<MemoryQueryResult>("search_memory", { query }, () =>
+      apiJson<MemoryQueryResult>("/api/memories/search", "POST", query),
+    );
   },
 
   /** 存储新 Memory */
   async store(request: StoreMemoryRequest): Promise<Memory> {
-    return invoke<Memory>("store_memory", { request });
+    return invokeOrApi<Memory>("store_memory", { request }, () =>
+      apiJson<Memory>("/api/memories", "POST", request),
+    );
   },
 
   /** 列出 Memory（按 scope/workspace/project 筛选） */
@@ -31,28 +35,37 @@ export const memoryService = {
     limit?: number;
     offset?: number;
   }): Promise<MemoryQueryResult> {
-    return invoke<MemoryQueryResult>("list_memories", {
+    const args = {
       scope: params?.scope,
       workspaceName: params?.workspaceName,
       projectPath: params?.projectPath,
       limit: params?.limit,
       offset: params?.offset,
-    });
+    };
+    return invokeOrApi<MemoryQueryResult>("list_memories", args, () =>
+      apiGet<MemoryQueryResult>("/api/memories", args),
+    );
   },
 
   /** 获取单个 Memory */
   async get(id: string): Promise<Memory | null> {
-    return invoke<Memory | null>("get_memory", { id });
+    return invokeOrApi<Memory | null>("get_memory", { id }, () =>
+      apiGet<Memory | null>(`/api/memories/${encodeURIComponent(id)}`),
+    );
   },
 
   /** 更新 Memory */
   async update(id: string, request: UpdateMemoryRequest): Promise<boolean> {
-    return invoke<boolean>("update_memory", { id, request });
+    return invokeOrApi<boolean>("update_memory", { id, request }, () =>
+      apiJson<boolean>(`/api/memories/${encodeURIComponent(id)}`, "PATCH", request),
+    );
   },
 
   /** 删除 Memory */
   async delete(id: string): Promise<boolean> {
-    return invoke<boolean>("delete_memory", { id });
+    return invokeOrApi<boolean>("delete_memory", { id }, () =>
+      apiDeleteJson<boolean>(`/api/memories/${encodeURIComponent(id)}`),
+    );
   },
 
   /** 获取统计信息 */
@@ -60,10 +73,13 @@ export const memoryService = {
     workspaceName?: string;
     projectPath?: string;
   }): Promise<MemoryStats> {
-    return invoke<MemoryStats>("get_memory_stats", {
+    const args = {
       workspaceName: params?.workspaceName,
       projectPath: params?.projectPath,
-    });
+    };
+    return invokeOrApi<MemoryStats>("get_memory_stats", args, () =>
+      apiGet<MemoryStats>("/api/memories/stats", args),
+    );
   },
 
   /** 准备会话上下文（project memories + 指定 memories） */
@@ -71,14 +87,19 @@ export const memoryService = {
     projectPath: string,
     memoryIds: string[]
   ): Promise<string> {
-    return invoke<string>("prepare_session_context", {
+    const body = {
       projectPath,
       memoryIds,
-    });
+    };
+    return invokeOrApi<string>("prepare_session_context", body, () =>
+      apiJson<string>("/api/memories/session-context", "POST", body),
+    );
   },
 
   /** 格式化 Memory 用于注入 */
   async formatForInjection(memoryIds: string[]): Promise<string> {
-    return invoke<string>("format_memory_for_injection", { memoryIds });
+    return invokeOrApi<string>("format_memory_for_injection", { memoryIds }, () =>
+      apiJson<string>("/api/memories/format", "POST", { memoryIds }),
+    );
   },
 };

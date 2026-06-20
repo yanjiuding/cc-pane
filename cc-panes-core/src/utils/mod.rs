@@ -4,6 +4,7 @@ pub mod command;
 pub mod error;
 pub mod error_codes;
 pub mod git_command;
+pub mod launch_request;
 pub mod path_validator;
 
 pub use app_paths::{AppPaths, APP_DIR_NAME};
@@ -12,6 +13,9 @@ pub use command::{no_window_command, no_window_tokio_command};
 pub use error::AppResult;
 pub use git_command::{
     output_with_timeout, GIT_CHECKOUT_TIMEOUT, GIT_LOCAL_TIMEOUT, GIT_NETWORK_TIMEOUT,
+};
+pub use launch_request::{
+    normalize_session_request_for_current_host, normalize_session_request_for_host,
 };
 pub use path_validator::{
     sanitize_path_display, validate_command, validate_git_url, validate_mcp_name, validate_path,

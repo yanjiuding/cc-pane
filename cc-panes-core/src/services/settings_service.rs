@@ -17,6 +17,10 @@ impl SettingsService {
             .join(crate::utils::APP_DIR_NAME)
             .join("config.toml");
 
+        Self::new_with_config_path(config_path)
+    }
+
+    pub fn new_with_config_path(config_path: PathBuf) -> Self {
         let mut settings = Self::load_from_file(&config_path).unwrap_or_default();
         settings.merge_missing_defaults();
 

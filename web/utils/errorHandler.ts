@@ -1,6 +1,6 @@
 import { toast } from "sonner";
 import { translateError } from "./errorTranslation";
-import { error as logError } from "@tauri-apps/plugin-log";
+import { logErrorSafe } from "@/services/runtime";
 import { errorToString } from "./errorUtils";
 
 /**
@@ -20,7 +20,7 @@ export function handleError(error: unknown, context?: string): void {
   const logMsg = context ? `[${context}] ${errorToString(error)}` : errorToString(error);
 
   console.error(logMsg);
-  logError(`[frontend] ${logMsg}`).catch(() => {});
+  logErrorSafe(`[frontend] ${logMsg}`).catch(() => {});
 
   toast.error(userMessage);
 }
@@ -35,5 +35,5 @@ export function handleErrorSilent(error: unknown, context?: string): void {
   const logMsg = context ? `[${context}] ${errorToString(error)}` : errorToString(error);
 
   console.error(logMsg);
-  logError(`[frontend] ${logMsg}`).catch(() => {});
+  logErrorSafe(`[frontend] ${logMsg}`).catch(() => {});
 }
