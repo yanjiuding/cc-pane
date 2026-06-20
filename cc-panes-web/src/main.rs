@@ -14,10 +14,10 @@ use cc_panes_core::{
     },
     services::{
         DaemonTerminalBackend, FileSystemService, HistoryService, InProcessTerminalBackend,
-        LaunchHistoryService, ProcessMonitorService, ProjectCliHooksService, ProjectService,
-        ProviderService, RunnerService, SessionRestoreService, SettingsService, SpecService,
-        SshCredentialService, TaskBindingService, TerminalBackend, TerminalDaemonClient,
-        TerminalService, TodoService, WorkspaceService, WorktreeService,
+        LaunchHistoryService, McpConfigService, ProcessMonitorService, ProjectCliHooksService,
+        ProjectService, ProviderService, RunnerService, SessionRestoreService, SettingsService,
+        SharedMcpService, SpecService, SshCredentialService, TaskBindingService, TerminalBackend,
+        TerminalDaemonClient, TerminalService, TodoService, WorkspaceService, WorktreeService,
     },
     utils::AppPaths,
 };
@@ -101,6 +101,8 @@ async fn main() -> anyhow::Result<()> {
     let provider_service = Arc::new(ProviderService::new(app_paths.providers_path()));
     let settings_service = Arc::new(SettingsService::new());
     let filesystem_service = Arc::new(FileSystemService::new());
+    let mcp_config_service = Arc::new(McpConfigService::new());
+    let shared_mcp_service = Arc::new(SharedMcpService::new(&app_paths));
 
     let ws_emitter = Arc::new(WsEmitter::new());
     let backend_config = BackendConfig {
@@ -127,6 +129,8 @@ async fn main() -> anyhow::Result<()> {
         worktree_service,
         runner_service,
         process_monitor_service,
+        mcp_config_service,
+        shared_mcp_service,
         ws_emitter,
         default_cwd: cwd_str.clone(),
         output_mode: backend_state.output_mode,

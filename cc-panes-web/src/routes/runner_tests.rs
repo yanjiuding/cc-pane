@@ -12,10 +12,10 @@ use cc_panes_core::{
     },
     services::{
         terminal_service::{SessionOutput, SessionStatus},
-        FileSystemService, HistoryService, LaunchHistoryService, ProcessMonitorService,
-        ProjectService, ProviderService, RunnerService, SessionRestoreService, SettingsService,
-        SpecService, TaskBindingService, TerminalBackend, TodoService, WorkspaceService,
-        WorktreeService,
+        FileSystemService, HistoryService, LaunchHistoryService, McpConfigService,
+        ProcessMonitorService, ProjectService, ProviderService, RunnerService,
+        SessionRestoreService, SettingsService, SharedMcpService, SpecService, TaskBindingService,
+        TerminalBackend, TodoService, WorkspaceService, WorktreeService,
     },
     utils::{AppPaths, AppResult},
 };
@@ -140,6 +140,8 @@ fn test_state(name: &str, pid: Option<u32>) -> (AppState, std::path::PathBuf) {
             process_monitor_service.clone(),
         )),
         process_monitor_service,
+        mcp_config_service: Arc::new(McpConfigService::new()),
+        shared_mcp_service: Arc::new(SharedMcpService::new(&app_paths)),
         ws_emitter: Arc::new(WsEmitter::new()),
         default_cwd: root.to_string_lossy().to_string(),
         output_mode: TerminalOutputMode::Emitter,

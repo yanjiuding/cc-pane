@@ -1,5 +1,6 @@
 pub mod git;
 pub mod history;
+pub mod mcp;
 pub mod resources;
 pub mod runner;
 pub mod static_files;
@@ -174,6 +175,40 @@ pub fn build_router(state: AppState) -> Router {
             post(runner::kill_instance),
         )
         .route("/api/runner/pids/kill", post(runner::kill_pid))
+        .route("/api/mcp/servers", get(mcp::list_mcp_servers))
+        .route("/api/mcp/servers", put(mcp::upsert_mcp_server))
+        .route("/api/mcp/servers", delete(mcp::remove_mcp_server))
+        .route("/api/mcp/servers/{name}", get(mcp::get_mcp_server))
+        .route("/api/shared-mcp/config", get(mcp::get_shared_mcp_config))
+        .route(
+            "/api/shared-mcp/config",
+            patch(mcp::update_shared_mcp_global_config),
+        )
+        .route("/api/shared-mcp/status", get(mcp::get_shared_mcp_status))
+        .route(
+            "/api/shared-mcp/servers",
+            put(mcp::upsert_shared_mcp_server),
+        )
+        .route(
+            "/api/shared-mcp/servers/import-from-claude",
+            post(mcp::import_shared_mcp_from_claude),
+        )
+        .route(
+            "/api/shared-mcp/servers/{name}",
+            delete(mcp::remove_shared_mcp_server),
+        )
+        .route(
+            "/api/shared-mcp/servers/{name}/start",
+            post(mcp::start_shared_mcp_server),
+        )
+        .route(
+            "/api/shared-mcp/servers/{name}/stop",
+            post(mcp::stop_shared_mcp_server),
+        )
+        .route(
+            "/api/shared-mcp/servers/{name}/restart",
+            post(mcp::restart_shared_mcp_server),
+        )
         .route("/api/workspaces", get(resources::list_workspaces))
         .route("/api/workspaces", post(resources::create_workspace))
         .route(

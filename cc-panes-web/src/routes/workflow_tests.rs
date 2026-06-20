@@ -18,10 +18,10 @@ use cc_panes_core::{
     },
     services::{
         terminal_service::{SessionOutput, SessionStatus},
-        FileSystemService, HistoryService, LaunchHistoryService, ProcessMonitorService,
-        ProjectService, ProviderService, RunnerService, SessionRestoreService, SettingsService,
-        SpecService, TaskBindingService, TerminalBackend, TodoService, WorkspaceService,
-        WorktreeService,
+        FileSystemService, HistoryService, LaunchHistoryService, McpConfigService,
+        ProcessMonitorService, ProjectService, ProviderService, RunnerService,
+        SessionRestoreService, SettingsService, SharedMcpService, SpecService, TaskBindingService,
+        TerminalBackend, TodoService, WorkspaceService, WorktreeService,
     },
     utils::{AppPaths, AppResult},
 };
@@ -109,7 +109,9 @@ fn test_dir(name: &str) -> std::path::PathBuf {
 
 fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
     let root = test_dir(name);
-    let app_paths = AppPaths::new(Some(root.join("data").to_string_lossy().to_string()));
+    let app_paths = Arc::new(AppPaths::new(Some(
+        root.join("data").to_string_lossy().to_string(),
+    )));
     let db = Arc::new(Database::new_fallback().expect("db"));
     let project_repo = Arc::new(ProjectRepository::new(db.clone()));
     let todo_repo = Arc::new(TodoRepository::new(db.clone()));
@@ -130,7 +132,7 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
         spec_service: Arc::new(SpecService::new(spec_repo, todo_service)),
         task_binding_service: Arc::new(TaskBindingService::new(task_binding_repo)),
         launch_history_service: Arc::new(LaunchHistoryService::new(history_repo)),
-        session_restore_service: Arc::new(SessionRestoreService::new(db, Arc::new(app_paths))),
+        session_restore_service: Arc::new(SessionRestoreService::new(db, app_paths.clone())),
         history_service: Arc::new(HistoryService::new()),
         worktree_service: Arc::new(WorktreeService::new()),
         runner_service: Arc::new(RunnerService::new(
@@ -138,6 +140,8 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
             process_monitor_service.clone(),
         )),
         process_monitor_service,
+        mcp_config_service: Arc::new(McpConfigService::new()),
+        shared_mcp_service: Arc::new(SharedMcpService::new(&app_paths)),
         ws_emitter: Arc::new(WsEmitter::new()),
         default_cwd: root.to_string_lossy().to_string(),
         output_mode: TerminalOutputMode::Emitter,

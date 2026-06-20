@@ -286,9 +286,10 @@ mod tests {
         models::{TerminalBufferMode, WslLaunchInfo},
         services::{
             terminal_service::SessionStatus, FileSystemService, HistoryService,
-            LaunchHistoryService, ProcessMonitorService, ProjectService, ProviderService,
-            RunnerService, SessionRestoreService, SettingsService, SpecService, TaskBindingService,
-            TerminalBackend, TodoService, WorkspaceService, WorktreeService,
+            LaunchHistoryService, McpConfigService, ProcessMonitorService, ProjectService,
+            ProviderService, RunnerService, SessionRestoreService, SettingsService,
+            SharedMcpService, SpecService, TaskBindingService, TerminalBackend, TodoService,
+            WorkspaceService, WorktreeService,
         },
         utils::{AppPaths, AppResult},
     };
@@ -401,7 +402,7 @@ mod tests {
             path.to_string_lossy().to_string()
         }
 
-        let app_paths = AppPaths::new(Some(test_dir("terminal-state")));
+        let app_paths = Arc::new(AppPaths::new(Some(test_dir("terminal-state"))));
         let database = Arc::new(cc_panes_core::repository::Database::new_fallback().expect("db"));
         let project_repo = Arc::new(cc_panes_core::repository::ProjectRepository::new(
             database.clone(),
@@ -436,7 +437,7 @@ mod tests {
             launch_history_service: Arc::new(LaunchHistoryService::new(history_repo)),
             session_restore_service: Arc::new(SessionRestoreService::new(
                 database,
-                Arc::new(app_paths),
+                app_paths.clone(),
             )),
             history_service: Arc::new(HistoryService::new()),
             worktree_service: Arc::new(WorktreeService::new()),
@@ -445,6 +446,8 @@ mod tests {
                 process_monitor_service.clone(),
             )),
             process_monitor_service,
+            mcp_config_service: Arc::new(McpConfigService::new()),
+            shared_mcp_service: Arc::new(SharedMcpService::new(&app_paths)),
             ws_emitter: Arc::new(WsEmitter::new()),
             default_cwd: "/default/project".to_string(),
             output_mode: crate::state::TerminalOutputMode::Emitter,
