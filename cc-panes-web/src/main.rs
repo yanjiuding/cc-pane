@@ -14,11 +14,12 @@ use cc_panes_core::{
     },
     services::{
         DaemonTerminalBackend, FileSystemService, HistoryService, InProcessTerminalBackend,
-        LaunchHistoryService, McpConfigService, ProcessMonitorService, ProjectCliHooksService,
-        ProjectService, ProviderService, RunnerService, SessionRestoreService, SettingsService,
-        SharedMcpService, SkillService, SpecService, SshCredentialService, TaskBindingService,
-        TerminalBackend, TerminalDaemonClient, TerminalService, TodoService, UsageStatsService,
-        UserSkillService, WorkspaceService, WorktreeService,
+        LaunchHistoryService, LaunchProfileService, McpConfigService, ProcessMonitorService,
+        ProjectCliHooksService, ProjectService, ProviderService, RunnerService,
+        SessionRestoreService, SettingsService, SharedMcpService, SkillService, SpecService,
+        SshCredentialService, TaskBindingService, TerminalBackend, TerminalDaemonClient,
+        TerminalService, TodoService, UsageStatsService, UserSkillService, WorkspaceService,
+        WorktreeService,
     },
     utils::AppPaths,
 };
@@ -106,8 +107,13 @@ async fn main() -> anyhow::Result<()> {
     let mcp_config_service = Arc::new(McpConfigService::new());
     let shared_mcp_service = Arc::new(SharedMcpService::new(&app_paths));
     let skill_service = Arc::new(SkillService::new());
+    let cli_registry = Arc::new(CliToolRegistry::new());
     let external_skill_registry = Arc::new(cc_panes_core::services::ExternalSkillRegistry::new(
-        Arc::new(CliToolRegistry::new()),
+        cli_registry.clone(),
+    ));
+    let launch_profile_service = Arc::new(LaunchProfileService::new_with_external_skill_registry(
+        app_paths.launch_profiles_path(),
+        external_skill_registry.clone(),
     ));
     let user_skill_service = Arc::new(UserSkillService::new(app_paths.user_skills_dir()));
     let usage_stats_service = Arc::new(UsageStatsService::new(
@@ -121,6 +127,11 @@ async fn main() -> anyhow::Result<()> {
         app_paths: app_paths.clone(),
         settings_service: settings_service.clone(),
         provider_service: provider_service.clone(),
+        spec_service: spec_service.clone(),
+        workspace_service: workspace_service.clone(),
+        shared_mcp_service: shared_mcp_service.clone(),
+        launch_profile_service: launch_profile_service.clone(),
+        cli_registry,
         daemon_manifest: args.daemon_manifest,
     };
     let backend_state = create_terminal_backend(backend_config, ws_emitter.clone())?;
@@ -136,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
         spec_service,
         task_binding_service,
         launch_history_service,
+        launch_profile_service,
         session_restore_service,
         history_service,
         worktree_service,
@@ -168,6 +180,11 @@ struct BackendConfig {
     app_paths: Arc<AppPaths>,
     settings_service: Arc<SettingsService>,
     provider_service: Arc<ProviderService>,
+    spec_service: Arc<SpecService>,
+    workspace_service: Arc<WorkspaceService>,
+    shared_mcp_service: Arc<SharedMcpService>,
+    launch_profile_service: Arc<LaunchProfileService>,
+    cli_registry: Arc<CliToolRegistry>,
     daemon_manifest: Option<String>,
 }
 
@@ -210,18 +227,22 @@ fn create_in_process_terminal_service(
     config: BackendConfig,
     ws_emitter: Arc<WsEmitter>,
 ) -> Arc<TerminalService> {
-    let cli_registry = Arc::new(CliToolRegistry::new());
-    let project_cli_hooks_service = Arc::new(ProjectCliHooksService::new(cli_registry.clone()));
+    let project_cli_hooks_service =
+        Arc::new(ProjectCliHooksService::new(config.cli_registry.clone()));
     let ssh_credential_service = Arc::new(SshCredentialService::new());
 
     let terminal_service = Arc::new(TerminalService::new(
         config.settings_service,
         config.provider_service,
         config.app_paths,
-        cli_registry,
+        config.cli_registry,
         project_cli_hooks_service,
         ssh_credential_service,
     ));
+    terminal_service.set_spec_service(config.spec_service);
+    terminal_service.set_workspace_service(config.workspace_service);
+    terminal_service.set_shared_mcp_service(config.shared_mcp_service);
+    terminal_service.set_launch_profile_service(config.launch_profile_service);
     terminal_service.set_emitter(ws_emitter);
     terminal_service.set_notifier(Arc::new(NoopNotifier));
     terminal_service
@@ -245,6 +266,38 @@ mod tests {
         let path = std::env::temp_dir().join(format!("cc-panes-web-{name}-{millis}"));
         std::fs::create_dir_all(&path).expect("create temp dir");
         path.to_string_lossy().to_string()
+    }
+
+    fn test_backend_config(name: &str, daemon_manifest: Option<String>) -> BackendConfig {
+        let root = test_dir(name);
+        let app_paths = Arc::new(AppPaths::new(Some(root.clone())));
+        let cli_registry = Arc::new(CliToolRegistry::new());
+        let external_skill_registry = Arc::new(
+            cc_panes_core::services::ExternalSkillRegistry::new(cli_registry.clone()),
+        );
+        let db = Arc::new(Database::new_fallback().expect("db"));
+        let todo_service = Arc::new(TodoService::new(Arc::new(TodoRepository::new(db.clone()))));
+        BackendConfig {
+            app_paths: app_paths.clone(),
+            settings_service: Arc::new(SettingsService::new()),
+            provider_service: Arc::new(ProviderService::new(
+                std::path::Path::new(&root).join("providers.json"),
+            )),
+            spec_service: Arc::new(SpecService::new(
+                Arc::new(SpecRepository::new(db)),
+                todo_service,
+            )),
+            workspace_service: Arc::new(WorkspaceService::new(app_paths.workspaces_dir())),
+            shared_mcp_service: Arc::new(SharedMcpService::new(&app_paths)),
+            launch_profile_service: Arc::new(
+                LaunchProfileService::new_with_external_skill_registry(
+                    app_paths.launch_profiles_path(),
+                    external_skill_registry,
+                ),
+            ),
+            cli_registry,
+            daemon_manifest,
+        }
     }
 
     fn json_response(status: &str, body: &str) -> String {
@@ -294,14 +347,7 @@ mod tests {
     #[test]
     fn default_backend_uses_in_process_output_emitter() {
         let state = create_terminal_backend(
-            BackendConfig {
-                app_paths: Arc::new(AppPaths::new(Some(test_dir("in-process-paths")))),
-                settings_service: Arc::new(SettingsService::new()),
-                provider_service: Arc::new(ProviderService::new(
-                    std::path::Path::new(&test_dir("in-process-providers")).join("providers.json"),
-                )),
-                daemon_manifest: None,
-            },
+            test_backend_config("in-process", None),
             Arc::new(WsEmitter::new()),
         )
         .expect("backend state");
@@ -321,14 +367,10 @@ mod tests {
         .expect("write manifest");
 
         let state = create_terminal_backend(
-            BackendConfig {
-                app_paths: Arc::new(AppPaths::new(Some(test_dir("daemon-paths")))),
-                settings_service: Arc::new(SettingsService::new()),
-                provider_service: Arc::new(ProviderService::new(
-                    std::path::Path::new(&test_dir("daemon-providers")).join("providers.json"),
-                )),
-                daemon_manifest: Some(manifest_path.to_string_lossy().to_string()),
-            },
+            test_backend_config(
+                "daemon-paths",
+                Some(manifest_path.to_string_lossy().to_string()),
+            ),
             Arc::new(WsEmitter::new()),
         )
         .expect("backend state");

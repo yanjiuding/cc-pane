@@ -123,6 +123,14 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
     let todo_service = Arc::new(TodoService::new(todo_repo));
     let process_monitor_service = Arc::new(ProcessMonitorService::new());
     let launch_history_service = Arc::new(LaunchHistoryService::new(history_repo));
+    let launch_profile_service = Arc::new(
+        cc_panes_core::services::LaunchProfileService::new_with_external_skill_registry(
+            app_paths.launch_profiles_path(),
+            Arc::new(cc_panes_core::services::ExternalSkillRegistry::new(
+                Arc::new(cc_cli_adapters::CliToolRegistry::new()),
+            )),
+        ),
+    );
     let usage_stats_service = Arc::new(cc_panes_core::services::UsageStatsService::new(
         usage_stats_repo,
         launch_history_service.clone(),
@@ -138,6 +146,7 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
         spec_service: Arc::new(SpecService::new(spec_repo, todo_service)),
         task_binding_service: Arc::new(TaskBindingService::new(task_binding_repo)),
         launch_history_service,
+        launch_profile_service,
         session_restore_service: Arc::new(SessionRestoreService::new(db, app_paths.clone())),
         history_service: Arc::new(HistoryService::new()),
         worktree_service: Arc::new(WorktreeService::new()),

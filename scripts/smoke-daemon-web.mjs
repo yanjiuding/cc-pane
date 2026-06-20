@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { verifyWebGitApis } from "./smoke-daemon-web-git.mjs";
 import { verifyWebHistoryApis } from "./smoke-daemon-web-history.mjs";
+import { verifyWebLaunchProfileApis } from "./smoke-daemon-web-launch-profiles.mjs";
 import { verifyWebLocalHistoryApis } from "./smoke-daemon-web-local-history.mjs";
 import { verifyWebMcpApis } from "./smoke-daemon-web-mcp.mjs";
 import { verifyWebRunnerApis } from "./smoke-daemon-web-runner.mjs";
@@ -242,13 +243,14 @@ function assertExitCode(value, context) {
   }
 }
 
-async function createSession(baseUrl, cwd, headers = {}) {
+async function createSession(baseUrl, cwd, headers = {}, options = {}) {
   const body = JSON.stringify({
     cwd,
     cols: 100,
     rows: 30,
     launchClaude: false,
     cliTool: "none",
+    ...(options.launchProfileId ? { launchProfileId: options.launchProfileId } : {}),
   });
   const response = await requestJson(baseUrl, "/api/sessions", {
     method: "POST",
@@ -271,9 +273,17 @@ async function waitForOutput(baseUrl, sessionId, marker, headers = {}) {
   }, `output marker ${marker}`);
 }
 
-async function verifyTerminalPath({ name, baseUrl, wsUrl, cwd, headers = {}, marker }) {
+async function verifyTerminalPath({
+  name,
+  baseUrl,
+  wsUrl,
+  cwd,
+  headers = {},
+  marker,
+  launchProfileId,
+}) {
   log(`verifying ${name}`);
-  const sessionId = await createSession(baseUrl, cwd, headers);
+  const sessionId = await createSession(baseUrl, cwd, headers, { launchProfileId });
   const input = `echo ${marker}\rexit 7\r`;
   const wsResult = await openTerminalWebSocket(wsUrl(sessionId), sessionId, input);
   assertContains(wsResult.output, marker, `${name} WebSocket output`);
@@ -603,10 +613,10 @@ async function main() {
 
     const daemonRuntimeDir = await mkdtemp(path.join(tmpdir(), DAEMON_RUNTIME_PREFIX));
     const daemonDataDir = await mkdtemp(path.join(tmpdir(), DAEMON_DATA_PREFIX));
-    const webDataDir = await mkdtemp(path.join(tmpdir(), WEB_DATA_PREFIX));
+    const webDataDir = daemonDataDir;
     const webHomeDir = await mkdtemp(path.join(tmpdir(), "cc-panes-web-smoke-home-"));
     const webWorkspaceDir = await mkdtemp(path.join(tmpdir(), "cc-panes-web-smoke-workspace-"));
-    tempDirs.push(daemonRuntimeDir, daemonDataDir, webDataDir, webHomeDir, webWorkspaceDir);
+    tempDirs.push(daemonRuntimeDir, daemonDataDir, webHomeDir, webWorkspaceDir);
 
     const daemon = spawnProcess(
       cargoBinary("cc-panes-daemon"),
@@ -690,6 +700,22 @@ async function main() {
       wsUrl: (sessionId) => `ws://127.0.0.1:${webPort}/ws/${encodeURIComponent(sessionId)}`,
       cwd: tmpdir(),
       marker: "CCPANES_WEB_DAEMON_PROXY_SMOKE",
+    });
+    const launchProfileId = await verifyWebLaunchProfileApis({
+      webBaseUrl,
+      requestJson,
+      requestNoContent,
+      assertEquals,
+      fail,
+      log,
+    });
+    await verifyTerminalPath({
+      name: "web daemon proxy launch profile path",
+      baseUrl: webBaseUrl,
+      wsUrl: (sessionId) => `ws://127.0.0.1:${webPort}/ws/${encodeURIComponent(sessionId)}`,
+      cwd: tmpdir(),
+      marker: "CCPANES_WEB_LAUNCH_PROFILE_SMOKE",
+      launchProfileId,
     });
     await verifyWebResourceApis(webBaseUrl, webWorkspaceDir);
     await verifyWebWorkflowApis(webBaseUrl, webWorkspaceDir);

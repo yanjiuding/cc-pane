@@ -1,5 +1,6 @@
 pub mod git;
 pub mod history;
+pub mod launch_profiles;
 pub mod local_history;
 pub mod mcp;
 pub mod resources;
@@ -188,6 +189,34 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/user-skills/{skill_id}",
             delete(skills::remove_user_skill),
+        )
+        .route(
+            "/api/launch-profiles",
+            get(launch_profiles::list_launch_profiles),
+        )
+        .route(
+            "/api/launch-profiles",
+            post(launch_profiles::create_launch_profile),
+        )
+        .route(
+            "/api/launch-profiles/{id}",
+            get(launch_profiles::get_launch_profile),
+        )
+        .route(
+            "/api/launch-profiles/{id}",
+            put(launch_profiles::update_launch_profile),
+        )
+        .route(
+            "/api/launch-profiles/{id}",
+            delete(launch_profiles::delete_launch_profile),
+        )
+        .route(
+            "/api/launch-profiles/{id}/default",
+            post(launch_profiles::set_default_launch_profile),
+        )
+        .route(
+            "/api/launch-profiles/preview",
+            post(launch_profiles::preview_launch_profile_resolution),
         )
         .route("/api/usage-stats", get(usage_stats::query_usage_stats))
         .route(

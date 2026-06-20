@@ -9,8 +9,9 @@ use cc_cli_adapters::CliToolRegistry;
 use cc_panes_core::{
     events::NoopNotifier,
     services::{
-        InProcessTerminalBackend, ProjectCliHooksService, ProviderService, SettingsService,
-        SshCredentialService, TerminalBackend, TerminalService,
+        ExternalSkillRegistry, InProcessTerminalBackend, LaunchProfileService,
+        ProjectCliHooksService, ProviderService, SettingsService, SharedMcpService,
+        SshCredentialService, TerminalBackend, TerminalService, WorkspaceService,
     },
     utils::AppPaths,
 };
@@ -103,6 +104,13 @@ fn create_terminal_backend(
     let settings_service = Arc::new(SettingsService::new());
     let provider_service = Arc::new(ProviderService::new(app_paths.providers_path()));
     let cli_registry = Arc::new(CliToolRegistry::new());
+    let external_skill_registry = Arc::new(ExternalSkillRegistry::new(cli_registry.clone()));
+    let launch_profile_service = Arc::new(LaunchProfileService::new_with_external_skill_registry(
+        app_paths.launch_profiles_path(),
+        external_skill_registry,
+    ));
+    let workspace_service = Arc::new(WorkspaceService::new(app_paths.workspaces_dir()));
+    let shared_mcp_service = Arc::new(SharedMcpService::new(&app_paths));
     let project_cli_hooks_service = Arc::new(ProjectCliHooksService::new(cli_registry.clone()));
     let ssh_credential_service = Arc::new(SshCredentialService::new());
 
@@ -114,6 +122,9 @@ fn create_terminal_backend(
         project_cli_hooks_service,
         ssh_credential_service,
     ));
+    terminal_service.set_workspace_service(workspace_service);
+    terminal_service.set_shared_mcp_service(shared_mcp_service);
+    terminal_service.set_launch_profile_service(launch_profile_service);
     terminal_service.set_emitter(ws_emitter);
     terminal_service.set_notifier(Arc::new(NoopNotifier));
 
