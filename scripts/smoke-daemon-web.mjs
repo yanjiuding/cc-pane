@@ -12,6 +12,7 @@ import { verifyWebMemoryApis } from "./smoke-daemon-web-memory.mjs";
 import { verifyWebMcpApis } from "./smoke-daemon-web-mcp.mjs";
 import { verifyWebRunnerApis } from "./smoke-daemon-web-runner.mjs";
 import { verifyWebSkillsApis } from "./smoke-daemon-web-skills.mjs";
+import { verifyWebSshMachineApis } from "./smoke-daemon-web-ssh-machines.mjs";
 import { verifyWebUsageStatsApis } from "./smoke-daemon-web-usage-stats.mjs";
 
 const TOKEN = "ccpanes-smoke-token";
@@ -760,6 +761,14 @@ async function main() {
       webBaseUrl,
       rootDir: webWorkspaceDir,
       requestJson,
+      assertEquals,
+      fail,
+      log,
+    });
+    await verifyWebSshMachineApis({
+      webBaseUrl,
+      requestJson,
+      requestNoContent,
       assertEquals,
       fail,
       log,

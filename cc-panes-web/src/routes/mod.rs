@@ -7,6 +7,7 @@ pub mod memory;
 pub mod resources;
 pub mod runner;
 pub mod skills;
+pub mod ssh_machines;
 pub mod static_files;
 pub mod terminal;
 pub mod usage_stats;
@@ -190,6 +191,18 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/user-skills/{skill_id}",
             delete(skills::remove_user_skill),
+        )
+        .route("/api/ssh-machines", get(ssh_machines::list_ssh_machines))
+        .route("/api/ssh-machines", post(ssh_machines::add_ssh_machine))
+        .route("/api/ssh-machines", put(ssh_machines::update_ssh_machine))
+        .route("/api/ssh-machines/{id}", get(ssh_machines::get_ssh_machine))
+        .route(
+            "/api/ssh-machines/{id}",
+            delete(ssh_machines::remove_ssh_machine),
+        )
+        .route(
+            "/api/ssh-machines/{id}/check",
+            post(ssh_machines::check_ssh_connectivity),
         )
         .route(
             "/api/launch-profiles",

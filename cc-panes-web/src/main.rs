@@ -17,7 +17,7 @@ use cc_panes_core::{
         LaunchHistoryService, LaunchProfileService, McpConfigService, MemoryService,
         ProcessMonitorService, ProjectCliHooksService, ProjectService, ProviderService,
         RunnerService, SessionRestoreService, SettingsService, SharedMcpService, SkillService,
-        SpecService, SshCredentialService, TaskBindingService, TerminalBackend,
+        SpecService, SshCredentialService, SshMachineService, TaskBindingService, TerminalBackend,
         TerminalDaemonClient, TerminalService, TodoService, UsageStatsService, UserSkillService,
         WorkspaceService, WorktreeService,
     },
@@ -108,6 +108,11 @@ async fn main() -> anyhow::Result<()> {
     let shared_mcp_service = Arc::new(SharedMcpService::new(&app_paths));
     let skill_service = Arc::new(SkillService::new());
     let cli_registry = Arc::new(CliToolRegistry::new());
+    let ssh_credential_service = Arc::new(SshCredentialService::new());
+    let ssh_machine_service = Arc::new(SshMachineService::new(
+        app_paths.data_dir().join("ssh-machines.json"),
+        ssh_credential_service.clone(),
+    ));
     let external_skill_registry = Arc::new(cc_panes_core::services::ExternalSkillRegistry::new(
         cli_registry.clone(),
     ));
@@ -140,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         workspace_service: workspace_service.clone(),
         shared_mcp_service: shared_mcp_service.clone(),
         launch_profile_service: launch_profile_service.clone(),
+        ssh_credential_service,
         cli_registry,
         daemon_manifest: args.daemon_manifest,
     };
@@ -158,6 +164,7 @@ async fn main() -> anyhow::Result<()> {
         launch_history_service,
         launch_profile_service,
         memory_service,
+        ssh_machine_service,
         session_restore_service,
         history_service,
         worktree_service,
@@ -194,6 +201,7 @@ struct BackendConfig {
     workspace_service: Arc<WorkspaceService>,
     shared_mcp_service: Arc<SharedMcpService>,
     launch_profile_service: Arc<LaunchProfileService>,
+    ssh_credential_service: Arc<SshCredentialService>,
     cli_registry: Arc<CliToolRegistry>,
     daemon_manifest: Option<String>,
 }
@@ -239,7 +247,6 @@ fn create_in_process_terminal_service(
 ) -> Arc<TerminalService> {
     let project_cli_hooks_service =
         Arc::new(ProjectCliHooksService::new(config.cli_registry.clone()));
-    let ssh_credential_service = Arc::new(SshCredentialService::new());
 
     let terminal_service = Arc::new(TerminalService::new(
         config.settings_service,
@@ -247,7 +254,7 @@ fn create_in_process_terminal_service(
         config.app_paths,
         config.cli_registry,
         project_cli_hooks_service,
-        ssh_credential_service,
+        config.ssh_credential_service,
     ));
     terminal_service.set_spec_service(config.spec_service);
     terminal_service.set_workspace_service(config.workspace_service);
@@ -305,6 +312,7 @@ mod tests {
                     external_skill_registry,
                 ),
             ),
+            ssh_credential_service: Arc::new(SshCredentialService::new_memory()),
             cli_registry,
             daemon_manifest,
         }

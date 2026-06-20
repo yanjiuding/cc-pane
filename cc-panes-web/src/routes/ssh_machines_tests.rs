@@ -1,15 +1,12 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     Json,
 };
-use cc_memory::models::{
-    MemoryCategory, MemoryQuery, MemoryScope, StoreMemoryRequest, UpdateMemoryRequest,
-};
 use cc_panes_core::{
-    models::TerminalBufferMode,
+    models::{AuthMethod, SshMachine, SshMachineUpsertRequest, TerminalBufferMode},
     repository::{
         Database, HistoryRepository, ProjectRepository, RunnerRepository, SpecRepository,
         TaskBindingRepository, TodoRepository, UsageStatsRepository,
@@ -102,7 +99,7 @@ fn test_dir(name: &str) -> std::path::PathBuf {
         .expect("system clock")
         .as_millis();
     let path = std::env::temp_dir().join(format!(
-        "cc-panes-web-memory-{name}-{millis}-{}",
+        "cc-panes-web-ssh-machines-{name}-{millis}-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&path).expect("create temp dir");
@@ -181,121 +178,113 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
     (state, root)
 }
 
-fn store_request(project_path: String) -> StoreMemoryRequest {
-    StoreMemoryRequest {
-        title: "Memory API".to_string(),
-        content: "Remember the web memory route".to_string(),
-        scope: Some(MemoryScope::Project),
-        category: Some(MemoryCategory::Decision),
-        importance: Some(5),
-        workspace_name: Some("workspace-a".to_string()),
-        project_path: Some(project_path),
-        session_id: Some("session-a".to_string()),
-        tags: Some(vec!["web".to_string(), "memory".to_string()]),
-        source: Some("test".to_string()),
+fn machine(id: &str, name: &str) -> SshMachine {
+    SshMachine {
+        id: id.to_string(),
+        name: name.to_string(),
+        host: "devbox.local".to_string(),
+        port: 22,
+        user: Some("dev".to_string()),
+        auth_method: AuthMethod::Key,
+        identity_file: Some("~/.ssh/id_ed25519".to_string()),
+        description: Some("Test host".to_string()),
+        default_path: Some("~/project".to_string()),
+        tags: vec!["test".to_string()],
+        has_stored_password: false,
+        created_at: "2026-01-01T00:00:00Z".to_string(),
+        updated_at: "2026-01-01T00:00:00Z".to_string(),
+    }
+}
+
+fn request(machine: SshMachine) -> SshMachineUpsertRequest {
+    SshMachineUpsertRequest {
+        machine,
+        remember_password: false,
+        password_input: None,
+        clear_stored_password: false,
     }
 }
 
 #[tokio::test]
-async fn memory_routes_match_tauri_memory_commands() {
-    let (state, root) = test_state("crud");
-    let project = root.join("project");
-    std::fs::create_dir_all(&project).expect("project dir");
-    let project_path = project.to_string_lossy().to_string();
+async fn ssh_machine_routes_manage_crud() {
+    let (state, _root) = test_state("crud");
 
-    let (status, Json(memory)) = store_memory(
+    let (status, Json(created)) = add_ssh_machine(
         State(state.clone()),
-        Json(store_request(project_path.clone())),
+        Json(request(machine("ssh-1", "Devbox"))),
     )
     .await
-    .expect("store memory");
+    .expect("add ssh machine");
     assert_eq!(status, StatusCode::CREATED);
-    assert_eq!(memory.title, "Memory API");
+    assert_eq!(created.name, "Devbox");
+    assert_eq!(created.auth_method, AuthMethod::Key);
+    assert!(!created.has_stored_password);
 
-    let Json(listed) = list_memories(
-        State(state.clone()),
-        Query(ListMemoriesQuery {
-            scope: Some(MemoryScope::Project),
-            workspace_name: None,
-            project_path: Some(project_path.clone()),
-            limit: Some(10),
-            offset: Some(0),
-        }),
-    )
-    .await
-    .expect("list memories");
-    assert_eq!(listed.total, 1);
-
-    let Json(found) = get_memory(State(state.clone()), Path(memory.id.clone()))
+    let Json(listed) = list_ssh_machines(State(state.clone()))
         .await
-        .expect("get memory");
+        .expect("list ssh machines");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, "ssh-1");
+
+    let Json(found) = get_ssh_machine(State(state.clone()), Path("ssh-1".to_string()))
+        .await
+        .expect("get ssh machine");
     assert_eq!(
-        found.expect("memory").content,
-        "Remember the web memory route"
+        found.expect("machine").default_path.as_deref(),
+        Some("~/project")
     );
 
-    let Json(search_result) = search_memory(
+    let Json(updated) = update_ssh_machine(
         State(state.clone()),
-        Json(MemoryQuery {
-            search: Some("web memory".to_string()),
-            project_path: Some(project_path.clone()),
-            limit: Some(10),
-            ..Default::default()
-        }),
+        Json(request(SshMachine {
+            name: "Devbox Updated".to_string(),
+            port: 2222,
+            ..machine("ssh-1", "Devbox")
+        })),
     )
     .await
-    .expect("search memory");
-    assert_eq!(search_result.total, 1);
+    .expect("update ssh machine");
+    assert_eq!(updated.name, "Devbox Updated");
+    assert_eq!(updated.port, 2222);
 
-    let Json(updated) = update_memory(
-        State(state.clone()),
-        Path(memory.id.clone()),
-        Json(UpdateMemoryRequest {
-            title: Some("Updated Memory API".to_string()),
-            importance: Some(4),
-            ..Default::default()
-        }),
-    )
-    .await
-    .expect("update memory");
-    assert!(updated);
-
-    let Json(stats) = get_memory_stats(
-        State(state.clone()),
-        Query(MemoryStatsQuery {
-            workspace_name: None,
-            project_path: Some(project_path.clone()),
-        }),
-    )
-    .await
-    .expect("memory stats");
-    assert_eq!(stats.total, 1);
-    assert_eq!(stats.by_scope.get("project"), Some(&1));
-
-    let Json(formatted) = format_memory_for_injection(
-        State(state.clone()),
-        Json(FormatMemoryRequest {
-            memory_ids: vec![memory.id.clone()],
-        }),
-    )
-    .await
-    .expect("format memory");
-    assert!(formatted.contains("Updated Memory API"));
-
-    let Json(context) = prepare_session_context(
-        State(state.clone()),
-        Json(PrepareSessionContextRequest {
-            project_path: project_path.clone(),
-            memory_ids: vec![memory.id.clone()],
-        }),
-    )
-    .await
-    .expect("prepare session context");
-    assert!(context.contains("Updated Memory API"));
-    assert!(project.join("CLAUDE.local.md").exists());
-
-    let Json(deleted) = delete_memory(State(state.clone()), Path(memory.id))
+    let status = remove_ssh_machine(State(state.clone()), Path("ssh-1".to_string()))
         .await
-        .expect("delete memory");
-    assert!(deleted);
+        .expect("remove ssh machine");
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let Json(listed) = list_ssh_machines(State(state))
+        .await
+        .expect("list after delete");
+    assert!(listed.is_empty());
+}
+
+#[tokio::test]
+async fn ssh_machine_routes_reject_duplicate_name() {
+    let (state, _root) = test_state("duplicate");
+
+    let _created = add_ssh_machine(
+        State(state.clone()),
+        Json(request(machine("ssh-1", "Devbox"))),
+    )
+    .await
+    .expect("seed ssh machine");
+
+    let err = add_ssh_machine(State(state), Json(request(machine("ssh-2", "devbox"))))
+        .await
+        .expect_err("duplicate name should fail");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("already exists"));
+}
+
+#[tokio::test]
+async fn ssh_machine_routes_validate_machine_before_save() {
+    let (state, _root) = test_state("validation");
+    let mut invalid = machine("ssh-1", "Invalid");
+    invalid.host = "bad;host".to_string();
+
+    let err = add_ssh_machine(State(state), Json(request(invalid)))
+        .await
+        .expect_err("invalid host should fail");
+    assert_eq!(err.0, StatusCode::BAD_REQUEST);
+    assert!(err.1.contains("illegal characters"));
 }

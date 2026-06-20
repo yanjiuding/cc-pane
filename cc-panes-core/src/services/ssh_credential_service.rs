@@ -51,12 +51,10 @@ impl CredentialBackend for SystemCredentialBackend {
     }
 }
 
-#[cfg(test)]
 struct MemoryCredentialBackend {
     entries: std::sync::Mutex<std::collections::HashMap<String, String>>,
 }
 
-#[cfg(test)]
 impl MemoryCredentialBackend {
     fn new() -> Self {
         Self {
@@ -65,7 +63,6 @@ impl MemoryCredentialBackend {
     }
 }
 
-#[cfg(test)]
 impl CredentialBackend for MemoryCredentialBackend {
     fn set_password(&self, machine_id: &str, password: &str) -> Result<()> {
         self.entries
@@ -110,8 +107,7 @@ impl SshCredentialService {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn new_memory() -> Self {
+    pub fn new_memory() -> Self {
         Self {
             backend: Arc::new(MemoryCredentialBackend::new()),
         }

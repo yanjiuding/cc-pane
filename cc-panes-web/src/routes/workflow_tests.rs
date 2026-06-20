@@ -20,8 +20,9 @@ use cc_panes_core::{
         terminal_service::{SessionOutput, SessionStatus},
         FileSystemService, HistoryService, LaunchHistoryService, McpConfigService,
         ProcessMonitorService, ProjectService, ProviderService, RunnerService,
-        SessionRestoreService, SettingsService, SharedMcpService, SpecService, TaskBindingService,
-        TerminalBackend, TodoService, WorkspaceService, WorktreeService,
+        SessionRestoreService, SettingsService, SharedMcpService, SpecService,
+        SshCredentialService, SshMachineService, TaskBindingService, TerminalBackend, TodoService,
+        WorkspaceService, WorktreeService,
     },
     utils::{AppPaths, AppResult},
 };
@@ -139,6 +140,10 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
     ));
     let memory_service =
         Arc::new(cc_panes_core::services::MemoryService::new_memory().expect("memory"));
+    let ssh_machine_service = Arc::new(SshMachineService::new(
+        app_paths.data_dir().join("ssh-machines.json"),
+        Arc::new(SshCredentialService::new_memory()),
+    ));
     let state = AppState {
         terminal_backend: Arc::new(NoopTerminalBackend),
         workspace_service: Arc::new(WorkspaceService::new(app_paths.workspaces_dir())),
@@ -152,6 +157,7 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
         launch_history_service,
         launch_profile_service,
         memory_service,
+        ssh_machine_service,
         session_restore_service: Arc::new(SessionRestoreService::new(db, app_paths.clone())),
         history_service: Arc::new(HistoryService::new()),
         worktree_service: Arc::new(WorktreeService::new()),

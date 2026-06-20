@@ -101,7 +101,7 @@ impl SshMachineService {
         let mut new_config = previous.clone();
         new_config.machines.push(machine.clone());
         self.save_to_file(&new_config)?;
-        if let Err(error) = self.apply_secret_update(&machine, &request) {
+        if let Err(error) = self.apply_secret_update(&machine, &request, None) {
             warn!(
                 machine_id = %machine.id,
                 error = %error,
@@ -135,11 +135,12 @@ impl SshMachineService {
 
         self.validate_password_request(&machine, &request, true)?;
 
+        let previous_machine = config.machines[pos].clone();
         let previous = config.clone();
         let mut new_config = previous.clone();
         new_config.machines[pos] = machine.clone();
         self.save_to_file(&new_config)?;
-        if let Err(error) = self.apply_secret_update(&machine, &request) {
+        if let Err(error) = self.apply_secret_update(&machine, &request, Some(&previous_machine)) {
             warn!(
                 machine_id = %machine.id,
                 error = %error,
@@ -164,13 +165,22 @@ impl SshMachineService {
             anyhow::bail!("SSH machine '{}' not found", id);
         }
 
+        if let Some(machine) = config.machines.iter().find(|machine| machine.id == id) {
+            if machine.auth_method == AuthMethod::Password {
+                self.credential_service.delete_password(id)?;
+            }
+        }
         self.save_to_file(&new_config)?;
-        self.credential_service.delete_password(id)?;
         *config = new_config;
         Ok(())
     }
 
     fn hydrate_machine(&self, mut machine: SshMachine) -> SshMachine {
+        if machine.auth_method != AuthMethod::Password {
+            machine.has_stored_password = false;
+            return machine;
+        }
+
         machine.has_stored_password = match self.credential_service.has_password(&machine.id) {
             Ok(has_password) => has_password,
             Err(error) => {
@@ -213,8 +223,16 @@ impl SshMachineService {
         &self,
         machine: &SshMachine,
         request: &SshMachineUpsertRequest,
+        previous_machine: Option<&SshMachine>,
     ) -> Result<()> {
-        if request.clear_stored_password || machine.auth_method != AuthMethod::Password {
+        let changed_from_password = previous_machine
+            .map(|previous| {
+                previous.auth_method == AuthMethod::Password
+                    && machine.auth_method != AuthMethod::Password
+            })
+            .unwrap_or(false);
+
+        if request.clear_stored_password || changed_from_password {
             self.credential_service.delete_password(&machine.id)?;
         }
 
@@ -399,6 +417,23 @@ mod tests {
         assert!(content.contains("\"description\": \"notes\""));
         assert!(!content.contains("secret"));
         assert!(!content.contains("hasStoredPassword"));
+    }
+
+    #[test]
+    fn add_key_machine_does_not_touch_credentials() {
+        let dir = tempdir().expect("tempdir");
+        let service =
+            SshMachineService::new_with_memory_credentials(dir.path().join("ssh-machines.json"));
+
+        let saved = service
+            .add(fixture_request(fixture_machine("m1", AuthMethod::Key)))
+            .expect("add key machine");
+
+        assert!(!saved.has_stored_password);
+        assert!(!service
+            .credential_service
+            .has_password("m1")
+            .expect("credential lookup"));
     }
 
     #[test]

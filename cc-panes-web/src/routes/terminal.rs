@@ -288,8 +288,8 @@ mod tests {
             terminal_service::SessionStatus, FileSystemService, HistoryService,
             LaunchHistoryService, McpConfigService, ProcessMonitorService, ProjectService,
             ProviderService, RunnerService, SessionRestoreService, SettingsService,
-            SharedMcpService, SpecService, TaskBindingService, TerminalBackend, TodoService,
-            WorkspaceService, WorktreeService,
+            SharedMcpService, SpecService, SshCredentialService, SshMachineService,
+            TaskBindingService, TerminalBackend, TodoService, WorkspaceService, WorktreeService,
         },
         utils::{AppPaths, AppResult},
     };
@@ -442,6 +442,10 @@ mod tests {
         ));
         let memory_service =
             Arc::new(cc_panes_core::services::MemoryService::new_memory().expect("memory"));
+        let ssh_machine_service = Arc::new(SshMachineService::new(
+            app_paths.data_dir().join("ssh-machines.json"),
+            Arc::new(SshCredentialService::new_memory()),
+        ));
         AppState {
             terminal_backend: backend,
             workspace_service: Arc::new(WorkspaceService::new(app_paths.workspaces_dir())),
@@ -455,6 +459,7 @@ mod tests {
             launch_history_service,
             launch_profile_service,
             memory_service,
+            ssh_machine_service,
             session_restore_service: Arc::new(SessionRestoreService::new(
                 database,
                 app_paths.clone(),
