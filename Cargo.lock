@@ -1069,6 +1069,7 @@ dependencies = [
  "cc-panes-core",
  "clap",
  "dirs",
+ "encoding_rs",
  "futures-util",
  "mime_guess",
  "parking_lot",

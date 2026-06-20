@@ -6,6 +6,7 @@ import path from "node:path";
 
 import { verifyWebGitApis } from "./smoke-daemon-web-git.mjs";
 import { verifyWebHistoryApis } from "./smoke-daemon-web-history.mjs";
+import { verifyWebLocalHistoryApis } from "./smoke-daemon-web-local-history.mjs";
 import { verifyWebMcpApis } from "./smoke-daemon-web-mcp.mjs";
 import { verifyWebRunnerApis } from "./smoke-daemon-web-runner.mjs";
 
@@ -689,6 +690,15 @@ async function main() {
       log,
     });
     await verifyWebHistoryApis({
+      webBaseUrl,
+      rootDir: webWorkspaceDir,
+      requestJson,
+      requestNoContent,
+      assertEquals,
+      fail,
+      log,
+    });
+    await verifyWebLocalHistoryApis({
       webBaseUrl,
       rootDir: webWorkspaceDir,
       requestJson,

@@ -1,5 +1,6 @@
 pub mod git;
 pub mod history;
+pub mod local_history;
 pub mod mcp;
 pub mod resources;
 pub mod runner;
@@ -208,6 +209,92 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/shared-mcp/servers/{name}/restart",
             post(mcp::restart_shared_mcp_server),
+        )
+        .route(
+            "/api/local-history/init",
+            post(local_history::init_project_history),
+        )
+        .route(
+            "/api/local-history/config",
+            get(local_history::get_history_config),
+        )
+        .route(
+            "/api/local-history/config",
+            put(local_history::update_history_config),
+        )
+        .route(
+            "/api/local-history/stop",
+            post(local_history::stop_project_history),
+        )
+        .route(
+            "/api/local-history/cleanup",
+            post(local_history::cleanup_project_history),
+        )
+        .route(
+            "/api/local-history/files/versions",
+            get(local_history::list_file_versions),
+        )
+        .route(
+            "/api/local-history/files/content",
+            get(local_history::get_version_content),
+        )
+        .route(
+            "/api/local-history/files/restore",
+            post(local_history::restore_file_version),
+        )
+        .route(
+            "/api/local-history/files/diff",
+            get(local_history::get_version_diff),
+        )
+        .route(
+            "/api/local-history/files/diff-between",
+            get(local_history::get_versions_diff),
+        )
+        .route("/api/local-history/labels", put(local_history::put_label))
+        .route("/api/local-history/labels", get(local_history::list_labels))
+        .route(
+            "/api/local-history/labels",
+            delete(local_history::delete_label),
+        )
+        .route(
+            "/api/local-history/labels/restore",
+            post(local_history::restore_to_label),
+        )
+        .route(
+            "/api/local-history/labels/auto",
+            post(local_history::create_auto_label),
+        )
+        .route(
+            "/api/local-history/directory-changes",
+            get(local_history::list_directory_changes),
+        )
+        .route(
+            "/api/local-history/recent-changes",
+            get(local_history::get_recent_changes),
+        )
+        .route(
+            "/api/local-history/deleted-files",
+            get(local_history::list_deleted_files),
+        )
+        .route(
+            "/api/local-history/compress",
+            post(local_history::compress_history),
+        )
+        .route(
+            "/api/local-history/current-branch",
+            get(local_history::get_current_branch),
+        )
+        .route(
+            "/api/local-history/file-branches",
+            get(local_history::get_file_branches),
+        )
+        .route(
+            "/api/local-history/file-versions-by-branch",
+            get(local_history::list_file_versions_by_branch),
+        )
+        .route(
+            "/api/local-history/worktree-recent-changes",
+            get(local_history::list_worktree_recent_changes),
         )
         .route("/api/workspaces", get(resources::list_workspaces))
         .route("/api/workspaces", post(resources::create_workspace))
