@@ -10,6 +10,7 @@ import { verifyWebLocalHistoryApis } from "./smoke-daemon-web-local-history.mjs"
 import { verifyWebMcpApis } from "./smoke-daemon-web-mcp.mjs";
 import { verifyWebRunnerApis } from "./smoke-daemon-web-runner.mjs";
 import { verifyWebSkillsApis } from "./smoke-daemon-web-skills.mjs";
+import { verifyWebUsageStatsApis } from "./smoke-daemon-web-usage-stats.mjs";
 
 const TOKEN = "ccpanes-smoke-token";
 const DAEMON_RUNTIME_PREFIX = "cc-panes-daemon-smoke-runtime-";
@@ -31,10 +32,13 @@ function cargoBinary(name) {
   return path.join("target", "debug", `${name}${extension}`);
 }
 
-function spawnProcess(command, args, name) {
+function spawnProcess(command, args, name, options = {}) {
   const child = spawn(command, args, {
     cwd: process.cwd(),
-    env: process.env,
+    env: {
+      ...process.env,
+      ...(options.env ?? {}),
+    },
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
@@ -600,8 +604,9 @@ async function main() {
     const daemonRuntimeDir = await mkdtemp(path.join(tmpdir(), DAEMON_RUNTIME_PREFIX));
     const daemonDataDir = await mkdtemp(path.join(tmpdir(), DAEMON_DATA_PREFIX));
     const webDataDir = await mkdtemp(path.join(tmpdir(), WEB_DATA_PREFIX));
+    const webHomeDir = await mkdtemp(path.join(tmpdir(), "cc-panes-web-smoke-home-"));
     const webWorkspaceDir = await mkdtemp(path.join(tmpdir(), "cc-panes-web-smoke-workspace-"));
-    tempDirs.push(daemonRuntimeDir, daemonDataDir, webDataDir, webWorkspaceDir);
+    tempDirs.push(daemonRuntimeDir, daemonDataDir, webDataDir, webHomeDir, webWorkspaceDir);
 
     const daemon = spawnProcess(
       cargoBinary("cc-panes-daemon"),
@@ -660,6 +665,12 @@ async function main() {
         manifestPath,
       ],
       "web",
+      {
+        env: {
+          HOME: webHomeDir,
+          USERPROFILE: webHomeDir,
+        },
+      },
     );
     processes.push(web);
 
@@ -712,6 +723,14 @@ async function main() {
     await verifyWebSkillsApis({
       webBaseUrl,
       rootDir: webWorkspaceDir,
+      requestJson,
+      requestNoContent,
+      assertEquals,
+      fail,
+      log,
+    });
+    await verifyWebUsageStatsApis({
+      webBaseUrl,
       requestJson,
       requestNoContent,
       assertEquals,

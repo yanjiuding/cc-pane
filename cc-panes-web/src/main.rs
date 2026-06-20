@@ -10,15 +10,15 @@ use cc_panes_core::{
     events::NoopNotifier,
     repository::{
         Database, HistoryRepository, ProjectRepository, RunnerRepository, SpecRepository,
-        TaskBindingRepository, TodoRepository,
+        TaskBindingRepository, TodoRepository, UsageStatsRepository,
     },
     services::{
         DaemonTerminalBackend, FileSystemService, HistoryService, InProcessTerminalBackend,
         LaunchHistoryService, McpConfigService, ProcessMonitorService, ProjectCliHooksService,
         ProjectService, ProviderService, RunnerService, SessionRestoreService, SettingsService,
         SharedMcpService, SkillService, SpecService, SshCredentialService, TaskBindingService,
-        TerminalBackend, TerminalDaemonClient, TerminalService, TodoService, UserSkillService,
-        WorkspaceService, WorktreeService,
+        TerminalBackend, TerminalDaemonClient, TerminalService, TodoService, UsageStatsService,
+        UserSkillService, WorkspaceService, WorktreeService,
     },
     utils::AppPaths,
 };
@@ -85,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let task_binding_repo = Arc::new(TaskBindingRepository::new(database.clone()));
     let history_repo = Arc::new(HistoryRepository::new(database.clone()));
     let runner_repo = Arc::new(RunnerRepository::new(database.clone()));
+    let usage_stats_repo = Arc::new(UsageStatsRepository::new(database.clone()));
     let workspace_service = Arc::new(WorkspaceService::new(app_paths.workspaces_dir()));
     let project_service = Arc::new(ProjectService::new(project_repo));
     let todo_service = Arc::new(TodoService::new(todo_repo));
@@ -109,6 +110,11 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(CliToolRegistry::new()),
     ));
     let user_skill_service = Arc::new(UserSkillService::new(app_paths.user_skills_dir()));
+    let usage_stats_service = Arc::new(UsageStatsService::new(
+        usage_stats_repo,
+        launch_history_service.clone(),
+    ));
+    usage_stats_service.start_background_tasks();
 
     let ws_emitter = Arc::new(WsEmitter::new());
     let backend_config = BackendConfig {
@@ -140,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
         skill_service,
         external_skill_registry,
         user_skill_service,
+        usage_stats_service,
         ws_emitter,
         default_cwd: cwd_str.clone(),
         output_mode: backend_state.output_mode,

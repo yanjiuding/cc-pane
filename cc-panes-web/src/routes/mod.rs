@@ -7,6 +7,7 @@ pub mod runner;
 pub mod skills;
 pub mod static_files;
 pub mod terminal;
+pub mod usage_stats;
 pub mod workflow;
 
 use axum::{
@@ -187,6 +188,15 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/user-skills/{skill_id}",
             delete(skills::remove_user_skill),
+        )
+        .route("/api/usage-stats", get(usage_stats::query_usage_stats))
+        .route(
+            "/api/usage-stats/input",
+            post(usage_stats::record_terminal_input),
+        )
+        .route(
+            "/api/usage-stats/refresh",
+            post(usage_stats::refresh_usage_stats),
         )
         .route("/api/mcp/servers", get(mcp::list_mcp_servers))
         .route("/api/mcp/servers", put(mcp::upsert_mcp_server))

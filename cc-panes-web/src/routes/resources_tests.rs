@@ -114,8 +114,16 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
     let task_binding_repo = Arc::new(TaskBindingRepository::new(db.clone()));
     let history_repo = Arc::new(HistoryRepository::new(db.clone()));
     let runner_repo = Arc::new(RunnerRepository::new(db.clone()));
+    let usage_stats_repo = Arc::new(cc_panes_core::repository::UsageStatsRepository::new(
+        db.clone(),
+    ));
     let todo_service = Arc::new(TodoService::new(todo_repo));
     let process_monitor_service = Arc::new(ProcessMonitorService::new());
+    let launch_history_service = Arc::new(LaunchHistoryService::new(history_repo));
+    let usage_stats_service = Arc::new(cc_panes_core::services::UsageStatsService::new(
+        usage_stats_repo,
+        launch_history_service.clone(),
+    ));
     let state = AppState {
         terminal_backend: Arc::new(NoopTerminalBackend),
         workspace_service: Arc::new(WorkspaceService::new(app_paths.workspaces_dir())),
@@ -126,7 +134,7 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
         todo_service: todo_service.clone(),
         spec_service: Arc::new(SpecService::new(spec_repo, todo_service)),
         task_binding_service: Arc::new(TaskBindingService::new(task_binding_repo)),
-        launch_history_service: Arc::new(LaunchHistoryService::new(history_repo)),
+        launch_history_service,
         session_restore_service: Arc::new(SessionRestoreService::new(db, app_paths.clone())),
         history_service: Arc::new(HistoryService::new()),
         worktree_service: Arc::new(WorktreeService::new()),
@@ -144,6 +152,7 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
         user_skill_service: Arc::new(cc_panes_core::services::UserSkillService::new(
             app_paths.user_skills_dir(),
         )),
+        usage_stats_service,
         ws_emitter: Arc::new(WsEmitter::new()),
         default_cwd: root.to_string_lossy().to_string(),
         output_mode: TerminalOutputMode::Emitter,

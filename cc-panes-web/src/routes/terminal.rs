@@ -422,8 +422,16 @@ mod tests {
         let runner_repo = Arc::new(cc_panes_core::repository::RunnerRepository::new(
             database.clone(),
         ));
+        let usage_stats_repo = Arc::new(cc_panes_core::repository::UsageStatsRepository::new(
+            database.clone(),
+        ));
         let todo_service = Arc::new(TodoService::new(todo_repo));
         let process_monitor_service = Arc::new(ProcessMonitorService::new());
+        let launch_history_service = Arc::new(LaunchHistoryService::new(history_repo));
+        let usage_stats_service = Arc::new(cc_panes_core::services::UsageStatsService::new(
+            usage_stats_repo,
+            launch_history_service.clone(),
+        ));
         AppState {
             terminal_backend: backend,
             workspace_service: Arc::new(WorkspaceService::new(app_paths.workspaces_dir())),
@@ -434,7 +442,7 @@ mod tests {
             todo_service: todo_service.clone(),
             spec_service: Arc::new(SpecService::new(spec_repo, todo_service)),
             task_binding_service: Arc::new(TaskBindingService::new(task_binding_repo)),
-            launch_history_service: Arc::new(LaunchHistoryService::new(history_repo)),
+            launch_history_service,
             session_restore_service: Arc::new(SessionRestoreService::new(
                 database,
                 app_paths.clone(),
@@ -455,6 +463,7 @@ mod tests {
             user_skill_service: Arc::new(cc_panes_core::services::UserSkillService::new(
                 app_paths.user_skills_dir(),
             )),
+            usage_stats_service,
             ws_emitter: Arc::new(WsEmitter::new()),
             default_cwd: "/default/project".to_string(),
             output_mode: crate::state::TerminalOutputMode::Emitter,

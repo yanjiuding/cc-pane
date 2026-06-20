@@ -4,8 +4,8 @@ use cc_panes_core::services::{
     ExternalSkillRegistry, FileSystemService, HistoryService, LaunchHistoryService,
     McpConfigService, ProcessMonitorService, ProjectService, ProviderService, RunnerService,
     SessionRestoreService, SettingsService, SharedMcpService, SkillService, SpecService,
-    TaskBindingService, TerminalBackend, TodoService, UserSkillService, WorkspaceService,
-    WorktreeService,
+    TaskBindingService, TerminalBackend, TodoService, UsageStatsService, UserSkillService,
+    WorkspaceService, WorktreeService,
 };
 
 use crate::ws_emitter::WsEmitter;
@@ -39,6 +39,7 @@ pub struct AppState {
     pub skill_service: Arc<SkillService>,
     pub external_skill_registry: Arc<ExternalSkillRegistry>,
     pub user_skill_service: Arc<UserSkillService>,
+    pub usage_stats_service: Arc<UsageStatsService>,
     pub ws_emitter: Arc<WsEmitter>,
     pub default_cwd: String,
     pub output_mode: TerminalOutputMode,
