@@ -4,6 +4,7 @@ pub mod local_history;
 pub mod mcp;
 pub mod resources;
 pub mod runner;
+pub mod skills;
 pub mod static_files;
 pub mod terminal;
 pub mod workflow;
@@ -176,6 +177,17 @@ pub fn build_router(state: AppState) -> Router {
             post(runner::kill_instance),
         )
         .route("/api/runner/pids/kill", post(runner::kill_pid))
+        .route("/api/skills", get(skills::list_skills))
+        .route("/api/skills", put(skills::save_skill))
+        .route("/api/skills", delete(skills::delete_skill))
+        .route("/api/skills/copy", post(skills::copy_skill))
+        .route("/api/skills/{name}", get(skills::get_skill))
+        .route("/api/external-skills", get(skills::list_external_skills))
+        .route("/api/user-skills", get(skills::list_user_skills))
+        .route(
+            "/api/user-skills/{skill_id}",
+            delete(skills::remove_user_skill),
+        )
         .route("/api/mcp/servers", get(mcp::list_mcp_servers))
         .route("/api/mcp/servers", put(mcp::upsert_mcp_server))
         .route("/api/mcp/servers", delete(mcp::remove_mcp_server))

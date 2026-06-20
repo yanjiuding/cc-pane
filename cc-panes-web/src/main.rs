@@ -16,8 +16,9 @@ use cc_panes_core::{
         DaemonTerminalBackend, FileSystemService, HistoryService, InProcessTerminalBackend,
         LaunchHistoryService, McpConfigService, ProcessMonitorService, ProjectCliHooksService,
         ProjectService, ProviderService, RunnerService, SessionRestoreService, SettingsService,
-        SharedMcpService, SpecService, SshCredentialService, TaskBindingService, TerminalBackend,
-        TerminalDaemonClient, TerminalService, TodoService, WorkspaceService, WorktreeService,
+        SharedMcpService, SkillService, SpecService, SshCredentialService, TaskBindingService,
+        TerminalBackend, TerminalDaemonClient, TerminalService, TodoService, UserSkillService,
+        WorkspaceService, WorktreeService,
     },
     utils::AppPaths,
 };
@@ -103,6 +104,11 @@ async fn main() -> anyhow::Result<()> {
     let filesystem_service = Arc::new(FileSystemService::new());
     let mcp_config_service = Arc::new(McpConfigService::new());
     let shared_mcp_service = Arc::new(SharedMcpService::new(&app_paths));
+    let skill_service = Arc::new(SkillService::new());
+    let external_skill_registry = Arc::new(cc_panes_core::services::ExternalSkillRegistry::new(
+        Arc::new(CliToolRegistry::new()),
+    ));
+    let user_skill_service = Arc::new(UserSkillService::new(app_paths.user_skills_dir()));
 
     let ws_emitter = Arc::new(WsEmitter::new());
     let backend_config = BackendConfig {
@@ -131,6 +137,9 @@ async fn main() -> anyhow::Result<()> {
         process_monitor_service,
         mcp_config_service,
         shared_mcp_service,
+        skill_service,
+        external_skill_registry,
+        user_skill_service,
         ws_emitter,
         default_cwd: cwd_str.clone(),
         output_mode: backend_state.output_mode,

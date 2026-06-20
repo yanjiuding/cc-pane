@@ -9,6 +9,7 @@ import { verifyWebHistoryApis } from "./smoke-daemon-web-history.mjs";
 import { verifyWebLocalHistoryApis } from "./smoke-daemon-web-local-history.mjs";
 import { verifyWebMcpApis } from "./smoke-daemon-web-mcp.mjs";
 import { verifyWebRunnerApis } from "./smoke-daemon-web-runner.mjs";
+import { verifyWebSkillsApis } from "./smoke-daemon-web-skills.mjs";
 
 const TOKEN = "ccpanes-smoke-token";
 const DAEMON_RUNTIME_PREFIX = "cc-panes-daemon-smoke-runtime-";
@@ -663,6 +664,7 @@ async function main() {
     processes.push(web);
 
     const webBaseUrl = `http://127.0.0.1:${webPort}`;
+    process.env.CCPANES_WEB_SMOKE_DATA_DIR = webDataDir;
     await waitFor(
       async () => {
         const response = await fetch(webBaseUrl);
@@ -699,6 +701,15 @@ async function main() {
       log,
     });
     await verifyWebLocalHistoryApis({
+      webBaseUrl,
+      rootDir: webWorkspaceDir,
+      requestJson,
+      requestNoContent,
+      assertEquals,
+      fail,
+      log,
+    });
+    await verifyWebSkillsApis({
       webBaseUrl,
       rootDir: webWorkspaceDir,
       requestJson,

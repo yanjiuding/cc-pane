@@ -448,6 +448,13 @@ mod tests {
             process_monitor_service,
             mcp_config_service: Arc::new(McpConfigService::new()),
             shared_mcp_service: Arc::new(SharedMcpService::new(&app_paths)),
+            skill_service: Arc::new(cc_panes_core::services::SkillService::new()),
+            external_skill_registry: Arc::new(cc_panes_core::services::ExternalSkillRegistry::new(
+                Arc::new(cc_cli_adapters::CliToolRegistry::new()),
+            )),
+            user_skill_service: Arc::new(cc_panes_core::services::UserSkillService::new(
+                app_paths.user_skills_dir(),
+            )),
             ws_emitter: Arc::new(WsEmitter::new()),
             default_cwd: "/default/project".to_string(),
             output_mode: crate::state::TerminalOutputMode::Emitter,
