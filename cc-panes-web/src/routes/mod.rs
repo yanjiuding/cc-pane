@@ -128,6 +128,15 @@ pub fn build_router(state: AppState) -> Router {
             "/api/terminal-sessions/{session_id}/output",
             delete(history::clear_session_output),
         )
+        .route("/api/layout-snapshot", put(history::save_layout_snapshot))
+        .route(
+            "/api/layout-snapshot/{profile_id}",
+            get(history::load_layout_snapshot),
+        )
+        .route(
+            "/api/layout-snapshot/{profile_id}",
+            delete(history::clear_layout_snapshot),
+        )
         .route(
             "/api/workspace-snapshots/{workspace_id}",
             get(history::list_workspace_snapshots),

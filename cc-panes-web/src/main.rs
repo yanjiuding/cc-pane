@@ -15,12 +15,13 @@ use cc_panes_core::{
     },
     services::{
         DaemonTerminalBackend, FileSystemService, HistoryService, InProcessTerminalBackend,
-        JournalService, LaunchHistoryService, LaunchProfileService, McpConfigService,
-        MemoryService, PlanService, ProcessMonitorService, ProjectCliHooksService, ProjectService,
-        ProviderService, RunnerService, SessionRestoreService, SettingsService, SharedMcpService,
-        SkillService, SpecService, SshCredentialService, SshMachineService, TaskBindingService,
-        TerminalBackend, TerminalDaemonClient, TerminalService, TodoService, UsageStatsService,
-        UserSkillService, WorkspaceService, WorktreeService,
+        JournalService, LaunchHistoryService, LaunchProfileService, LayoutSnapshotService,
+        McpConfigService, MemoryService, PlanService, ProcessMonitorService,
+        ProjectCliHooksService, ProjectService, ProviderService, RunnerService,
+        SessionRestoreService, SettingsService, SharedMcpService, SkillService, SpecService,
+        SshCredentialService, SshMachineService, TaskBindingService, TerminalBackend,
+        TerminalDaemonClient, TerminalService, TodoService, UsageStatsService, UserSkillService,
+        WorkspaceService, WorktreeService,
     },
     utils::{AppPaths, APP_DIR_NAME},
 };
@@ -233,6 +234,7 @@ async fn main() -> anyhow::Result<()> {
     let spec_service = Arc::new(SpecService::new(spec_repo, todo_service.clone()));
     let task_binding_service = Arc::new(TaskBindingService::new(task_binding_repo));
     let launch_history_service = Arc::new(LaunchHistoryService::new(history_repo));
+    let layout_snapshot_service = Arc::new(LayoutSnapshotService::new(database.clone()));
     let session_restore_service = Arc::new(SessionRestoreService::new(database, app_paths.clone()));
     let history_service = Arc::new(HistoryService::new());
     let worktree_service = Arc::new(WorktreeService::new());
@@ -304,6 +306,7 @@ async fn main() -> anyhow::Result<()> {
         spec_service,
         task_binding_service,
         launch_history_service,
+        layout_snapshot_service,
         launch_profile_service,
         memory_service,
         ssh_machine_service,

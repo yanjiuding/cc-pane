@@ -37,10 +37,15 @@ pub async fn static_handler(uri: Uri) -> Response {
 }
 
 fn serve_dist_file(path: &str) -> Option<Response> {
-    let dist_root = dist_root();
-    let file_path = safe_join(&dist_root, path)?;
-    let bytes = std::fs::read(&file_path).ok()?;
-    Some(file_response(path, bytes))
+    for dist_root in dist_roots() {
+        let Some(file_path) = safe_join(&dist_root, path) else {
+            continue;
+        };
+        if let Ok(bytes) = std::fs::read(&file_path) {
+            return Some(file_response(path, bytes));
+        }
+    }
+    None
 }
 
 fn serve_embedded_file(path: &str) -> Option<Response> {
@@ -58,10 +63,23 @@ fn file_response(path: &str, bytes: impl Into<Cow<'static, [u8]>>) -> Response {
         .into_response()
 }
 
-fn dist_root() -> PathBuf {
-    std::env::var_os("CCPANES_WEB_DIST_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("dist"))
+fn dist_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(path) = std::env::var_os("CCPANES_WEB_DIST_DIR").map(PathBuf::from) {
+        roots.push(path);
+    }
+    roots.push(PathBuf::from("dist"));
+    roots.push(PathBuf::from("resources").join("web-dist"));
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            roots.push(exe_dir.join("dist"));
+            roots.push(exe_dir.join("resources").join("web-dist"));
+            roots.push(exe_dir.join("..").join("resources").join("web-dist"));
+        }
+    }
+
+    roots
 }
 
 fn safe_join(root: &Path, request_path: &str) -> Option<PathBuf> {

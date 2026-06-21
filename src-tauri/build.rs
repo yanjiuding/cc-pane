@@ -5,6 +5,7 @@ fn main() {
     // Release 构建时 copy-hook.cjs 会用真实内容覆盖
     ensure_bundled_claude_config();
     ensure_hook_binary_placeholder();
+    ensure_web_dist_placeholder();
 
     tauri_build::build();
 }
@@ -49,5 +50,22 @@ fn ensure_hook_binary_placeholder() {
     let daemon_placeholder = binaries_dir.join("cc-panes-daemon.placeholder");
     if !daemon_placeholder.exists() {
         std::fs::write(daemon_placeholder, "placeholder for dev build").ok();
+    }
+}
+
+/// 确保 bundle.resources 中引用的 resources/web-dist/ 在 dev/check 模式也能匹配到
+fn ensure_web_dist_placeholder() {
+    let web_dist_dir = Path::new("resources/web-dist");
+    if !web_dist_dir.exists() {
+        std::fs::create_dir_all(web_dist_dir).ok();
+    }
+
+    let index = web_dist_dir.join("index.html");
+    if !index.exists() {
+        std::fs::write(
+            index,
+            "<!doctype html><html><body>placeholder for dev build</body></html>",
+        )
+        .ok();
     }
 }

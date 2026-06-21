@@ -287,10 +287,11 @@ mod tests {
         models::{TerminalBufferMode, WslLaunchInfo},
         services::{
             terminal_service::SessionStatus, FileSystemService, HistoryService,
-            LaunchHistoryService, McpConfigService, PlanService, ProcessMonitorService,
-            ProjectService, ProviderService, RunnerService, SessionRestoreService, SettingsService,
-            SharedMcpService, SpecService, SshCredentialService, SshMachineService,
-            TaskBindingService, TerminalBackend, TodoService, WorkspaceService, WorktreeService,
+            LaunchHistoryService, LayoutSnapshotService, McpConfigService, PlanService,
+            ProcessMonitorService, ProjectService, ProviderService, RunnerService,
+            SessionRestoreService, SettingsService, SharedMcpService, SpecService,
+            SshCredentialService, SshMachineService, TaskBindingService, TerminalBackend,
+            TodoService, WorkspaceService, WorktreeService,
         },
         utils::{AppPaths, AppResult},
     };
@@ -458,6 +459,7 @@ mod tests {
             spec_service: Arc::new(SpecService::new(spec_repo, todo_service)),
             task_binding_service: Arc::new(TaskBindingService::new(task_binding_repo)),
             launch_history_service,
+            layout_snapshot_service: Arc::new(LayoutSnapshotService::new(database.clone())),
             launch_profile_service,
             memory_service,
             ssh_machine_service,

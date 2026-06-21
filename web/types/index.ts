@@ -8,6 +8,11 @@ export type {
   PaneContextAction,
 } from "./pane";
 export type {
+  LayoutSnapshot,
+  LayoutSnapshotPayload,
+  SaveLayoutSnapshotRequest,
+} from "./layout-snapshot";
+export type {
   KnownCliTool,
   CliTool,
   CliToolInfo,

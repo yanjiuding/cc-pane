@@ -2,6 +2,7 @@ pub mod external_skill;
 pub mod filesystem;
 mod history;
 pub mod launch_profile;
+pub mod layout_snapshot;
 pub mod plan;
 pub mod process_info;
 mod project;
@@ -47,6 +48,7 @@ pub use launch_profile::{
     LaunchProfileSkillMode, LaunchProfileSkillPolicy, LaunchProviderSelection, ResolvedMcpServer,
     ResolvedSkill, SharedMcpUrls,
 };
+pub use layout_snapshot::{LayoutSnapshot, SaveLayoutSnapshotRequest};
 pub use process_info::{ClaudeProcess, ClaudeProcessType, ProcessScanResult, ResourceStats};
 pub use project::Project;
 pub use runner::{

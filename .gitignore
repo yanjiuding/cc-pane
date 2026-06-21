@@ -32,6 +32,9 @@ src-tauri/gen/
 # Hook 二进制（构建产物）
 src-tauri/binaries/
 
+# Web access React bundle（发布构建时由 copy-hook 复制）
+src-tauri/resources/web-dist/
+
 # 参考项目与归档（不纳入版本控制）
 _reference/
 _archived_v1/

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { usePanesStore } from "./usePanesStore";
+import { TERMINAL_LAYOUT_CHANGED_EVENT, usePanesStore } from "./usePanesStore";
 import { useFullscreenStore } from "./useFullscreenStore";
 import { createPanel, createTab } from "./paneTreeHelpers";
 import { mockTauriInvoke, resetTauriInvoke } from "@/test/utils/mockTauriInvoke";
@@ -564,6 +564,80 @@ describe("usePanesStore layouts", () => {
 
     expect(partial.currentLayoutId).toBe("layout-1");
     expect(panel(partial.layouts[0].rootPane).tabs).toHaveLength(2);
+  });
+
+  it("exportLayoutSnapshotPayload 导出当前布局工作副本", () => {
+    const currentRoot = usePanesStore.getState().rootPane;
+    usePanesStore.getState().addTab(currentRoot.id, {
+      projectId: "snapshot",
+      projectPath: "/tmp/snapshot",
+    });
+
+    const payload = usePanesStore.getState().exportLayoutSnapshotPayload();
+
+    expect(payload.schemaVersion).toBe(1);
+    expect(payload.currentLayoutId).toBe("layout-1");
+    const tabs = panel(payload.layouts[0].rootPane).tabs;
+    expect(tabs[tabs.length - 1]?.projectPath).toBe("/tmp/snapshot");
+  });
+
+  it("applyLayoutSnapshotPayload 导入后把 live session 标记为待恢复", () => {
+    const rootPane = createPanel(makeTerminalTab("remote-tab", "session-remote"));
+    const applied = usePanesStore.getState().applyLayoutSnapshotPayload({
+      schemaVersion: 1,
+      layouts: [{
+        id: "remote-layout",
+        name: "远端布局",
+        kind: "normal",
+        rootPane,
+        activePaneId: rootPane.id,
+      }],
+      currentLayoutId: "remote-layout",
+    });
+
+    expect(applied).toBe(true);
+    expect(usePanesStore.getState().currentLayoutId).toBe("remote-layout");
+    const tab = panel(usePanesStore.getState().rootPane).tabs[0];
+    const leaf = tab.terminalRootPane as TerminalPaneLeaf;
+    expect(leaf.sessionId).toBeNull();
+    expect(leaf.savedSessionId).toBe("session-remote");
+    expect(leaf.restoring).toBe(true);
+  });
+
+  it("移动端选择 pane/tab 会触发布局快照保存事件", async () => {
+    const firstTab = createTab("first", "/tmp/first");
+    const secondTab = createTab("second", "/tmp/second");
+    const rootPane = createPanel(firstTab);
+    rootPane.tabs.push(secondTab);
+    const secondPane = createPanel(createTab("other", "/tmp/other"));
+
+    usePanesStore.setState((state) => {
+      state.rootPane = {
+        type: "split",
+        id: "split-root",
+        direction: "horizontal",
+        children: [rootPane, secondPane],
+        sizes: [50, 50],
+      };
+      state.activePaneId = rootPane.id;
+      state.layouts[0].rootPane = state.rootPane;
+      state.layouts[0].activePaneId = rootPane.id;
+    });
+
+    const reasons: string[] = [];
+    const listener = (event: Event) => {
+      const detail = (event as CustomEvent<{ reason?: string }>).detail;
+      if (detail?.reason) reasons.push(detail.reason);
+    };
+    window.addEventListener(TERMINAL_LAYOUT_CHANGED_EVENT, listener);
+
+    usePanesStore.getState().setActivePane(secondPane.id);
+    usePanesStore.getState().selectTab(rootPane.id, secondTab.id);
+    await waitForMicrotasks();
+
+    window.removeEventListener(TERMINAL_LAYOUT_CHANGED_EVENT, listener);
+    expect(reasons).toContain("pane.activate");
+    expect(reasons).toContain("tab.select");
   });
 
   it("merge 对空 layouts、无效 currentLayoutId 和 rehydrated terminal 做兜底", () => {

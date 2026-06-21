@@ -36,6 +36,7 @@ use commands::{
     clean_session_file,
     cleanup_project_history,
     clear_launch_history,
+    clear_layout_snapshot,
     clear_session_output,
     clear_terminal_sessions,
     close_layout_switcher_window,
@@ -201,6 +202,7 @@ use commands::{
     list_workspaces,
     list_worktree_recent_changes,
     list_worktrees,
+    load_layout_snapshot,
     load_session_output,
     load_terminal_sessions,
     maximize_window,
@@ -261,6 +263,7 @@ use commands::{
     runner_register_for_session,
     runner_register_implicit_instance,
     runner_upsert_profile,
+    save_layout_snapshot,
     save_layout_switcher_snapshot,
     save_layout_switcher_state,
     save_skill,
@@ -330,10 +333,10 @@ use repository::{
 };
 use services::{
     ExternalSkillRegistry, FileSystemService, HistoryService, JournalService, LaunchHistoryService,
-    LaunchProfileService, McpConfigService, MemoryService, NotificationService,
-    OrchestratorService, PlanArchiveService, PlanService, ProcessMonitorService,
-    ProjectCliHooksService, ProjectContextService, ProjectService, ProviderService,
-    ScreenshotService, SessionRestoreService, SettingsService, SharedMcpService,
+    LaunchProfileService, LayoutSnapshotService, McpConfigService, MemoryService,
+    NotificationService, OrchestratorService, PlanArchiveService, PlanService,
+    ProcessMonitorService, ProjectCliHooksService, ProjectContextService, ProjectService,
+    ProviderService, ScreenshotService, SessionRestoreService, SettingsService, SharedMcpService,
     SkillMarketService, SkillService, SpecService, SshCredentialService, SshMachineService,
     StartLocks, TaskBindingService, TerminalBackendKind, TerminalBackendState,
     TerminalDaemonEventBridge, TerminalDaemonLifecycle, TerminalService, TodoService,
@@ -1095,6 +1098,7 @@ pub fn run() {
 
     let session_restore_service =
         Arc::new(SessionRestoreService::new(db.clone(), app_paths.clone()));
+    let layout_snapshot_service = Arc::new(LayoutSnapshotService::new(db.clone()));
 
     let popup_data_store = commands::PopupDataStore::default();
     let layout_switcher_snapshot_store = commands::LayoutSwitcherSnapshotStore::default();
@@ -1169,6 +1173,7 @@ pub fn run() {
         .manage(web_access_lifecycle.clone())
         .manage(shared_mcp_service.clone())
         .manage(session_restore_service)
+        .manage(layout_snapshot_service)
         .manage(popup_data_store)
         .manage(layout_switcher_snapshot_store)
         .manage(orchestrator_service.clone())
@@ -2036,6 +2041,9 @@ pub fn run() {
             save_terminal_sessions,
             load_terminal_sessions,
             clear_terminal_sessions,
+            save_layout_snapshot,
+            load_layout_snapshot,
+            clear_layout_snapshot,
             load_session_output,
             clear_session_output,
             list_workspace_snapshots,

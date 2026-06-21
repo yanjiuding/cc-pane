@@ -30,6 +30,7 @@ struct Migration {
 /// V19 = usage_stats per-source-path schema
 /// V20 = runner registry (runner_profiles + runner_instances + port_claims)
 /// V21 = launch_history 添加 resume_source（resume id 来源：issued/osc-title/backfill/rescue/manual）
+/// V22 = layout_snapshots shared desktop/Web pane layout state
 const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 1,
@@ -449,6 +450,22 @@ const MIGRATIONS: &[Migration] = &[
             ALTER TABLE launch_history ADD COLUMN resume_source TEXT;
         ",
     },
+    Migration {
+        version: 22,
+        description: "layout_snapshots: shared desktop/web pane layout state",
+        up_sql: "
+            CREATE TABLE IF NOT EXISTS layout_snapshots (
+                profile_id TEXT PRIMARY KEY,
+                workspace_id TEXT,
+                workspace_name TEXT,
+                payload_json TEXT NOT NULL,
+                saved_at TEXT NOT NULL,
+                source TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_layout_snapshots_workspace
+                ON layout_snapshots(workspace_id);
+        ",
+    },
 ];
 
 /// 数据库连接管理
@@ -691,6 +708,7 @@ mod tests {
             "runner_profiles",
             "runner_instances",
             "port_claims",
+            "layout_snapshots",
         ];
         for table in &tables {
             let exists: bool = conn

@@ -13,10 +13,10 @@ use cc_panes_core::{
     services::{
         terminal_service::{SessionOutput, SessionStatus},
         FileSystemService, HistoryService, LaunchHistoryService, LaunchProfileService,
-        McpConfigService, PlanService, ProcessMonitorService, ProjectService, ProviderService,
-        RunnerService, SessionRestoreService, SettingsService, SharedMcpService, SpecService,
-        SshCredentialService, SshMachineService, TaskBindingService, TerminalBackend, TodoService,
-        UsageStatsService, WorkspaceService, WorktreeService,
+        LayoutSnapshotService, McpConfigService, PlanService, ProcessMonitorService,
+        ProjectService, ProviderService, RunnerService, SessionRestoreService, SettingsService,
+        SharedMcpService, SpecService, SshCredentialService, SshMachineService, TaskBindingService,
+        TerminalBackend, TodoService, UsageStatsService, WorkspaceService, WorktreeService,
     },
     utils::{AppPaths, AppResult},
 };
@@ -149,6 +149,7 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
         spec_service: Arc::new(SpecService::new(spec_repo, todo_service)),
         task_binding_service: Arc::new(TaskBindingService::new(task_binding_repo)),
         launch_history_service,
+        layout_snapshot_service: Arc::new(LayoutSnapshotService::new(db.clone())),
         launch_profile_service,
         memory_service,
         ssh_machine_service,

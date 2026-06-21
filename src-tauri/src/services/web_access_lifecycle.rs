@@ -105,6 +105,10 @@ impl WebAccessLifecycle {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
+        if let Some(dist_dir) = resolve_web_dist_dir(resource_dir) {
+            command.env("CCPANES_WEB_DIST_DIR", dist_dir);
+        }
+
         let daemon_manifest = app_paths.runtime_dir().join("daemon-manifest.json");
         if daemon_manifest.exists() {
             command.arg("--daemon-manifest").arg(daemon_manifest);
@@ -235,6 +239,58 @@ fn resolve_web_binary(resource_dir: Option<&Path>) -> AppResult<PathBuf> {
     Err(AppError::from(format!(
         "cc-panes-web binary not found; set {WEB_BIN_ENV} or run `cargo build -p cc-panes-web`"
     )))
+}
+
+fn resolve_web_dist_dir(resource_dir: Option<&Path>) -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("CCPANES_WEB_DIST_DIR") {
+        let path = PathBuf::from(explicit);
+        if path.join("index.html").exists() {
+            return Some(path);
+        }
+    }
+
+    if let Some(resource_dir) = resource_dir {
+        let candidate = resource_dir.join("resources").join("web-dist");
+        if candidate.join("index.html").exists() {
+            return Some(candidate);
+        }
+    }
+
+    for candidate in workspace_web_dist_candidates() {
+        if candidate.join("index.html").exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
+fn workspace_web_dist_candidates() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Ok(current_dir) = std::env::current_dir() {
+        roots.push(current_dir);
+    }
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            roots.push(exe_dir.to_path_buf());
+        }
+    }
+
+    let mut candidates = Vec::new();
+    for root in roots {
+        let mut dir = root.as_path();
+        for _ in 0..6 {
+            candidates.push(dir.join("dist"));
+            candidates.push(dir.join("resources").join("web-dist"));
+            candidates.push(dir.join("src-tauri").join("resources").join("web-dist"));
+            if let Some(parent) = dir.parent() {
+                dir = parent;
+            } else {
+                break;
+            }
+        }
+    }
+    candidates
 }
 
 fn workspace_web_candidates(binary_name: &str) -> Vec<PathBuf> {

@@ -52,5 +52,6 @@ export { processService } from "./processService";
 export { logService } from "./logService";
 export { sharedMcpService } from "./sharedMcpService";
 export { sessionRestoreService } from "./sessionRestoreService";
+export { layoutSnapshotService } from "./layoutSnapshotService";
 export { workspaceSnapshotService } from "./workspaceSnapshotService";
 export { taskBindingService } from "./taskBindingService";

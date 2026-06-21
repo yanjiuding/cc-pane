@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:14200",
-    "beforeBuildCommand": "node scripts/build-hook.cjs && node scripts/copy-hook.cjs && npm run build",
+    "beforeBuildCommand": "npm run build && node scripts/build-hook.cjs && node scripts/copy-hook.cjs",
     "frontendDist": "../dist"
   },
   "app": {
@@ -62,6 +62,7 @@
       "binaries/cc-panes-cli-hook*",
       "binaries/cc-panes-daemon*",
       "binaries/cc-panes-web*",
+      "resources/web-dist/**/*",
       "resources/claude-bundle/.claude/commands/ccbook/*",
       "resources/claude-bundle/.claude/agents/*",
       "resources/ccchan/**/*",

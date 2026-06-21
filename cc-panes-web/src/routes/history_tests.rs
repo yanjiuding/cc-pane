@@ -6,16 +6,16 @@ use axum::{
     Json,
 };
 use cc_panes_core::{
-    models::{SavedSession, TerminalBufferMode},
+    models::{SaveLayoutSnapshotRequest, SavedSession, TerminalBufferMode},
     repository::{
         Database, HistoryRepository, ProjectRepository, RunnerRepository, SpecRepository,
         TaskBindingRepository, TodoRepository,
     },
     services::{
         terminal_service::{SessionOutput, SessionStatus},
-        FileSystemService, HistoryService, LaunchHistoryService, McpConfigService, PlanService,
-        ProcessMonitorService, ProjectService, ProviderService, RunnerService,
-        SessionRestoreService, SettingsService, SharedMcpService, SpecService,
+        FileSystemService, HistoryService, LaunchHistoryService, LayoutSnapshotService,
+        McpConfigService, PlanService, ProcessMonitorService, ProjectService, ProviderService,
+        RunnerService, SessionRestoreService, SettingsService, SharedMcpService, SpecService,
         SshCredentialService, SshMachineService, TaskBindingService, TerminalBackend, TodoService,
         WorkspaceService, WorktreeService,
     },
@@ -150,6 +150,7 @@ fn test_state(name: &str) -> (AppState, std::path::PathBuf) {
         spec_service: Arc::new(SpecService::new(spec_repo, todo_service)),
         task_binding_service: Arc::new(TaskBindingService::new(task_binding_repo)),
         launch_history_service,
+        layout_snapshot_service: Arc::new(LayoutSnapshotService::new(db.clone())),
         launch_profile_service,
         memory_service,
         ssh_machine_service,
@@ -508,6 +509,59 @@ async fn session_restore_routes_match_core_service_operations() {
         .await
         .expect("load cleared sessions");
     assert!(loaded.is_empty());
+}
+
+#[tokio::test]
+async fn layout_snapshot_routes_round_trip_shared_panel_state() {
+    let (state, _root) = test_state("layout-snapshot");
+    let request = SaveLayoutSnapshotRequest {
+        profile_id: "default".to_string(),
+        workspace_id: Some("workspace-a".to_string()),
+        workspace_name: Some("Workspace A".to_string()),
+        payload: serde_json::json!({
+            "layouts": [{
+                "id": "layout-a",
+                "name": "Main",
+                "rootPane": {
+                    "type": "panel",
+                    "id": "panel-a",
+                    "tabs": [{
+                        "id": "tab-a",
+                        "title": "Running Codex",
+                        "contentType": "terminal",
+                        "sessionId": "pty-a"
+                    }],
+                    "activeTabId": "tab-a"
+                },
+                "activePaneId": "panel-a"
+            }],
+            "currentLayoutId": "layout-a"
+        }),
+        saved_at: "2026-06-21T01:00:00Z".to_string(),
+        source: "desktop".to_string(),
+    };
+
+    save_layout_snapshot(State(state.clone()), Json(request))
+        .await
+        .expect("save layout snapshot");
+
+    let Json(loaded) = load_layout_snapshot(State(state.clone()), Path("default".to_string()))
+        .await
+        .expect("load layout snapshot");
+    let loaded = loaded.expect("snapshot");
+    assert_eq!(loaded.workspace_id.as_deref(), Some("workspace-a"));
+    assert_eq!(
+        loaded.payload["layouts"][0]["rootPane"]["tabs"][0]["sessionId"],
+        "pty-a"
+    );
+
+    clear_layout_snapshot(State(state.clone()), Path("default".to_string()))
+        .await
+        .expect("clear layout snapshot");
+    let Json(loaded) = load_layout_snapshot(State(state), Path("default".to_string()))
+        .await
+        .expect("load cleared layout snapshot");
+    assert!(loaded.is_none());
 }
 
 #[tokio::test]

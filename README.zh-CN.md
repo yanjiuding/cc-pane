@@ -113,10 +113,10 @@ npm run build
 构建桌面发布包：
 
 ```bash
-cargo build -p cc-panes-cli-hook --release
-node scripts/copy-hook.cjs
 npm run tauri build
 ```
+
+Tauri 构建会自动执行前端构建、辅助二进制构建和资源复制步骤。
 
 ## 检查命令
 
@@ -211,6 +211,11 @@ cc-pane/
 
 - GitHub Issues: <https://github.com/wuxiran/cc-pane/issues>
 - GitHub Discussions: <https://github.com/wuxiran/cc-pane/discussions>
+
+## 赞助和友链
+
+- 赞助中转站：<https://hub.nocannobb.com>
+- 友情链接：[Linux.do](https://linux.do)
 
 微信交流群：
 

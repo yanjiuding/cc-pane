@@ -58,7 +58,18 @@ copyBinary("cc-panes-cli-hook");
 copyBinary("cc-panes-daemon");
 copyBinary("cc-panes-web");
 
-// 2. 复制 .claude/ skills 和 agents 到 src-tauri/resources/claude-bundle/
+// 2. 复制 Web React 产物到 Tauri resources，供独立 cc-panes-web 子进程服务
+const webDistSrc = "dist";
+const webDistDest = path.join("src-tauri", "resources", "web-dist");
+if (!fs.existsSync(path.join(webDistSrc, "index.html"))) {
+  throw new Error("web dist not found: run `npm run build` before copy-hook");
+}
+fs.rmSync(webDistDest, { recursive: true, force: true });
+fs.mkdirSync(webDistDest, { recursive: true });
+fs.cpSync(webDistSrc, webDistDest, { recursive: true });
+console.log(`[copy-hook] copied ${webDistSrc} -> ${webDistDest}`);
+
+// 3. 复制 .claude/ skills 和 agents 到 src-tauri/resources/claude-bundle/
 const srcClaude = ".claude";
 const destBase = path.join("src-tauri", "resources", "claude-bundle");
 

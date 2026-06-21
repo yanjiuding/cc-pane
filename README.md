@@ -113,10 +113,10 @@ npm run build
 Build the production desktop app:
 
 ```bash
-cargo build -p cc-panes-cli-hook --release
-node scripts/copy-hook.cjs
 npm run tauri build
 ```
+
+The Tauri build runs the frontend build, helper binary build, and resource copy steps automatically.
 
 ## Checks
 
@@ -203,6 +203,11 @@ When behavior depends on the Windows desktop host, validate on Windows. WSL or L
 
 - GitHub Issues: <https://github.com/wuxiran/cc-pane/issues>
 - GitHub Discussions: <https://github.com/wuxiran/cc-pane/discussions>
+
+## Sponsors And Friends
+
+- Sponsor relay hub: <https://hub.nocannobb.com>
+- Friendly link: [Linux.do](https://linux.do)
 
 WeChat chat group:
 

@@ -7,7 +7,7 @@ use axum::{
 };
 use cc_panes_core::{
     models::workspace_snapshot::WorkspaceSnapshotSummary,
-    models::{SavedSession, WorkspaceSnapshot},
+    models::{LayoutSnapshot, SaveLayoutSnapshotRequest, SavedSession, WorkspaceSnapshot},
     repository::LaunchRecord,
 };
 use serde::{Deserialize, Serialize};
@@ -397,6 +397,39 @@ pub async fn clear_terminal_sessions(
     state
         .session_restore_service
         .clear_sessions()
+        .map_err(service_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn save_layout_snapshot(
+    State(state): State<AppState>,
+    Json(snapshot): Json<SaveLayoutSnapshotRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .layout_snapshot_service
+        .save_snapshot(&snapshot)
+        .map_err(service_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub async fn load_layout_snapshot(
+    State(state): State<AppState>,
+    Path(profile_id): Path<String>,
+) -> Result<Json<Option<LayoutSnapshot>>, (StatusCode, String)> {
+    state
+        .layout_snapshot_service
+        .load_snapshot(&profile_id)
+        .map(Json)
+        .map_err(service_error)
+}
+
+pub async fn clear_layout_snapshot(
+    State(state): State<AppState>,
+    Path(profile_id): Path<String>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    state
+        .layout_snapshot_service
+        .clear_snapshot(&profile_id)
         .map_err(service_error)?;
     Ok(StatusCode::NO_CONTENT)
 }

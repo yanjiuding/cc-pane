@@ -1,6 +1,7 @@
 mod db;
 mod history_file_repo;
 mod history_repo;
+mod layout_snapshot_repo;
 mod plan_repo;
 mod project_repo;
 mod runner_repo;
@@ -13,6 +14,7 @@ mod usage_stats_repo;
 pub use db::Database;
 pub use history_file_repo::HistoryFileRepository;
 pub use history_repo::{HistoryRepository, LaunchRecord};
+pub use layout_snapshot_repo::LayoutSnapshotRepository;
 pub use plan_repo::PlanRepository;
 pub use project_repo::ProjectRepository;
 pub use runner_repo::RunnerRepository;

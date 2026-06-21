@@ -32,6 +32,7 @@ import { LayoutVisibilityContext } from "@/contexts/LayoutVisibilityContext";
 
 import RecentFilesPicker from "@/components/RecentFilesPicker";
 import PopupTerminalWindow from "@/components/PopupTerminalWindow";
+import MobilePrototype from "@/components/mobile/MobilePrototype";
 import {
   usePanesStore,
   useFullscreenStore,
@@ -55,7 +56,7 @@ import { useWorkspaceWatcher } from "@/hooks/useWorkspaceWatcher";
 import { useOrchestratorListener } from "@/hooks/useOrchestratorListener";
 import useOrchestratorSync from "@/hooks/useOrchestratorSync";
 import useLayoutSwitcherSync from "@/hooks/useLayoutSwitcherSync";
-import { historyService, terminalService, localHistoryService, checkUpdateSilent, markTabReclaimed as popupMarkReclaimed, getPoppedTabs, sessionRestoreService } from "@/services";
+import { historyService, terminalService, localHistoryService, checkUpdateSilent, markTabReclaimed as popupMarkReclaimed, getPoppedTabs, sessionRestoreService, layoutSnapshotService, providerService } from "@/services";
 import { waitForTauri } from "@/utils";
 import { getCurrentWindowIfTauri, invokeIfTauri, isTauriRuntime, listenIfTauri, listenWebviewIfTauri } from "@/services/runtime";
 import { playNotificationSound } from "@/utils/notificationSound";
@@ -63,7 +64,7 @@ import { findPaneFocusTarget, readPaneFocusRects, type PaneFocusDirection } from
 import { registerGlobalApi } from "@/utils/globalApi";
 import { logRestoreReport } from "@/utils/restoreReport";
 import i18n from "@/i18n";
-import type { OpenTerminalOptions, SavedSession, TerminalPaneLeaf, TerminalPaneNode } from "@/types";
+import type { LayoutSnapshotPayload, OpenTerminalOptions, SavedSession, Tab, TerminalPaneLeaf, TerminalPaneNode, Workspace } from "@/types";
 
 function findTerminalLeaf(node: TerminalPaneNode, paneId: string): TerminalPaneLeaf | null {
   if (node.type === "leaf") return node.id === paneId ? node : null;
@@ -93,6 +94,190 @@ async function waitForDesktopRuntime(): Promise<boolean> {
   return isTauriRuntime() ? waitForTauri() : true;
 }
 
+let lastSeenLayoutSnapshotSavedAt = "";
+let suppressLayoutSnapshotSaveUntil = 0;
+
+function currentLayoutProfileId(): string {
+  return "default";
+}
+
+function layoutSnapshotSource(): string {
+  return isTauriRuntime() ? "desktop" : "web";
+}
+
+function layoutWorkspaceMeta(): Pick<Workspace, "id" | "name"> | null {
+  const workspace = useWorkspacesStore.getState().selectedWorkspace();
+  return workspace ? { id: workspace.id, name: workspace.alias || workspace.name } : null;
+}
+
+function currentLayoutSnapshotPayload(): LayoutSnapshotPayload {
+  return usePanesStore.getState().exportLayoutSnapshotPayload();
+}
+
+async function saveSharedLayoutSnapshot(): Promise<void> {
+  const workspace = layoutWorkspaceMeta();
+  const savedAt = new Date().toISOString();
+  await layoutSnapshotService.save({
+    profileId: currentLayoutProfileId(),
+    workspaceId: workspace?.id ?? null,
+    workspaceName: workspace?.name ?? null,
+    payload: currentLayoutSnapshotPayload(),
+    savedAt,
+    source: layoutSnapshotSource(),
+  });
+  lastSeenLayoutSnapshotSavedAt = savedAt;
+}
+
+async function applySharedLayoutSnapshot(): Promise<boolean> {
+  const snapshot = await layoutSnapshotService.load(currentLayoutProfileId());
+  if (!snapshot?.payload) return false;
+  if (snapshot.savedAt && snapshot.savedAt <= lastSeenLayoutSnapshotSavedAt) return false;
+  suppressLayoutSnapshotSaveUntil = Date.now() + 1_500;
+  const applied = usePanesStore.getState().applyLayoutSnapshotPayload(snapshot.payload);
+  if (applied) {
+    lastSeenLayoutSnapshotSavedAt = snapshot.savedAt;
+  }
+  return applied;
+}
+
+async function restoreLiveDaemonSessionsFromBackend(): Promise<number> {
+  const statuses = await terminalService.getAllStatus();
+  return usePanesStore.getState().restoreLiveDaemonSessions(statuses);
+}
+
+function collectRestorableSessions(): SavedSession[] {
+  const tabs = usePanesStore.getState().getRestorableTabs();
+  const now = new Date().toISOString();
+  return tabs
+    .filter(({ tab }) => tab.contentType === "terminal" && tab.projectPath)
+    .map(({ tab, paneId }) => ({
+      workspaceSnapshotId: tab.workspaceSnapshotId,
+      sessionId: tab.sessionId || tab.savedSessionId || tab.id,
+      tabId: tab.id,
+      paneId,
+      projectPath: tab.projectPath,
+      workspaceName: tab.workspaceName,
+      workspacePath: tab.workspacePath,
+      providerId: tab.providerId,
+      providerSelection: tab.providerSelection,
+      launchProfileId: tab.launchProfileId,
+      cliTool: tab.cliTool || (tab.launchClaude ? "claude" : "none"),
+      runtimeKind: resolveRuntimeKind({ ssh: tab.ssh, wsl: tab.wsl }),
+      resumeId: tab.resumeId,
+      sshConfig: tab.ssh ? JSON.stringify(tab.ssh) : undefined,
+      customTitle: tab.title,
+      createdAt: now,
+      savedAt: now,
+      hasOutput: false,
+    }));
+}
+
+function useSessionLayoutPersistence() {
+  useEffect(() => {
+    let unlistenClose: (() => void) | undefined;
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    waitForDesktopRuntime().then(async (ready) => {
+      if (isTauriRuntime() && !ready) return;
+
+      const currentWindow = getCurrentWindowIfTauri();
+      if (currentWindow) {
+        unlistenClose = await currentWindow.onCloseRequested(async () => {
+          try {
+            const sessions = collectRestorableSessions();
+            if (sessions.length > 0) {
+              await sessionRestoreService.save(sessions);
+              await saveSharedLayoutSnapshot();
+              console.info(`[SessionRestore] Saved ${sessions.length} sessions on close`);
+            }
+          } catch (err) {
+            console.error("[SessionRestore] Failed to save sessions on close:", err);
+          }
+        });
+      }
+
+      timer = setInterval(async () => {
+        try {
+          const sessions = collectRestorableSessions();
+          if (sessions.length > 0) {
+            await sessionRestoreService.save(sessions);
+          }
+          await saveSharedLayoutSnapshot();
+        } catch { /* silent */ }
+      }, 60_000);
+    });
+
+    return () => {
+      unlistenClose?.();
+      if (timer) clearInterval(timer);
+    };
+  }, []);
+}
+
+function useSharedLayoutSnapshotSync() {
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const scheduleSave = () => {
+      if (cancelled) return;
+      if (Date.now() < suppressLayoutSnapshotSaveUntil) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (Date.now() < suppressLayoutSnapshotSaveUntil) return;
+        saveSharedLayoutSnapshot().catch((error) => {
+          console.warn("[LayoutSnapshot] Failed to save shared layout:", error);
+        });
+      }, 800);
+    };
+
+    window.addEventListener("cc-panes:terminal-layout-changed", scheduleSave);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("cc-panes:terminal-layout-changed", scheduleSave);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    let layoutPoll: ReturnType<typeof setInterval> | undefined;
+    waitForDesktopRuntime().then(async (ready) => {
+      if (cancelled || (isTauriRuntime() && !ready)) return;
+      await applySharedLayoutSnapshot().catch((error) => {
+        console.warn("[LayoutSnapshot] Failed to apply shared layout:", error);
+        return false;
+      });
+      if (cancelled) return;
+      layoutPoll = setInterval(() => {
+        applySharedLayoutSnapshot().then((applied) => {
+          if (!applied) return;
+          return restoreLiveDaemonSessionsFromBackend();
+        }).catch((error) => {
+          console.warn("[LayoutSnapshot] Failed to poll shared layout:", error);
+        });
+      }, 5_000);
+      restoreLiveDaemonSessionsFromBackend()
+        .then((restored) => {
+          if (cancelled) return;
+          if (restored > 0) {
+            console.info(`[SessionRestore] Reattached ${restored} live daemon session(s)`);
+          }
+        })
+        .catch((error) => {
+          console.warn("[SessionRestore] Failed to restore live daemon sessions:", error);
+        });
+    });
+    return () => {
+      cancelled = true;
+      if (layoutPoll) clearInterval(layoutPoll);
+    };
+  }, []);
+}
+
+function getMobileWorkspacePath(workspace: Workspace): string | undefined {
+  return workspace.path || workspace.projects.find((project) => !project.ssh)?.path || workspace.projects[0]?.path;
+}
+
 export default function App() {
   // 弹出窗口路由：mode=popup 时渲染纯终端视图（tabData 通过 IPC 获取）
   const params = new URLSearchParams(window.location.search);
@@ -101,6 +286,15 @@ export default function App() {
   }
   if (params.get("mode") === "layout-switcher") {
     return <LayoutSwitcherWindow />;
+  }
+  if (params.get("mode") === "mobile-prototype") {
+    return (
+      <ErrorBoundary>
+        <WebAuthGate>
+          <MobilePrototypeRoute />
+        </WebAuthGate>
+      </ErrorBoundary>
+    );
   }
 
   return (
@@ -112,7 +306,136 @@ export default function App() {
   );
 }
 
+function MobilePrototypeRoute() {
+  useSessionLayoutPersistence();
+  useSharedLayoutSnapshotSync();
+
+  const workspaces = useWorkspacesStore((s) => s.workspaces);
+  const workspacesLoading = useWorkspacesStore((s) => s.loading);
+  const loadWorkspaces = useWorkspacesStore((s) => s.load);
+  const updatePinned = useWorkspacesStore((s) => s.updatePinned);
+  const updateHidden = useWorkspacesStore((s) => s.updateHidden);
+  const updateWorkspaceAlias = useWorkspacesStore((s) => s.updateWorkspaceAlias);
+  const renameWorkspace = useWorkspacesStore((s) => s.rename);
+  const removeWorkspace = useWorkspacesStore((s) => s.remove);
+  const openProject = usePanesStore((s) => s.openProject);
+  const openFileExplorer = usePanesStore((s) => s.openFileExplorer);
+  const layouts = usePanesStore((s) => s.layouts);
+  const currentLayoutId = usePanesStore((s) => s.currentLayoutId);
+  const rootPane = usePanesStore((s) => s.rootPane);
+  const activePaneId = usePanesStore((s) => s.activePaneId);
+  const switchLayout = usePanesStore((s) => s.switchLayout);
+  const selectTab = usePanesStore((s) => s.selectTab);
+  const setActivePane = usePanesStore((s) => s.setActivePane);
+  const activePane = usePanesStore((s) => s.activePane());
+  const activeTab = activePane?.tabs.find((tab) => tab.id === activePane.activeTabId) ?? null;
+  const mobileTerminal = activePane && activeTab?.contentType === "terminal"
+    ? {
+        paneId: activePane.id,
+        tab: activeTab as Tab,
+        onSessionCreated: (sessionId: string, terminalPaneId?: string) => {
+          usePanesStore.getState().updateTabSession(activePane.id, activeTab.id, sessionId, terminalPaneId);
+        },
+        onSessionExited: (_exitCode: number, terminalPaneId?: string) => {
+          const latest = usePanesStore.getState().findTabAcrossLayouts(activeTab.id)?.tab;
+          if (latest?.ssh) {
+            usePanesStore.getState().setTabDisconnected(activePane.id, activeTab.id, true, terminalPaneId);
+          }
+        },
+        onTerminalRef: (_terminalPaneId: string) => {},
+        onReconnect: activeTab.ssh
+          ? (terminalPaneId: string) => usePanesStore.getState().reconnectTab(activePane.id, activeTab.id, terminalPaneId)
+          : undefined,
+        onWrite: (sessionId: string, data: string) => terminalService.write(sessionId, data),
+        onSubmit: (sessionId: string, text: string) => terminalService.submitToSession(sessionId, text),
+      }
+    : null;
+
+  const handleOpenProject = useCallback(
+    (workspace: Workspace, project: Workspace["projects"][number]) => {
+      const projectName = project.alias || project.path.split(/[/\\]/).pop() || project.path;
+      const projectId = `proj-${crypto.randomUUID()}`;
+      const workspaceSnapshotId = `ws-snapshot-${crypto.randomUUID()}`;
+      const launchProfileId = project.launchProfileId ?? workspace.launchProfileId;
+      const wsl = project.wslRemotePath ? { remotePath: project.wslRemotePath } : undefined;
+      const runtimeKind = project.ssh ? "ssh" : wsl ? "wsl" : "local";
+      const workspacePath = getMobileWorkspacePath(workspace);
+      openProject({
+        projectId,
+        projectPath: project.path,
+        customTitle: projectName,
+        workspaceName: workspace.name,
+        workspacePath,
+        launchProfileId,
+        ssh: project.ssh,
+        wsl,
+        workspaceSnapshotId,
+      });
+      historyService.add(
+        projectId,
+        projectName,
+        project.path,
+        "none",
+        runtimeKind,
+        undefined,
+        workspace.name,
+        workspacePath,
+        project.ssh ? project.path : (workspacePath ?? project.path),
+        workspace.providerId,
+        undefined,
+        workspaceSnapshotId,
+        launchProfileId,
+      ).then(() => {
+        window.dispatchEvent(new CustomEvent("cc-panes:history-updated"));
+      }).catch((error) => {
+        console.error("Failed to record mobile launch history:", error);
+      });
+    },
+    [openProject],
+  );
+
+  const handleOpenWorkspaceFileBrowser = useCallback(
+    (workspace: Workspace) => {
+      const path = getMobileWorkspacePath(workspace);
+      if (!path) return;
+      openFileExplorer(path, workspace.alias || workspace.name);
+    },
+    [openFileExplorer],
+  );
+
+  return (
+    <MobilePrototype
+      workspaces={workspaces}
+      workspacesLoading={workspacesLoading}
+      terminal={mobileTerminal}
+      layouts={layouts}
+      currentLayoutId={currentLayoutId}
+      rootPane={rootPane}
+      activePaneId={activePaneId}
+      onLoadWorkspaces={loadWorkspaces}
+      onOpenProject={handleOpenProject}
+      onSwitchLayout={switchLayout}
+      onSelectPane={setActivePane}
+      onSelectTab={selectTab}
+      onToggleWorkspacePinned={(workspace) => updatePinned(workspace.name, !workspace.pinned)}
+      onToggleWorkspaceHidden={(workspace) => updateHidden(workspace.name, !workspace.hidden)}
+      onOpenWorkspaceFolder={(workspace) => {
+        const path = getMobileWorkspacePath(workspace);
+        if (!path) return Promise.reject(new Error("当前工作空间没有可打开的路径"));
+        return providerService.openPathInExplorer(path);
+      }}
+      onOpenWorkspaceFileBrowser={handleOpenWorkspaceFileBrowser}
+      onSetWorkspaceAlias={(workspace, alias) => updateWorkspaceAlias(workspace.name, alias)}
+      onRenameWorkspace={(workspace, name) => renameWorkspace(workspace.name, name)}
+      onDeleteWorkspace={(workspace) => removeWorkspace(workspace.name)}
+    />
+  );
+}
+
 function MainApp() {
+  useSessionLayoutPersistence();
+  useSharedLayoutSnapshotSync();
+
   const isDark = useThemeStore((s) => s.isDark);
   const isMiniMode = useMiniModeStore((s) => s.isMiniMode);
 
@@ -269,77 +592,6 @@ function MainApp() {
     };
   }, []);
 
-  // 退出时保存终端会话元数据 + 周期性自动保存
-  useEffect(() => {
-    // 收集可恢复的 Tab 并转为 SavedSession
-    const collectSessions = (): SavedSession[] => {
-      const tabs = usePanesStore.getState().getRestorableTabs();
-      const now = new Date().toISOString();
-      return tabs
-        .filter(({ tab }) => tab.contentType === "terminal" && tab.projectPath)
-        .map(({ tab, paneId }) => ({
-          workspaceSnapshotId: tab.workspaceSnapshotId,
-          sessionId: tab.sessionId || tab.savedSessionId || tab.id,
-          tabId: tab.id,
-          paneId,
-          projectPath: tab.projectPath,
-          workspaceName: tab.workspaceName,
-          workspacePath: tab.workspacePath,
-          providerId: tab.providerId,
-          providerSelection: tab.providerSelection,
-          launchProfileId: tab.launchProfileId,
-          cliTool: tab.cliTool || (tab.launchClaude ? "claude" : "none"),
-          runtimeKind: resolveRuntimeKind({ ssh: tab.ssh, wsl: tab.wsl }),
-          resumeId: tab.resumeId,
-          sshConfig: tab.ssh ? JSON.stringify(tab.ssh) : undefined,
-          customTitle: tab.title,
-          createdAt: now,
-          savedAt: now,
-          hasOutput: false,
-        }));
-    };
-
-    // 等待 Tauri IPC 就绪后再注册窗口关闭监听；Web runtime 只保留周期保存。
-    let unlistenClose: (() => void) | undefined;
-    let timer: ReturnType<typeof setInterval> | undefined;
-
-    waitForDesktopRuntime().then(async (ready) => {
-      if (isTauriRuntime() && !ready) return;
-
-      // 监听窗口关闭请求
-      const currentWindow = getCurrentWindowIfTauri();
-      if (currentWindow) {
-        unlistenClose = await currentWindow.onCloseRequested(async () => {
-          try {
-            const sessions = collectSessions();
-            if (sessions.length > 0) {
-              await sessionRestoreService.save(sessions);
-              console.info(`[SessionRestore] Saved ${sessions.length} sessions on close`);
-            }
-          } catch (err) {
-            console.error("[SessionRestore] Failed to save sessions on close:", err);
-          }
-          // 不阻止关闭
-        });
-      }
-
-      // 周期性保存（每 60 秒）
-      timer = setInterval(async () => {
-        try {
-          const sessions = collectSessions();
-          if (sessions.length > 0) {
-            await sessionRestoreService.save(sessions);
-          }
-        } catch { /* silent */ }
-      }, 60_000);
-    });
-
-    return () => {
-      unlistenClose?.();
-      if (timer) clearInterval(timer);
-    };
-  }, []);
-
   // 初始化设置 + TerminalStatusStore。桌面等待 IPC；Web 直接走 HTTP adapters。
   useEffect(() => {
     let cancelled = false;
@@ -353,17 +605,6 @@ function MainApp() {
         i18n.changeLanguage(lang);
       }
       useTerminalStatusStore.getState().init();
-      terminalService.getAllStatus()
-        .then((statuses) => {
-          if (cancelled) return;
-          const restored = usePanesStore.getState().restoreLiveDaemonSessions(statuses);
-          if (restored > 0) {
-            console.info(`[SessionRestore] Reattached ${restored} live daemon session(s)`);
-          }
-        })
-        .catch((error) => {
-          console.warn("[SessionRestore] Failed to restore live daemon sessions:", error);
-        });
       useNotificationStore.getState().init().catch(console.error);
       if (isTauriRuntime()) {
         useResourceStatsStore.getState().init();

@@ -21,6 +21,7 @@ import type {
   TerminalPaneLeaf,
   TerminalPaneSplit,
   TerminalStatusInfo,
+  LayoutSnapshotPayload,
 } from "@/types";
 
 // 生成唯一 ID
@@ -812,6 +813,8 @@ interface PanesState {
   reconnectTab: (paneId: string, tabId: string, terminalPaneId?: string) => Promise<string | null>;
   closeTabBySessionId: (sessionId: string) => void;
   restoreLiveDaemonSessions: (statuses: TerminalStatusInfo[]) => number;
+  exportLayoutSnapshotPayload: () => LayoutSnapshotPayload;
+  applyLayoutSnapshotPayload: (payload: LayoutSnapshotPayload) => boolean;
   /** Clear restoring metadata after a terminal tab finishes recovery. */
   clearRestoring: (paneId: string, tabId: string, terminalPaneId?: string) => void;
   /** Collect terminal tabs that can be restored after restart. */
@@ -1579,9 +1582,11 @@ export const usePanesStore = create<PanesState>()(
     },
 
     selectTab: (paneId, tabId) => {
+      let changed = false;
       set((state) => {
         const pane = findPane(state.rootPane, paneId);
         if (pane?.type !== "panel") return;
+        changed = pane.activeTabId !== tabId || state.activePaneId !== paneId;
         pane.activeTabId = tabId;
         const tab = pane.tabs.find((item) => item.id === tabId);
         if (tab?.contentType === "terminal") {
@@ -1589,9 +1594,20 @@ export const usePanesStore = create<PanesState>()(
         }
         state.activePaneId = paneId;
       });
+      if (changed) notifyTerminalLayoutChanged("tab.select");
     },
 
-    setActivePane: (paneId) => set({ activePaneId: paneId }),
+    setActivePane: (paneId) => {
+      let changed = false;
+      set((state) => {
+        if (state.activePaneId === paneId) return;
+        const pane = findPane(state.rootPane, paneId);
+        if (pane?.type !== "panel") return;
+        state.activePaneId = paneId;
+        changed = true;
+      });
+      if (changed) notifyTerminalLayoutChanged("pane.activate");
+    },
 
     updateTabSession: (_paneId, tabId, sessionId, terminalPaneId) => {
       set((state) => {
@@ -1841,33 +1857,42 @@ export const usePanesStore = create<PanesState>()(
     },
 
     nextTab: (paneId) => {
+      let changed = false;
       set((state) => {
         const pane = findPane(state.rootPane, paneId);
         if (pane?.type !== "panel" || pane.tabs.length <= 1) return;
         const currentIndex = pane.tabs.findIndex((t) => t.id === pane.activeTabId);
         const nextIndex = (currentIndex + 1) % pane.tabs.length;
+        changed = pane.activeTabId !== pane.tabs[nextIndex].id;
         pane.activeTabId = pane.tabs[nextIndex].id;
       });
+      if (changed) notifyTerminalLayoutChanged("tab.next");
     },
 
     prevTab: (paneId) => {
+      let changed = false;
       set((state) => {
         const pane = findPane(state.rootPane, paneId);
         if (pane?.type !== "panel" || pane.tabs.length <= 1) return;
         const currentIndex = pane.tabs.findIndex((t) => t.id === pane.activeTabId);
         const prevIndex = (currentIndex - 1 + pane.tabs.length) % pane.tabs.length;
+        changed = pane.activeTabId !== pane.tabs[prevIndex].id;
         pane.activeTabId = pane.tabs[prevIndex].id;
       });
+      if (changed) notifyTerminalLayoutChanged("tab.prev");
     },
 
     switchToTab: (paneId, index) => {
+      let changed = false;
       set((state) => {
         const pane = findPane(state.rootPane, paneId);
         if (pane?.type !== "panel") return;
         if (index >= 0 && index < pane.tabs.length) {
+          changed = pane.activeTabId !== pane.tabs[index].id;
           pane.activeTabId = pane.tabs[index].id;
         }
       });
+      if (changed) notifyTerminalLayoutChanged("tab.switch-index");
     },
 
     minimizeTab: (paneId, tabId) => {
@@ -2233,6 +2258,38 @@ export const usePanesStore = create<PanesState>()(
       return restored;
     },
 
+    exportLayoutSnapshotPayload: () => {
+      const state = get();
+      return {
+        schemaVersion: 1,
+        layouts: projectedLayouts(state, { includeStarred: true }),
+        currentLayoutId: state.currentLayoutId,
+      };
+    },
+
+    applyLayoutSnapshotPayload: (payload) => {
+      if (!payload || !Array.isArray(payload.layouts)) return false;
+      let applied = false;
+      set((state) => {
+        const layoutState = ensureLayoutState({
+          layouts: payload.layouts,
+          currentLayoutId: payload.currentLayoutId,
+          rootPane: state.rootPane,
+          activePaneId: state.activePaneId,
+        });
+        state.layouts = layoutState.layouts;
+        state.currentLayoutId = layoutState.currentLayoutId;
+        state.rootPane = layoutState.rootPane;
+        state.activePaneId = layoutState.activePaneId;
+        state.poppedOutTabs = new Set<string>();
+        applied = true;
+      });
+      if (applied) {
+        notifyTerminalLayoutChanged("layout.snapshot.apply");
+      }
+      return applied;
+    },
+
     clearRestoring: (_paneId, tabId, terminalPaneId) => {
       set((state) => {
         const location = findTabAcrossLayouts(state, tabId);
@@ -2334,8 +2391,7 @@ export const usePanesStore = create<PanesState>()(
       return state;
     },
     partialize: (state) => ({
-      layouts: projectedLayouts(state, { includeStarred: true }),
-      currentLayoutId: state.currentLayoutId,
+      ...state.exportLayoutSnapshotPayload(),
       // poppedOutTabs is runtime-only; popped windows do not survive restart.
     }),
     merge: (persistedState, currentState) => {
