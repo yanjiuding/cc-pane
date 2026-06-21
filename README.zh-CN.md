@@ -212,11 +212,6 @@ cc-pane/
 - GitHub Issues: <https://github.com/wuxiran/cc-pane/issues>
 - GitHub Discussions: <https://github.com/wuxiran/cc-pane/discussions>
 
-## 赞助和友链
-
-- 赞助中转站：<https://hub.nocannobb.com>
-- 友情链接：[Linux.do](https://linux.do)
-
 微信交流群：
 
 添加微信 `yemaofeng66`，备注 `CC-Panes 交流群`。
@@ -247,6 +242,8 @@ docs: update README screenshots
 
 ## 致谢
 
+- [赞助中转站](https://hub.nocannobb.com)
+- [Linux.do](https://linux.do)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 - [Tauri](https://tauri.app/)
 - [xterm.js](https://xtermjs.org/)

@@ -204,11 +204,6 @@ When behavior depends on the Windows desktop host, validate on Windows. WSL or L
 - GitHub Issues: <https://github.com/wuxiran/cc-pane/issues>
 - GitHub Discussions: <https://github.com/wuxiran/cc-pane/discussions>
 
-## Sponsors And Friends
-
-- Sponsor relay hub: <https://hub.nocannobb.com>
-- Friendly link: [Linux.do](https://linux.do)
-
 WeChat chat group:
 
 Add WeChat `yemaofeng66` and mention `CC-Panes chat`.
@@ -239,6 +234,8 @@ CC-Panes is licensed under [GPL-3.0](LICENSE).
 
 ## Acknowledgments
 
+- [Sponsor relay hub](https://hub.nocannobb.com)
+- [Linux.do](https://linux.do)
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 - [Tauri](https://tauri.app/)
 - [xterm.js](https://xtermjs.org/)
