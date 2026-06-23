@@ -355,6 +355,24 @@ use tauri::{
 };
 
 #[cfg(target_os = "macos")]
+const APP_MENU_PASTE_ID: &str = "cc-panes-menu-paste";
+#[cfg(target_os = "macos")]
+const APP_MENU_PASTE_EVENT: &str = "cc-panes://menu-paste";
+#[cfg(target_os = "macos")]
+static MACOS_TERMINAL_FOCUSED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+#[derive(Clone, serde::Serialize)]
+struct AppMenuPastePayload {
+    source: &'static str,
+}
+#[cfg(target_os = "macos")]
+thread_local! {
+    static MACOS_PASTE_KEY_MONITOR: std::cell::RefCell<
+        Option<objc2::rc::Retained<objc2::runtime::AnyObject>>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
 fn with_macos_app_menu<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     use tauri::menu::{
         AboutMetadata, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID,
@@ -393,7 +411,7 @@ fn with_macos_app_menu<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::
                 &PredefinedMenuItem::separator(app)?,
                 &PredefinedMenuItem::cut(app, None)?,
                 &PredefinedMenuItem::copy(app, None)?,
-                &PredefinedMenuItem::paste(app, None)?,
+                &MenuItem::with_id(app, APP_MENU_PASTE_ID, "Paste", true, None::<&str>)?,
                 &PredefinedMenuItem::select_all(app, None)?,
             ],
         )?;
@@ -422,11 +440,95 @@ fn with_macos_app_menu<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::
 
         Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu, &help_menu])
     })
+    .on_menu_event(|app, event| {
+        if event.id.as_ref() == APP_MENU_PASTE_ID {
+            info!("[macos-app-menu] Paste menu event intercepted");
+            let _ = app.emit(APP_MENU_PASTE_EVENT, AppMenuPastePayload { source: "menu" });
+        }
+    })
 }
 
 #[cfg(not(target_os = "macos"))]
 fn with_macos_app_menu<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn set_macos_terminal_focused(focused: bool) {
+    MACOS_TERMINAL_FOCUSED.store(focused, Ordering::SeqCst);
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+fn set_macos_terminal_focused(_focused: bool) {}
+
+#[cfg(target_os = "macos")]
+fn install_macos_paste_key_monitor(app: tauri::AppHandle) {
+    use block2::RcBlock;
+    use objc2_app_kit::{NSEvent, NSEventMask, NSEventModifierFlags, NSEventType};
+
+    if MACOS_PASTE_KEY_MONITOR.with(|slot| slot.borrow().is_some()) {
+        return;
+    }
+
+    let block = RcBlock::new(move |event: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+        let event_ref = unsafe { event.as_ref() };
+        if event_ref.r#type() != NSEventType::KeyDown {
+            return event.as_ptr();
+        }
+
+        let flags = event_ref.modifierFlags();
+        let relevant_flags = flags & NSEventModifierFlags::DeviceIndependentFlagsMask;
+        if relevant_flags != NSEventModifierFlags::Command {
+            return event.as_ptr();
+        }
+
+        let is_v_key = event_ref
+            .charactersIgnoringModifiers()
+            .as_deref()
+            .map(|characters| characters.to_string().eq_ignore_ascii_case("v"))
+            .unwrap_or(false)
+            || event_ref.keyCode() == 9;
+        if !is_v_key {
+            return event.as_ptr();
+        }
+
+        if !MACOS_TERMINAL_FOCUSED.load(Ordering::SeqCst) {
+            return event.as_ptr();
+        }
+
+        let Some(window) = app.get_webview_window("main") else {
+            return event.as_ptr();
+        };
+        if !window.is_focused().unwrap_or(false) {
+            return event.as_ptr();
+        }
+
+        info!("[macos-paste-key-monitor] Cmd+V intercepted; emitting app paste event");
+        let _ = app.emit(
+            APP_MENU_PASTE_EVENT,
+            AppMenuPastePayload {
+                source: "native-key-monitor",
+            },
+        );
+        std::ptr::null_mut()
+    });
+
+    let monitor = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &block)
+    };
+    match monitor {
+        Some(monitor) => {
+            MACOS_PASTE_KEY_MONITOR.with(|slot| {
+                *slot.borrow_mut() = Some(monitor);
+            });
+            info!("[boot] macOS: installed Cmd+V native paste key monitor");
+        }
+        None => {
+            warn!("[boot] macOS: failed to install Cmd+V native paste key monitor");
+        }
+    }
 }
 
 /// macOS: 强制将 WKWebView 设为 NSWindow 的 firstResponder
@@ -716,6 +818,60 @@ fn strip_ansi_escapes(s: &str) -> String {
     result
 }
 
+#[cfg(not(target_os = "windows"))]
+fn append_sanitized_path_entry(dirs: &mut Vec<String>, entry: &str) {
+    let trimmed = entry.trim();
+    if trimmed.is_empty() || trimmed.contains("Restored session") {
+        return;
+    }
+
+    let path = std::path::Path::new(trimmed);
+    if !path.is_absolute() || !path.is_dir() {
+        return;
+    }
+
+    if !dirs.iter().any(|existing| existing == trimmed) {
+        dirs.push(trimmed.to_string());
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn recover_path_entry_from_noisy_segment(segment: &str) -> Option<&str> {
+    let direct = segment.trim();
+    if std::path::Path::new(direct).is_absolute() {
+        return Some(direct);
+    }
+
+    direct
+        .split_whitespace()
+        .rev()
+        .find(|token| std::path::Path::new(token).is_absolute())
+}
+
+/// Normalize shell/cache PATH output before it becomes process state.
+///
+/// Login shells can print status text to stdout (for example "Restored session: ...")
+/// before `echo $PATH`; keep only existing absolute directories and de-duplicate them.
+#[cfg(not(target_os = "windows"))]
+fn sanitize_path_output(raw: &str) -> Option<String> {
+    let stripped = strip_ansi_escapes(raw);
+    let mut dirs: Vec<String> = Vec::new();
+
+    for line in stripped.lines() {
+        for segment in line.split(':') {
+            if let Some(entry) = recover_path_entry_from_noisy_segment(segment) {
+                append_sanitized_path_entry(&mut dirs, entry);
+            }
+        }
+    }
+
+    if dirs.is_empty() {
+        None
+    } else {
+        Some(dirs.join(":"))
+    }
+}
+
 /// 获取 PATH 缓存文件路径
 #[cfg(not(target_os = "windows"))]
 fn get_path_cache_file() -> String {
@@ -733,6 +889,12 @@ fn write_path_cache(file: &str, path: &str) -> std::io::Result<()> {
     if let Some(parent) = p.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    let path = sanitize_path_output(path).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "PATH has no valid entries",
+        )
+    })?;
     std::fs::write(file, path)
 }
 
@@ -757,13 +919,8 @@ fn resolve_path_from_shell(shell: &str) -> Option<String> {
 
     match rx.recv_timeout(std::time::Duration::from_secs(10)) {
         Ok(Ok(output)) if output.status.success() => {
-            let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let path = strip_ansi_escapes(&raw);
-            if path.is_empty() {
-                None
-            } else {
-                Some(path)
-            }
+            let raw = String::from_utf8_lossy(&output.stdout);
+            sanitize_path_output(&raw)
         }
         _ => {
             eprintln!("[boot] shell timed out or failed, killing pid={child_pid}");
@@ -790,9 +947,7 @@ fn build_fallback_path() -> String {
         format!("{home_str}/.local/bin"),
     ];
     for d in &user_dirs {
-        if std::path::Path::new(d).is_dir() {
-            dirs.push(d.clone());
-        }
+        append_sanitized_path_entry(&mut dirs, d);
     }
 
     // nvm：找最新的 node 版本目录
@@ -812,9 +967,7 @@ fn build_fallback_path() -> String {
             }
             if let Some(node_dir) = latest {
                 let bin = node_dir.join("bin");
-                if bin.is_dir() {
-                    dirs.push(bin.to_string_lossy().to_string());
-                }
+                append_sanitized_path_entry(&mut dirs, &bin.to_string_lossy());
             }
         }
     }
@@ -832,17 +985,13 @@ fn build_fallback_path() -> String {
         "/opt/local/bin",
     ];
     for d in &system_dirs {
-        if std::path::Path::new(d).is_dir() {
-            dirs.push(d.to_string());
-        }
+        append_sanitized_path_entry(&mut dirs, d);
     }
 
     // 追加当前 PATH 去重
     if let Ok(current) = std::env::var("PATH") {
         for entry in current.split(':') {
-            if !entry.is_empty() && !dirs.contains(&entry.to_string()) {
-                dirs.push(entry.to_string());
-            }
+            append_sanitized_path_entry(&mut dirs, entry);
         }
     }
 
@@ -872,8 +1021,8 @@ fn load_full_path() {
 
     // 1. 尝试读缓存
     if let Ok(cached) = std::fs::read_to_string(&cache_file) {
-        let cached = cached.trim().to_string();
-        if !cached.is_empty() {
+        if let Some(cached) = sanitize_path_output(&cached) {
+            let _ = write_path_cache(&cache_file, &cached);
             eprintln!(
                 "[boot] PATH loaded from cache ({} entries)",
                 cached.split(':').count()
@@ -1672,6 +1821,8 @@ pub fn run() {
                     });
                     info!("[boot] macOS: configured titlebar overlay via NSWindow API");
 
+                    install_macos_paste_key_monitor(app.handle().clone());
+
                     force_webview_focus(&window);
                     info!("[boot] macOS: forced WKWebView as firstResponder");
                 }
@@ -1964,6 +2115,7 @@ pub fn run() {
             screenshot_update_shortcut,
             // Clipboard 命令
             read_clipboard_file_paths,
+            set_macos_terminal_focused,
             // Orchestrator 命令
             get_orchestrator_port,
             get_orchestrator_token,

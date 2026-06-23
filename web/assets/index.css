@@ -597,3 +597,35 @@
 .cc-status-pulse {
   animation: cc-status-pulse 1.4s ease-in-out infinite;
 }
+
+/* cc酱透明悬浮窗：阻止 WebKit/macOS 原生 Paste callout 抢占右键/长按。 */
+:root[data-platform="macos"] .ccchan-window,
+:root[data-platform="macos"] .ccchan-window * {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+:root[data-platform="macos"] .ccchan-window input,
+:root[data-platform="macos"] .ccchan-window textarea,
+:root[data-platform="macos"] .ccchan-window [contenteditable="true"],
+:root[data-platform="macos"] .ccchan-window [contenteditable=""] {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* xterm 的隐藏 textarea 会让 WebKit/macOS 弹出原生 Paste callout；终端区统一交给 xterm/快捷键处理。 */
+:root[data-platform="macos"] .cc-terminal-host,
+:root[data-platform="macos"] .cc-terminal-host * {
+  -webkit-touch-callout: none;
+}
+
+:root[data-platform="macos"] .cc-terminal-host .xterm .xterm-helper-textarea {
+  -webkit-touch-callout: none !important;
+  -webkit-user-modify: read-only !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+  pointer-events: none !important;
+  caret-color: transparent !important;
+}

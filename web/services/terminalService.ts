@@ -29,6 +29,18 @@ export type TerminalWriteSource = "user-keyboard" | "mcp" | "system";
 
 export interface TerminalWriteOptions {
   source?: TerminalWriteSource;
+  traceId?: number;
+}
+
+function summarizeTerminalInput(data: string): Record<string, unknown> {
+  const chars = Array.from(data);
+  return {
+    text: chars.length > 24 ? `${chars.slice(0, 24).join("")}...` : data,
+    length: chars.length,
+    utf16Length: data.length,
+    codePoints: chars.slice(0, 24).map((char) => char.codePointAt(0)?.toString(16) ?? ""),
+    truncated: chars.length > 24,
+  };
 }
 
 /** 将 Rust 返回的 cliTools 数组规范化为含向后兼容字段的 EnvironmentInfo */
@@ -87,13 +99,153 @@ const outputCallbacks = new Map<string, (data: string) => void>();
 const exitCallbacks = new Map<string, (exitCode: number) => void>();
 const pendingBuffers = new Map<string, string[]>();
 const webSockets = new Map<string, WebSocket>();
+const inputQueues = new Map<string, TerminalInputQueue>();
 /** 已 kill 的 session ID 集合，用于事件监听器跳过已死 session */
 export const killedSessions = new Set<string>();
 const MAX_PENDING_CHUNKS = 1000;
+const INPUT_BATCH_DELAY_MS = 8;
 let listenersInitialized = false;
 let unlistenOutput: UnlistenFn | null = null;
 let unlistenExit: UnlistenFn | null = null;
 let unlistenKilled: UnlistenFn | null = null;
+
+interface QueuedTerminalInput {
+  data: string;
+  traceId?: number;
+  resolve: () => void;
+  reject: (error: unknown) => void;
+}
+
+interface TerminalInputQueue {
+  pending: QueuedTerminalInput[];
+  timer: ReturnType<typeof setTimeout> | null;
+  flushing: boolean;
+  idleResolvers: Array<() => void>;
+}
+
+function enqueueTerminalInput(sessionId: string, data: string, traceId?: number): Promise<void> {
+  if (data.length === 0) return Promise.resolve();
+
+  let queue = inputQueues.get(sessionId);
+  if (!queue) {
+    queue = {
+      pending: [],
+      timer: null,
+      flushing: false,
+      idleResolvers: [],
+    };
+    inputQueues.set(sessionId, queue);
+  }
+
+  const result = new Promise<void>((resolve, reject) => {
+    queue.pending.push({ data, traceId, resolve, reject });
+    debugTerminalService("input.queue.enqueue", {
+      sessionId,
+      traceId: traceId ?? null,
+      pendingChunks: queue.pending.length,
+      flushing: queue.flushing,
+      data: summarizeTerminalInput(data),
+    });
+  });
+
+  if (!queue.timer && !queue.flushing) {
+    queue.timer = setTimeout(() => void flushTerminalInputQueue(sessionId), INPUT_BATCH_DELAY_MS);
+  }
+
+  return result;
+}
+
+async function flushTerminalInputQueue(sessionId: string): Promise<void> {
+  const queue = inputQueues.get(sessionId);
+  if (!queue) return;
+  if (queue.flushing) return;
+  queue.timer = null;
+  if (queue.pending.length === 0) return;
+
+  const batch = queue.pending.splice(0);
+  const data = batch.map((item) => item.data).join("");
+  const traceIds = batch.map((item) => item.traceId ?? null);
+  queue.flushing = true;
+  debugTerminalService("input.queue.flush.begin", {
+    sessionId,
+    traceIds,
+    chunkCount: batch.length,
+    data: summarizeTerminalInput(data),
+  });
+  try {
+    await writeTerminalInputNow(sessionId, data);
+    debugTerminalService("input.queue.flush.ok", {
+      sessionId,
+      traceIds,
+      data: summarizeTerminalInput(data),
+    });
+    for (const item of batch) item.resolve();
+  } catch (error) {
+    debugTerminalService("input.queue.flush.error", {
+      sessionId,
+      traceIds,
+      error: error instanceof Error ? error.message : String(error),
+      data: summarizeTerminalInput(data),
+    });
+    for (const item of batch) item.reject(error);
+  } finally {
+    const current = inputQueues.get(sessionId);
+    if (current !== queue) return;
+    queue.flushing = false;
+    if (queue.pending.length > 0) {
+      queue.timer = setTimeout(() => void flushTerminalInputQueue(sessionId), 0);
+    } else {
+      const resolvers = queue.idleResolvers.splice(0);
+      for (const resolve of resolvers) resolve();
+      inputQueues.delete(sessionId);
+    }
+  }
+}
+
+function drainTerminalInputQueue(sessionId: string): Promise<void> {
+  const queue = inputQueues.get(sessionId);
+  if (!queue) return Promise.resolve();
+  if (queue.timer) {
+    clearTimeout(queue.timer);
+    queue.timer = null;
+    void flushTerminalInputQueue(sessionId);
+  }
+  if (!queue.flushing && queue.pending.length === 0) {
+    inputQueues.delete(sessionId);
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    queue.idleResolvers.push(resolve);
+  });
+}
+
+function clearTerminalInputQueue(sessionId: string): void {
+  const queue = inputQueues.get(sessionId);
+  if (!queue) return;
+  if (queue.timer) {
+    clearTimeout(queue.timer);
+  }
+  for (const item of queue.pending.splice(0)) {
+    debugTerminalService("input.queue.clear", {
+      sessionId,
+      traceId: item.traceId ?? null,
+      data: summarizeTerminalInput(item.data),
+    });
+    item.resolve();
+  }
+  for (const resolve of queue.idleResolvers.splice(0)) resolve();
+  inputQueues.delete(sessionId);
+}
+
+function writeTerminalInputNow(sessionId: string, data: string): Promise<void> {
+  debugTerminalService("input.ipc.write.begin", {
+    sessionId,
+    data: summarizeTerminalInput(data),
+  });
+  return invokeOrApi<void>("write_terminal", { sessionId, data }, () =>
+    apiJson<void>(`/api/sessions/${encodeURIComponent(sessionId)}/write`, "POST", { data }),
+  );
+}
 
 /**
  * 惰性初始化：首次调用时注册两个全局 listener，生命周期与应用一致。
@@ -173,6 +325,7 @@ if (import.meta.hot) {
     outputCallbacks.clear();
     exitCallbacks.clear();
     pendingBuffers.clear();
+    for (const sessionId of Array.from(inputQueues.keys())) clearTerminalInputQueue(sessionId);
     killedSessions.clear();
     for (const socket of webSockets.values()) socket.close();
     webSockets.clear();
@@ -186,6 +339,7 @@ export function _resetListenersForTest(): void {
   outputCallbacks.clear();
   exitCallbacks.clear();
   pendingBuffers.clear();
+  for (const sessionId of Array.from(inputQueues.keys())) clearTerminalInputQueue(sessionId);
   killedSessions.clear();
   listenersInitialized = false;
   unlistenOutput = null;
@@ -288,10 +442,9 @@ export const terminalService = {
     data: string,
     options: TerminalWriteOptions = { source: "user-keyboard" },
   ): Promise<void> {
-    await invokeOrApi<void>("write_terminal", { sessionId, data }, () =>
-      apiJson<void>(`/api/sessions/${encodeURIComponent(sessionId)}/write`, "POST", { data }),
-    );
-    if (options.source === "user-keyboard") {
+    const source = options.source ?? "user-keyboard";
+    await enqueueTerminalInput(sessionId, data, options.traceId);
+    if (source === "user-keyboard") {
       const charCount = countTerminalInputChars(data);
       void usageStatsService.recordInputChars(sessionId, charCount).catch((error) => {
         console.warn("Failed to record terminal input chars:", error);
@@ -325,6 +478,7 @@ export const terminalService = {
 
   /** 向会话提交文本并自动发送 Enter */
   async submitToSession(sessionId: string, text: string): Promise<void> {
+    await drainTerminalInputQueue(sessionId);
     return invokeOrApi<void>("submit_to_session", { sessionId, text }, () =>
       apiJson<void>(`/api/sessions/${encodeURIComponent(sessionId)}/submit`, "POST", { text }),
     );
@@ -396,6 +550,7 @@ export const terminalService = {
     outputCallbacks.delete(sessionId);
     exitCallbacks.delete(sessionId);
     pendingBuffers.delete(sessionId);
+    clearTerminalInputQueue(sessionId);
     // 幂等关闭：reload cleanup 常杀已退/不存在的 session，用 idempotent 命令把
     // NOT_FOUND / already-exited 视为成功，避免 [UNHANDLED REJECTION] Session not found。
     closeWebSocket(sessionId);

@@ -51,6 +51,11 @@ fn ensure_hook_binary_placeholder() {
     if !daemon_placeholder.exists() {
         std::fs::write(daemon_placeholder, "placeholder for dev build").ok();
     }
+
+    let web_placeholder = binaries_dir.join("cc-panes-web.placeholder");
+    if !web_placeholder.exists() {
+        std::fs::write(web_placeholder, "placeholder for dev build").ok();
+    }
 }
 
 /// 确保 bundle.resources 中引用的 resources/web-dist/ 在 dev/check 模式也能匹配到

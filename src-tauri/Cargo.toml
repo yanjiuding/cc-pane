@@ -1,6 +1,6 @@
 [package]
 name = "cc-panes"
-version = "0.10.0"
+version = "0.10.1"
 description = "CC-Panes - Multi-instance split-pane manager for Claude Code"
 authors = ["wuxiran"]
 license = "GPL-3.0"
@@ -90,6 +90,7 @@ windows = { version = "0.62", features = [
 ] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
 objc2 = "0.6.4"
 objc2-app-kit = "0.3"
 objc2-web-kit = "0.3"

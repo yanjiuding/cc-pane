@@ -11,6 +11,18 @@ import "@/i18n";
 import App from "./App";
 import "./assets/index.css";
 import { recordFrontendCrash } from "@/utils/frontendCrashLog";
+import { installAppMenuPasteHandler } from "@/utils/appMenuPaste";
+
+const appPlatform = (() => {
+  const platform = navigator.platform.toLowerCase();
+  if (platform.startsWith("mac")) return "macos";
+  if (platform.startsWith("win")) return "windows";
+  if (platform.includes("linux")) return "linux";
+  return "unknown";
+})();
+document.documentElement.dataset.platform = appPlatform;
+
+installAppMenuPasteHandler();
 
 // 全局未捕获错误处理（调试白屏用）
 window.addEventListener("error", (e) => {

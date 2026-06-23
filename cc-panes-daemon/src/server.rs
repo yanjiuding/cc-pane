@@ -25,6 +25,33 @@ use crate::ws_emitter::WsEmitter;
 
 const MANIFEST_FILE: &str = "daemon-manifest.json";
 
+fn summarize_terminal_input(data: &str) -> serde_json::Value {
+    let chars: Vec<String> = data
+        .chars()
+        .take(24)
+        .map(|ch| ch.escape_default().to_string())
+        .collect();
+    let code_points: Vec<String> = data
+        .chars()
+        .take(24)
+        .map(|ch| format!("{:x}", ch as u32))
+        .collect();
+    let bytes: Vec<String> = data
+        .as_bytes()
+        .iter()
+        .take(32)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    serde_json::json!({
+        "chars": chars,
+        "charCount": data.chars().count(),
+        "utf8Bytes": data.len(),
+        "codePoints": code_points,
+        "bytes": bytes,
+        "truncated": data.chars().count() > 24 || data.len() > 32,
+    })
+}
+
 #[derive(Clone)]
 pub struct DaemonConfig {
     inner: Arc<DaemonState>,
@@ -373,6 +400,11 @@ async fn write_session(
     Json(req): Json<WriteRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     authorize(&headers, config.token())?;
+    tracing::debug!(
+        session_id = %id,
+        input = %summarize_terminal_input(&req.data),
+        "terminal-input.trace daemon.write_session"
+    );
     config
         .terminal_backend()
         .write(&id, &req.data)

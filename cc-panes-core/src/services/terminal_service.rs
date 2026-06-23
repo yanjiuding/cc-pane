@@ -733,8 +733,8 @@ pub struct TerminalService {
     shared_mcp_service: parking_lot::RwLock<Option<Arc<crate::services::SharedMcpService>>>,
     launch_profile_service: parking_lot::RwLock<Option<Arc<LaunchProfileService>>>,
     workspace_service: parking_lot::RwLock<Option<Arc<WorkspaceService>>>,
-    /// fix(C2) review: 每个 session 独立串行化 submit_to_session 的文本+Enter 组合写入。
-    submit_mutexes: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// 每个 session 独立串行化所有输入写入，避免键盘输入、粘贴和 submit 互相交错。
+    input_mutexes: Mutex<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 struct SshAuthRuntime {
@@ -761,6 +761,33 @@ const DEAD_OUTPUT_MAX_BYTES: usize = 10 * 1024 * 1024;
 const DEAD_REPLAY_MAX_BYTES: usize = 4 * 1024 * 1024;
 const SUBMIT_TEXT_MAX_BYTES: usize = 256 * 1024;
 
+fn summarize_input_bytes(data: &[u8]) -> serde_json::Value {
+    let text = String::from_utf8_lossy(data);
+    let chars: Vec<String> = text
+        .chars()
+        .take(24)
+        .map(|ch| ch.escape_default().to_string())
+        .collect();
+    let code_points: Vec<String> = text
+        .chars()
+        .take(24)
+        .map(|ch| format!("{:x}", ch as u32))
+        .collect();
+    let bytes: Vec<String> = data
+        .iter()
+        .take(32)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    serde_json::json!({
+        "chars": chars,
+        "charCount": text.chars().count(),
+        "utf8Bytes": data.len(),
+        "codePoints": code_points,
+        "bytes": bytes,
+        "truncated": text.chars().count() > 24 || data.len() > 32,
+    })
+}
+
 fn spawn_terminal_writer(
     session_id: String,
     mut writer: Box<dyn Write + Send>,
@@ -771,6 +798,11 @@ fn spawn_terminal_writer(
         while let Ok(command) = writer_rx.recv() {
             match command {
                 WriterCommand::Write { data, ack } => {
+                    debug!(
+                        session_id = %session_id,
+                        input = %summarize_input_bytes(&data),
+                        "terminal-input.trace pty.writer.write"
+                    );
                     let result = writer
                         .write_all(&data)
                         .and_then(|_| writer.flush())
@@ -1078,7 +1110,7 @@ impl TerminalService {
             shared_mcp_service: parking_lot::RwLock::new(None),
             launch_profile_service: parking_lot::RwLock::new(None),
             workspace_service: parking_lot::RwLock::new(None),
-            submit_mutexes: Mutex::new(HashMap::new()),
+            input_mutexes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -2428,8 +2460,24 @@ impl TerminalService {
     /// 写入由每个 session 独立 writer 线程执行，避免一个假死 SSH 写入
     /// 阻塞全局 sessions 锁并拖住其他窗口。
     pub fn write(&self, session_id: &str, data: &str) -> Result<()> {
+        let mutex = self
+            .input_mutex_for_session(session_id)
+            .map_err(|error| anyhow!(error.to_string()))?;
+        let _guard = mutex
+            .lock()
+            .map_err(|_| anyhow!("terminal input lock poisoned"))?;
+        self.write_unlocked(session_id, data)
+    }
+
+    fn write_unlocked(&self, session_id: &str, data: &str) -> Result<()> {
         let bytes = data.as_bytes();
         let chunks: Vec<&[u8]> = bytes.chunks(TERMINAL_WRITE_CHUNK_SIZE).collect();
+        debug!(
+            session_id = %session_id,
+            chunk_count = chunks.len(),
+            input = %summarize_input_bytes(bytes),
+            "terminal-input.trace service.write"
+        );
         let writer_tx = {
             let sessions = self
                 .sessions
@@ -2452,11 +2500,11 @@ impl TerminalService {
         Ok(())
     }
 
-    fn submit_mutex_for_session(&self, session_id: &str) -> AppResult<Arc<Mutex<()>>> {
+    fn input_mutex_for_session(&self, session_id: &str) -> AppResult<Arc<Mutex<()>>> {
         let mut mutexes = self
-            .submit_mutexes
+            .input_mutexes
             .lock()
-            .map_err(|_| AppError::from("submit mutexes lock poisoned"))?;
+            .map_err(|_| AppError::from("terminal input mutexes lock poisoned"))?;
         Ok(mutexes
             .entry(session_id.to_string())
             .or_insert_with(|| Arc::new(Mutex::new(())))
@@ -2475,17 +2523,17 @@ impl TerminalService {
 
         let clean_text = text.replace(['\r', '\n'], "");
         let text_len = clean_text.len();
-        let mutex = self.submit_mutex_for_session(session_id)?;
+        let mutex = self.input_mutex_for_session(session_id)?;
         let _guard = mutex
             .lock()
-            .map_err(|_| AppError::from("submit session lock poisoned"))?;
+            .map_err(|_| AppError::from("terminal input lock poisoned"))?;
 
         // fix(C2) review: 持有 per-session 锁覆盖“写文本 + sleep + 写 Enter”的完整序列。
-        self.write(session_id, &clean_text)
+        self.write_unlocked(session_id, &clean_text)
             .map_err(AppError::from)?;
         let delay_ms = std::cmp::min(200 + (text_len as u64 / 512) * 30, 5000);
         std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-        self.write(session_id, "\r").map_err(AppError::from)?;
+        self.write_unlocked(session_id, "\r").map_err(AppError::from)?;
         Ok(())
     }
 
@@ -2514,9 +2562,8 @@ impl TerminalService {
                 .map_err(|_| AppError::from("sessions lock poisoned"))?;
             sessions.remove(session_id)
         }; // sessions lock 在此释放
-        if let Ok(mut submit_mutexes) = self.submit_mutexes.lock() {
-            // fix(C2) review: session kill 时清理 submit mutex，避免长期残留。
-            submit_mutexes.remove(session_id);
+        if let Ok(mut input_mutexes) = self.input_mutexes.lock() {
+            input_mutexes.remove(session_id);
         }
 
         if let Some(session) = session {
@@ -3267,6 +3314,47 @@ mod tests {
                 || writes == vec!["beta", "\r", "alpha", "\r"],
             "unexpected submit write order: {writes:?}"
         );
+    }
+
+    #[test]
+    fn write_waits_for_in_flight_submit_enter() {
+        let (service, _temp_dir) = terminal_service_for_test();
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        install_recording_session(&service, "session-1", writes.clone());
+
+        let submit = {
+            let service = service.clone();
+            thread::spawn(move || service.submit_text_to_session("session-1", "alpha"))
+        };
+
+        let start = Instant::now();
+        loop {
+            let has_text = writes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_slice()
+                == ["alpha"];
+            if has_text {
+                break;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(2),
+                "submit did not write initial text"
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+
+        service.write("session-1", "z").expect("keyboard write");
+        submit
+            .join()
+            .expect("submit thread")
+            .expect("submit should finish");
+
+        let writes = writes
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone();
+        assert_eq!(writes, vec!["alpha", "\r", "z"]);
     }
 
     #[test]

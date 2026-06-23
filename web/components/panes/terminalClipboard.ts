@@ -3,6 +3,7 @@ import { readText as tauriReadText } from "@tauri-apps/plugin-clipboard-manager"
 import { screenshotService } from "@/services";
 import { getErrorMessage } from "@/utils";
 import { isTauriRuntime } from "@/services/runtime";
+import { devDebugLog } from "@/utils/devLogger";
 
 export type TerminalPastePayload =
   | { kind: "image"; text: string; filePath: string }
@@ -28,24 +29,48 @@ export function clipboardHasImage(clipboardData?: DataTransfer | null): boolean 
 }
 
 export async function readClipboardText(textHint?: string | null): Promise<string> {
-  if (textHint) return textHint;
+  if (textHint) {
+    devDebugLog("terminal-clipboard", "text.read", {
+      source: "clipboard-event",
+      textLength: textHint.length,
+    });
+    return textHint;
+  }
+
+  if (isTauriRuntime()) {
+    try {
+      const text = await tauriReadText();
+      devDebugLog("terminal-clipboard", "text.read", {
+        source: "tauri-plugin",
+        textLength: text.length,
+      });
+      return text;
+    } catch {
+      devDebugLog("terminal-clipboard", "text.read.failed", {
+        source: "tauri-plugin",
+      });
+      return "";
+    }
+  }
 
   const webClipboard = navigator.clipboard;
   if (webClipboard?.readText) {
     try {
       const text = await webClipboard.readText();
+      devDebugLog("terminal-clipboard", "text.read", {
+        source: "web-clipboard",
+        textLength: text.length,
+      });
       if (text) return text;
     } catch {
-      // Fall through to the Tauri clipboard plugin when the Web API is unavailable.
+      devDebugLog("terminal-clipboard", "text.read.failed", {
+        source: "web-clipboard",
+      });
+      return "";
     }
   }
 
-  try {
-    if (!isTauriRuntime()) return "";
-    return await tauriReadText();
-  } catch {
-    return "";
-  }
+  return "";
 }
 
 export function formatTerminalFilePaths(paths: string[]): string {

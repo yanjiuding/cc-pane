@@ -15,6 +15,33 @@ use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
 
+fn summarize_terminal_input(data: &str) -> serde_json::Value {
+    let chars: Vec<String> = data
+        .chars()
+        .take(24)
+        .map(|ch| ch.escape_default().to_string())
+        .collect();
+    let code_points: Vec<String> = data
+        .chars()
+        .take(24)
+        .map(|ch| format!("{:x}", ch as u32))
+        .collect();
+    let bytes: Vec<String> = data
+        .as_bytes()
+        .iter()
+        .take(32)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    serde_json::json!({
+        "chars": chars,
+        "charCount": data.chars().count(),
+        "utf8Bytes": data.len(),
+        "codePoints": code_points,
+        "bytes": bytes,
+        "truncated": data.chars().count() > 24 || data.len() > 32,
+    })
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionRequest {
@@ -201,6 +228,11 @@ pub async fn write_session(
     Path(id): Path<String>,
     Json(req): Json<WriteRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    tracing::debug!(
+        session_id = %id,
+        input = %summarize_terminal_input(&req.data),
+        "terminal-input.trace web.write_session"
+    );
     state.terminal_backend.write(&id, &req.data).map_err(|e| {
         tracing::error!(session_id = id, error = %e, "Failed to write");
         (StatusCode::NOT_FOUND, "Session not found".to_string())

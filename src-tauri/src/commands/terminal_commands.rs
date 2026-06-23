@@ -22,6 +22,33 @@ fn is_idempotent_kill_error(error: &AppError) -> bool {
             .contains("already exited")
 }
 
+fn summarize_terminal_input(data: &str) -> serde_json::Value {
+    let chars: Vec<String> = data
+        .chars()
+        .take(24)
+        .map(|ch| ch.escape_default().to_string())
+        .collect();
+    let code_points: Vec<String> = data
+        .chars()
+        .take(24)
+        .map(|ch| format!("{:x}", ch as u32))
+        .collect();
+    let bytes: Vec<String> = data
+        .as_bytes()
+        .iter()
+        .take(32)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    serde_json::json!({
+        "chars": chars,
+        "charCount": data.chars().count(),
+        "utf8Bytes": data.len(),
+        "codePoints": code_points,
+        "bytes": bytes,
+        "truncated": data.chars().count() > 24 || data.len() > 32,
+    })
+}
+
 /// 创建终端会话
 #[tauri::command]
 pub async fn create_terminal_session(
@@ -77,7 +104,11 @@ pub fn write_terminal(
     session_id: String,
     data: String,
 ) -> AppResult<()> {
-    debug!(session_id = %session_id, "cmd::write_terminal");
+    debug!(
+        session_id = %session_id,
+        input = %summarize_terminal_input(&data),
+        "terminal-input.trace tauri.write_terminal"
+    );
     service.backend().write(&session_id, &data)
 }
 

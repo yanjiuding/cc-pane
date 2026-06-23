@@ -133,19 +133,19 @@ describe("terminalClipboard", () => {
     });
   });
 
-  it("reads text from the clipboard APIs when paste data is unavailable", async () => {
+  it("reads text from the Tauri clipboard when paste data is unavailable", async () => {
     invokeMock.mockResolvedValue([]);
     saveClipboardImageMock.mockResolvedValue(null);
-    webReadTextMock.mockResolvedValue("from web clipboard");
+    tauriReadTextMock.mockResolvedValue("from tauri clipboard");
 
     const result = await resolveTerminalPastePayload(null);
 
     expect(saveClipboardImageMock).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
       kind: "text",
-      text: "from web clipboard",
+      text: "from tauri clipboard",
     });
-    expect(tauriReadTextMock).not.toHaveBeenCalled();
+    expect(webReadTextMock).not.toHaveBeenCalled();
   });
 
   it("returns a save failure when persisting a clipboard image errors", async () => {

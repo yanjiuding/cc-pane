@@ -134,7 +134,7 @@ describe("terminal IME guard", () => {
     guard.dispose();
   });
 
-  it("clears native textarea edit state even when IME interception is disabled", () => {
+  it("does not clear native textarea edit state when IME interception is disabled", () => {
     const textarea = document.createElement("textarea");
     document.body.appendChild(textarea);
     const terminal = { input: vi.fn() };
@@ -152,16 +152,14 @@ describe("terminal IME guard", () => {
 
     guard.clearNativeEditState("copy-selection");
 
-    expect(textarea.value).toBe("");
+    expect(textarea.value).toBe("Write tests");
     expect(textarea.selectionStart).toBe(0);
-    expect(textarea.selectionEnd).toBe(0);
-    expect(document.getSelection()?.rangeCount).toBe(0);
+    expect(textarea.selectionEnd).toBe(1);
+    expect(document.getSelection()?.rangeCount).toBe(1);
     expect(terminal.input).not.toHaveBeenCalled();
-    expect(logger).toHaveBeenCalledWith(
+    expect(logger).not.toHaveBeenCalledWith(
       "ime-guard.native-edit-state.cleared",
-      expect.objectContaining({
-        reason: "copy-selection",
-      }),
+      expect.anything(),
     );
 
     guard.dispose();

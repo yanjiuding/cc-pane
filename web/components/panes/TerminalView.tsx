@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, forwardRef, useImperativeHandle, type C
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { writeText as tauriWriteText } from "@tauri-apps/plugin-clipboard-manager";
 import { toast } from "sonner";
@@ -11,6 +12,7 @@ import { isTauriRuntime } from "@/services/runtime";
 import { getErrorMessage } from "@/utils";
 import { pickCreateSessionResumeId } from "./terminalResume";
 import { devDebugLog } from "@/utils/devLogger";
+import { TERMINAL_APP_MENU_PASTE_EVENT } from "@/utils/appMenuPaste";
 import {
   TERMINAL_LAYOUT_CHANGED_EVENT,
   shouldTerminalHandleKey,
@@ -35,9 +37,11 @@ import {
 } from "./terminalBufferMode";
 import { formatTerminalFilePaths, resolveTerminalPastePayload } from "./terminalClipboard";
 import { isDropInsideTerminalHost } from "./terminalDrop";
-import { attachTerminalInputTrace } from "./terminalInputTrace";
+import { attachTerminalInputTrace, summarizeTerminalInputData } from "./terminalInputTrace";
+import { attachTerminalDomInputFallback } from "./terminalDomInputFallback";
 import { attachTerminalImeGuard, isLinuxWebKitImeEnvironment } from "./terminalImeGuard";
 import { isTerminalPasteShortcut } from "./terminalKeyboard";
+import { detectFocusReportMode, isXtermFocusReportInput } from "./terminalFocusReport";
 import { createTerminalWriteFlowControl } from "./terminalWriteFlowControl";
 import {
   createTerminalLayoutScheduler,
@@ -86,6 +90,215 @@ const WEBGL_RECOVERY_PROMOTION_WINDOW_MS = 12_000;
 
 type TerminalCursorStyle = "block" | "underline" | "bar";
 
+function keyboardDebugPayload(event: KeyboardEvent, textarea: HTMLTextAreaElement): Record<string, unknown> {
+  return {
+    type: event.type,
+    key: event.key,
+    code: event.code,
+    keyCode: event.keyCode,
+    repeat: event.repeat,
+    isComposing: event.isComposing,
+    ctrlKey: event.ctrlKey,
+    shiftKey: event.shiftKey,
+    altKey: event.altKey,
+    metaKey: event.metaKey,
+    defaultPrevented: event.defaultPrevented,
+    textareaValue: summarizeTerminalInputData(textarea.value),
+    selectionStart: textarea.selectionStart,
+    selectionEnd: textarea.selectionEnd,
+  };
+}
+
+function inputDebugPayload(event: InputEvent, textarea: HTMLTextAreaElement): Record<string, unknown> {
+  return {
+    type: event.type,
+    inputType: event.inputType,
+    data: summarizeTerminalInputData(event.data),
+    isComposing: event.isComposing,
+    defaultPrevented: event.defaultPrevented,
+    textareaValue: summarizeTerminalInputData(textarea.value),
+    selectionStart: textarea.selectionStart,
+    selectionEnd: textarea.selectionEnd,
+  };
+}
+
+function compositionDebugPayload(event: CompositionEvent, textarea: HTMLTextAreaElement): Record<string, unknown> {
+  return {
+    type: event.type,
+    data: summarizeTerminalInputData(event.data),
+    defaultPrevented: event.defaultPrevented,
+    textareaValue: summarizeTerminalInputData(textarea.value),
+    selectionStart: textarea.selectionStart,
+    selectionEnd: textarea.selectionEnd,
+  };
+}
+
+function attachTerminalInputDebugLog(
+  textarea: HTMLTextAreaElement,
+  logger: (event: string, payload?: Record<string, unknown>) => void,
+  nextSeq: () => number,
+): () => void {
+  const cleanups: Array<() => void> = [];
+  const add = <K extends keyof HTMLElementEventMap>(
+    type: K,
+    handler: (event: HTMLElementEventMap[K]) => void,
+  ) => {
+    textarea.addEventListener(type, handler as EventListener, true);
+    cleanups.push(() => textarea.removeEventListener(type, handler as EventListener, true));
+  };
+
+  add("keydown", (event) => {
+    logger("input.dom.keydown", {
+      traceSeq: nextSeq(),
+      ...keyboardDebugPayload(event as KeyboardEvent, textarea),
+    });
+  });
+  add("beforeinput", (event) => {
+    logger("input.dom.beforeinput", {
+      traceSeq: nextSeq(),
+      ...inputDebugPayload(event as InputEvent, textarea),
+    });
+  });
+  add("input", (event) => {
+    logger("input.dom.input", {
+      traceSeq: nextSeq(),
+      ...inputDebugPayload(event as InputEvent, textarea),
+    });
+  });
+  add("compositionstart", (event) => {
+    logger("input.dom.compositionstart", {
+      traceSeq: nextSeq(),
+      ...compositionDebugPayload(event as CompositionEvent, textarea),
+    });
+  });
+  add("compositionupdate", (event) => {
+    logger("input.dom.compositionupdate", {
+      traceSeq: nextSeq(),
+      ...compositionDebugPayload(event as CompositionEvent, textarea),
+    });
+  });
+  add("compositionend", (event) => {
+    logger("input.dom.compositionend", {
+      traceSeq: nextSeq(),
+      ...compositionDebugPayload(event as CompositionEvent, textarea),
+    });
+  });
+
+  return () => {
+    while (cleanups.length > 0) {
+      cleanups.pop()?.();
+    }
+  };
+}
+
+function setMacosTerminalNativeFocus(focused: boolean): void {
+  if (!IS_MAC || !isTauriRuntime()) return;
+  void invoke("set_macos_terminal_focused", { focused }).catch(() => {});
+}
+
+function attachMacTerminalTextareaEditGuard(
+  textarea: HTMLTextAreaElement,
+  logger: (event: string, payload?: Record<string, unknown>) => void,
+): () => void {
+  if (!IS_MAC) return () => {};
+
+  let composing = false;
+  let lockTimer: ReturnType<typeof setTimeout> | null = null;
+  const cleanups: Array<() => void> = [];
+
+  const clearLockTimer = () => {
+    if (lockTimer) {
+      clearTimeout(lockTimer);
+      lockTimer = null;
+    }
+  };
+
+  const lock = (reason: string) => {
+    clearLockTimer();
+    if (composing) return;
+    textarea.readOnly = true;
+    logger("textarea.edit-guard.lock", { reason });
+  };
+
+  const scheduleLock = (reason: string) => {
+    clearLockTimer();
+    lockTimer = setTimeout(() => {
+      lockTimer = null;
+      lock(reason);
+    }, 0);
+  };
+
+  const unlock = (reason: string) => {
+    clearLockTimer();
+    textarea.readOnly = false;
+    logger("textarea.edit-guard.unlock", { reason });
+  };
+
+  const add = <K extends keyof HTMLElementEventMap>(
+    target: HTMLElement,
+    type: K,
+    handler: (event: HTMLElementEventMap[K]) => void,
+  ) => {
+    target.addEventListener(type, handler as EventListener, true);
+    cleanups.push(() => target.removeEventListener(type, handler as EventListener, true));
+  };
+
+  const addDocument = <K extends keyof DocumentEventMap>(
+    type: K,
+    handler: (event: DocumentEventMap[K]) => void,
+  ) => {
+    textarea.ownerDocument.addEventListener(type, handler as EventListener, true);
+    cleanups.push(() => textarea.ownerDocument.removeEventListener(type, handler as EventListener, true));
+  };
+
+  add(textarea, "focus", () => lock("focus"));
+  add(textarea, "blur", () => lock("blur"));
+  add(textarea, "keydown", (event) => {
+    if (isTerminalPasteShortcut(event as KeyboardEvent, true)) {
+      lock("keydown.paste-shortcut");
+      return;
+    }
+    unlock("keydown");
+    scheduleLock("keydown");
+  });
+  add(textarea, "keypress", () => {
+    unlock("keypress");
+    scheduleLock("keypress");
+  });
+  add(textarea, "beforeinput", (event) => {
+    if ((event as InputEvent).inputType === "insertFromPaste") {
+      lock("beforeinput.paste");
+      return;
+    }
+    unlock("beforeinput");
+    scheduleLock("beforeinput");
+  });
+  add(textarea, "input", () => scheduleLock("input"));
+  add(textarea, "compositionstart", () => {
+    composing = true;
+    unlock("compositionstart");
+  });
+  add(textarea, "compositionend", () => {
+    composing = false;
+    scheduleLock("compositionend");
+  });
+  addDocument("selectionchange", () => {
+    if (textarea.ownerDocument.activeElement === textarea && !composing) {
+      lock("selectionchange");
+    }
+  });
+
+  lock("init");
+
+  return () => {
+    clearLockTimer();
+    while (cleanups.length > 0) {
+      cleanups.pop()?.();
+    }
+    textarea.readOnly = false;
+  };
+}
+
 function normalizeTerminalFontSize(value?: number | null): number {
   if (!Number.isFinite(value)) return DEFAULT_TERMINAL_FONT_SIZE;
   const rounded = Math.round(value as number);
@@ -130,7 +343,7 @@ function writeTerminalReply(
   onError: (error: unknown) => void,
 ) {
   if (!sessionId) return;
-  void terminalService.write(sessionId, response).catch(onError);
+  void terminalService.write(sessionId, response, { source: "system" }).catch(onError);
 }
 
 function applyTerminalElementTheme(
@@ -220,8 +433,14 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     const currentSessionIdRef = useRef<string | null>(null);
     const wheelHandlerRef = useRef<((e: WheelEvent) => void) | null>(null);
     const pasteHandlerRef = useRef<((e: ClipboardEvent) => void) | null>(null);
+    const nativeMenuCleanupRef = useRef<(() => void) | null>(null);
+    const textareaEditGuardCleanupRef = useRef<(() => void) | null>(null);
+    const inputDebugCleanupRef = useRef<(() => void) | null>(null);
+    const inputTraceSeqRef = useRef(0);
+    const lastShortcutPasteAtRef = useRef(0);
     const dragDropUnlistenRef = useRef<(() => void) | null>(null);
     const inputTraceRef = useRef<ReturnType<typeof attachTerminalInputTrace> | null>(null);
+    const domInputFallbackRef = useRef<ReturnType<typeof attachTerminalDomInputFallback> | null>(null);
     const imeGuardRef = useRef<ReturnType<typeof attachTerminalImeGuard> | null>(null);
     const parserDisposableRefs = useRef<IDisposable[]>([]);
     const writeFlowControlRef = useRef<ReturnType<typeof createTerminalWriteFlowControl> | null>(null);
@@ -247,6 +466,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     const onReconnectRef = useRef(props.onReconnect);
     const debugInstanceIdRef = useRef(`term-${Math.random().toString(36).slice(2, 8)}`);
     const trackedBufferTypeRef = useRef<"unknown" | "normal" | "alternate">("unknown");
+    const focusReportModeRef = useRef(false);
     const lastWheelDecisionRef = useRef<string | null>(null);
     const lastDragFitAtRef = useRef(0);
     const isActiveRef = useRef(props.isActive);
@@ -506,6 +726,8 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       }
       inputTraceRef.current?.dispose();
       inputTraceRef.current = null;
+      domInputFallbackRef.current?.dispose();
+      domInputFallbackRef.current = null;
       imeGuardRef.current?.dispose();
       imeGuardRef.current = null;
 
@@ -518,6 +740,12 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         terminalInstanceRef.current.textarea.removeEventListener('paste', pasteHandlerRef.current, true);
         pasteHandlerRef.current = null;
       }
+      nativeMenuCleanupRef.current?.();
+      nativeMenuCleanupRef.current = null;
+      textareaEditGuardCleanupRef.current?.();
+      textareaEditGuardCleanupRef.current = null;
+      inputDebugCleanupRef.current?.();
+      inputDebugCleanupRef.current = null;
 
       // Dispose addons before the terminal instance.
       const rendererToDispose = rendererControllerRef.current;
@@ -529,6 +757,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       writeFlowControlRef.current?.reset();
       writeFlowControlRef.current = null;
       trackedBufferTypeRef.current = "unknown";
+      focusReportModeRef.current = false;
       lastWheelDecisionRef.current = null;
 
       rendererToDispose?.dispose();
@@ -574,6 +803,14 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       });
       await terminalService.registerOutput(sessionId, (data) => {
         const term = terminalInstanceRef.current;
+        const focusReportMode = detectFocusReportMode(data, focusReportModeRef.current);
+        if (focusReportMode !== focusReportModeRef.current) {
+          debugLog("output.focus-report-mode.changed", {
+            bindSessionId: sessionId,
+            enabled: focusReportMode,
+          });
+          focusReportModeRef.current = focusReportMode;
+        }
         const transitions = detectAlternateBufferTransitions(data);
         const renderedData = renderTerminalData(data);
         if (transitions.length > 0) {
@@ -740,6 +977,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
         term.open(terminalRef.current);
         applyTerminalElementTheme(term, terminalTheme);
+        focusReportModeRef.current = false;
         writeFlowControlRef.current = createTerminalWriteFlowControl(term, {
           enabled: IS_WINDOWS,
         });
@@ -789,7 +1027,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
             params,
             response,
           });
-          void terminalService.write(sessionId, response).catch((error) => {
+          void terminalService.write(sessionId, response, { source: "system" }).catch((error) => {
             console.warn("[TerminalView] Failed to send CPR response:", error);
           });
           return true;
@@ -896,6 +1134,16 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
         };
 
         const pasteTerminalPayload = (clipboardData?: DataTransfer | null) => {
+          if (!clipboardData) {
+            const now = Date.now();
+            if (now - lastShortcutPasteAtRef.current < 300) {
+              debugLog("clipboard.paste.dedupe", {
+                elapsedMs: now - lastShortcutPasteAtRef.current,
+              });
+              return;
+            }
+            lastShortcutPasteAtRef.current = now;
+          }
           void resolveTerminalPastePayload(clipboardData)
             .then((payload) => {
               if (payload.kind === "image" || payload.kind === "text" || payload.kind === "file") {
@@ -923,14 +1171,80 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
         // Track terminal focus so global shortcuts can defer to xterm.
         const textarea = term.textarea;
+        const cleanupNativeMenuBlockers: Array<() => void> = [];
+        const isNativeMenuTrigger = (event: Event) => {
+          if (!IS_MAC) return false;
+          if (event.type === "contextmenu" || event.type === "auxclick") return true;
+          if ("button" in event && typeof event.button === "number") {
+            const ctrlKey = "ctrlKey" in event && event.ctrlKey === true;
+            return event.button === 2 || (IS_MAC && ctrlKey && event.button === 0);
+          }
+          return false;
+        };
+        const blockNativeTerminalMenu = (event: Event) => {
+          if (!isNativeMenuTrigger(event)) return;
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          term.focus();
+          debugLog("native-menu.blocked", {
+            eventType: event.type,
+            target: event.target instanceof HTMLElement ? event.target.tagName : null,
+          });
+        };
+        const addNativeMenuBlocker = (target: EventTarget | null | undefined) => {
+          if (!target) return;
+          for (const eventName of ["pointerdown", "mousedown", "mouseup", "auxclick", "contextmenu"]) {
+            target.addEventListener(eventName, blockNativeTerminalMenu, true);
+          }
+          cleanupNativeMenuBlockers.push(() => {
+            for (const eventName of ["pointerdown", "mousedown", "mouseup", "auxclick", "contextmenu"]) {
+              target.removeEventListener(eventName, blockNativeTerminalMenu, true);
+            }
+          });
+        };
+        if (IS_MAC) {
+          addNativeMenuBlocker(terminalRef.current);
+          addNativeMenuBlocker(term.element);
+        }
+
         if (textarea) {
+          textarea.spellcheck = false;
+          textarea.autocomplete = "off";
+          textarea.autocapitalize = "off";
+          textarea.setAttribute("autocorrect", "off");
+          textarea.setAttribute("data-cc-panes-terminal-input", "true");
+          textareaEditGuardCleanupRef.current = attachMacTerminalTextareaEditGuard(textarea, debugLog);
+          const keydownPasteHandler = (event: KeyboardEvent) => {
+            if (event.target !== textarea) return;
+            if (!isTerminalPasteShortcut(event, IS_MAC)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.stopImmediatePropagation();
+            debugLog("clipboard.paste-shortcut.captured", {
+              key: event.key,
+              ctrlKey: event.ctrlKey,
+              metaKey: event.metaKey,
+              altKey: event.altKey,
+              shiftKey: event.shiftKey,
+            });
+            pasteTerminalPayload(null);
+          };
+          const appMenuPasteHandler = (event: Event) => {
+            debugLog("clipboard.paste-menu.captured", {
+              source: event instanceof CustomEvent ? event.detail?.source ?? "unknown" : "unknown",
+            });
+            pasteTerminalPayload(null);
+          };
           const setFocused = useShortcutsStore.getState().setTerminalFocused;
           textarea.addEventListener('focus', () => {
             setFocused(true);
+            setMacosTerminalNativeFocus(true);
             debugLog("textarea.focus", {});
           });
           textarea.addEventListener('blur', () => {
             setFocused(false);
+            setMacosTerminalNativeFocus(false);
             debugLog("textarea.blur", {});
           });
 
@@ -941,14 +1255,50 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
             pasteTerminalPayload(e.clipboardData);
           };
 
+          textarea.ownerDocument.addEventListener("keydown", keydownPasteHandler, true);
+          cleanupNativeMenuBlockers.push(() => {
+            textarea.ownerDocument.removeEventListener("keydown", keydownPasteHandler, true);
+          });
+          textarea.addEventListener(TERMINAL_APP_MENU_PASTE_EVENT, appMenuPasteHandler);
+          cleanupNativeMenuBlockers.push(() => {
+            textarea.removeEventListener(TERMINAL_APP_MENU_PASTE_EVENT, appMenuPasteHandler);
+          });
           textarea.addEventListener('paste', pasteHandler, true);
           pasteHandlerRef.current = pasteHandler;
+          if (IS_MAC) {
+            addNativeMenuBlocker(textarea);
+          }
+          inputDebugCleanupRef.current = attachTerminalInputDebugLog(
+            textarea,
+            debugLog,
+            () => ++inputTraceSeqRef.current,
+          );
           inputTraceRef.current = attachTerminalInputTrace({
             textarea,
             isDev: TERMINAL_DEBUG,
             isMac: IS_MAC,
             logger: debugLog,
           });
+          if (IS_MAC) {
+            domInputFallbackRef.current = attachTerminalDomInputFallback({
+              textarea,
+              logger: debugLog,
+              nextTraceId: () => ++inputTraceSeqRef.current,
+              onFallbackData: (data, traceId) => {
+                const sessionId = currentSessionIdRef.current;
+                debugLog("input.dom-fallback.write", {
+                  traceId,
+                  data: summarizeTerminalInputData(data),
+                  disconnected: isDisconnectedRef.current,
+                  hasSession: Boolean(sessionId),
+                });
+                if (isDisconnectedRef.current) return;
+                if (sessionId) {
+                  void terminalService.write(sessionId, data, { traceId });
+                }
+              },
+            });
+          }
           imeGuardRef.current = attachTerminalImeGuard({
             textarea,
             terminal: term,
@@ -956,6 +1306,11 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
             logger: debugLog,
           });
         }
+        nativeMenuCleanupRef.current = () => {
+          while (cleanupNativeMenuBlockers.length > 0) {
+            cleanupNativeMenuBlockers.pop()?.();
+          }
+        };
 
         if (isTauriRuntime()) {
           try {
@@ -1039,7 +1394,24 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
 
         // Forward terminal input, with Enter-to-reconnect handling for SSH disconnects.
         const onDataDisposable = term.onData((data) => {
+          const traceId = ++inputTraceSeqRef.current;
+          debugLog("input.xterm.onData", {
+            traceId,
+            data: summarizeTerminalInputData(data),
+            disconnected: isDisconnectedRef.current,
+            hasSession: Boolean(currentSessionIdRef.current),
+            focusReportMode: focusReportModeRef.current,
+          });
+          domInputFallbackRef.current?.recordXtermData(data);
           inputTraceRef.current?.onData(data);
+          if (isXtermFocusReportInput(data) && !focusReportModeRef.current) {
+            debugLog("input.xterm.drop.focus-report", {
+              traceId,
+              data: summarizeTerminalInputData(data),
+              reason: "focus-report-mode-disabled",
+            });
+            return;
+          }
           // Only Enter should trigger reconnect while disconnected.
           if (isDisconnectedRef.current) {
             if (!isReconnectingRef.current && (data === "\r" || data === "\n")) {
@@ -1049,7 +1421,12 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           }
           const sessionId = currentSessionIdRef.current;
           if (sessionId) {
-            terminalService.write(sessionId, data);
+            void terminalService.write(sessionId, data, { traceId });
+          } else {
+            debugLog("input.xterm.drop.no-session", {
+              traceId,
+              data: summarizeTerminalInputData(data),
+            });
           }
         });
         onDataDisposableRef.current = onDataDisposable;
@@ -1108,7 +1485,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           const lines = Math.max(1, Math.round(Math.abs(e.deltaY) / 40));
           const arrow = e.deltaY < 0 ? '\x1b[A' : '\x1b[B';
           if (currentSessionIdRef.current) {
-            terminalService.write(currentSessionIdRef.current, arrow.repeat(lines));
+            terminalService.write(currentSessionIdRef.current, arrow.repeat(lines), { source: "system" });
           }
         };
         term.element?.addEventListener('wheel', wheelHandler, { passive: false });
@@ -1594,7 +1971,16 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           paddingTop: 'var(--notch-bar-height, 0px)',
         } as CSSProperties}
       >
-        <div ref={terminalRef} className="cc-terminal-host flex-1 overflow-hidden [&_.xterm]:h-full" />
+        <div
+          ref={terminalRef}
+          className="cc-terminal-host flex-1 overflow-hidden [&_.xterm]:h-full"
+          onContextMenu={(event) => {
+            if (!IS_MAC) return;
+            event.preventDefault();
+            event.stopPropagation();
+            terminalInstanceRef.current?.focus();
+          }}
+        />
       </div>
     );
   }

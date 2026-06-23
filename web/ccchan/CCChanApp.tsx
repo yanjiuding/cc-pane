@@ -114,6 +114,13 @@ function debugCCChan(event: string, payload: Record<string, unknown> = {}): void
   devDebugLog("ccchan-debug", event, payload);
 }
 
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest("input, textarea, [contenteditable='true'], [contenteditable='']"));
+}
+
 export function CCChanApp() {
   const settings = useCCChanStore((state) => state.settings);
   const pets = useCCChanStore((state) => state.pets);
@@ -400,6 +407,22 @@ export function CCChanApp() {
       .catch(() => {});
     return cleanupTerminalStatus;
   }, [cleanupTerminalStatus, initTerminalStatus, loadCCChan]);
+
+  useEffect(() => {
+    if (!IS_MAC) return;
+
+    const preventNativeCallout = (event: Event) => {
+      if (isEditableTarget(event.target)) return;
+      event.preventDefault();
+    };
+
+    window.addEventListener("contextmenu", preventNativeCallout, true);
+    window.addEventListener("selectstart", preventNativeCallout, true);
+    return () => {
+      window.removeEventListener("contextmenu", preventNativeCallout, true);
+      window.removeEventListener("selectstart", preventNativeCallout, true);
+    };
+  }, []);
 
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
@@ -796,7 +819,7 @@ export function CCChanApp() {
 
   return (
     <div
-      className="relative select-none"
+      className="ccchan-window relative select-none"
       style={{
         width: expanded ? CHAT_EXPANDED_W : menuPosition ? MENU_W : bubbleVisible ? BUBBLE_W : PET_SIZE,
         height: expanded ? CHAT_EXPANDED_H : menuPosition ? MENU_H : bubbleVisible ? BUBBLE_H : PET_SIZE,
