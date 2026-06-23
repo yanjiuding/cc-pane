@@ -125,7 +125,12 @@ export function attachTerminalImeGuard(options: TerminalImeGuardOptions): Termin
     });
   };
 
-  if (!options.enabled) return noopController(clearNativeEditState);
+  // When the guard is disabled (non Linux-WebKit, e.g. Windows WebView2 / macOS),
+  // clearNativeEditState must be a true no-op. Clearing the hidden textarea value +
+  // document selection during paste/copy corrupts the WebView2 IME session (paste
+  // kills the IME and the next keystroke gets swallowed). The destructive clearing
+  // is only needed for the Linux WebKit IME workaround (the enabled branch below).
+  if (!options.enabled) return noopController(() => {});
 
   const cleanups: Array<() => void> = [];
   let sawCompositionStart = false;
