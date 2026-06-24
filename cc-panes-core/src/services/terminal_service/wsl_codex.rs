@@ -1040,7 +1040,26 @@ impl TerminalService {
         if yolo_mode {
             push_codex_yolo_mode_arg(&mut codex_args);
         }
-        append_codex_resume_args(&mut codex_args, resume_id, initial_prompt);
+        // resume 前预检：codex 会话库里若已无该 id 的 rollout 文件（被存错/从未落盘/v4 抓错），
+        // 拿它去 `codex resume <id>` 会被 codex 拒绝并秒退 → pane 半残。此时回退为开新会话。
+        // fail-open：仅在"确定不存在"时丢弃 resume；检查本身失败则保留，避免误伤。
+        let effective_resume_id = match resume_id {
+            Some(id)
+                if super::osc_resume_capture::codex_rollout_exists(
+                    id,
+                    Some(wsl.distro.as_str()),
+                ) == Some(false) =>
+            {
+                warn!(
+                    distro = %wsl.distro,
+                    resume_id = %id,
+                    "codex resume target missing in ~/.codex/sessions; launching fresh session"
+                );
+                None
+            }
+            other => other,
+        };
+        append_codex_resume_args(&mut codex_args, effective_resume_id, initial_prompt);
 
         let escaped_codex_args = codex_args
             .iter()

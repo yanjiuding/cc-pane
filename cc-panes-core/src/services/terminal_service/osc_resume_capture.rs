@@ -381,6 +381,32 @@ fn resolve_full_id_wsl(prefix: &str, distro: Option<&str>) -> Result<Option<Stri
     Ok(extract_full_id_from_filename(name, prefix))
 }
 
+/// resume 前预检：codex 会话库 `~/.codex/sessions` 里是否存在该完整 thread/session id 的 rollout 文件。
+///
+/// 用于启动 `codex resume <id>` 之前判断目标是否真实存在——不存在则回退为开新会话，
+/// 避免拿"查无此文件"的 id 去 resume 导致 codex 报 `No saved session found` 秒退、pane 半残。
+///
+/// 返回：`Some(true)` 确定存在；`Some(false)` 确定不存在（包括 id 形状非法，或库里查无此文件——
+/// 如被抓错的 v4 id `17b39c9d…` 不会有对应 rollout）；`None` 无法判定（检查本身失败，调用方
+/// 应 fail-open，保留 resume 不误伤）。
+///
+/// `distro = Some(..)` 走 WSL 内 find；`distro = None` 扫本地 `~/.codex/sessions`。
+pub(crate) fn codex_rollout_exists(full_id: &str, distro: Option<&str>) -> Option<bool> {
+    // 必须是完整 UUID 形状（精确匹配，避免短前缀撞车，如 019ef31c 同时间戳前缀不同后缀）
+    if full_id.len() != FULL_UUID_LEN || !is_uuid_shaped(full_id) {
+        return Some(false);
+    }
+    let resolved = match distro {
+        Some(distro) => resolve_full_id_wsl(full_id, Some(distro)),
+        None => resolve_full_id_local(full_id),
+    };
+    match resolved {
+        Ok(Some(_)) => Some(true),
+        Ok(None) => Some(false),
+        Err(_) => None,
+    }
+}
+
 /// 从 rollout 文件名（rollout-<ts>-<uuid>.jsonl）提取以 prefix 开头的完整 UUID
 fn extract_full_id_from_filename(name: &str, prefix: &str) -> Option<String> {
     let pos = name.find(prefix)?;
@@ -449,6 +475,21 @@ mod tests {
         assert_eq!(
             extract_full_id_from_filename(name, "019eb24f-aaaa").as_deref(),
             None
+        );
+    }
+
+    #[test]
+    fn codex_rollout_exists_rejects_malformed_id_shapes() {
+        // 长度/形状非法的 id 直接判定不存在，不触发任何文件/WSL 查询（确定性）。
+        assert_eq!(codex_rollout_exists("abc", Some("Ubuntu")), Some(false));
+        assert_eq!(
+            codex_rollout_exists("not-a-uuid-at-all-xxxxxxxxxxxxxxxxxxxx", None),
+            Some(false)
+        );
+        // 完整长度但破折号位置不对 → 形状非法。
+        assert_eq!(
+            codex_rollout_exists("019eb24ff78f7c63babab70f8aabbccd0000ab", Some("Ubuntu")),
+            Some(false)
         );
     }
 }
