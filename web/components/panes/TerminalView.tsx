@@ -45,6 +45,7 @@ import { attachTerminalImeGuard, isLinuxWebKitImeEnvironment } from "./terminalI
 import { isTerminalPasteShortcut } from "./terminalKeyboard";
 import { detectFocusReportMode, isXtermFocusReportInput } from "./terminalFocusReport";
 import { createTerminalWriteFlowControl } from "./terminalWriteFlowControl";
+import { getCliInstallHint } from "./terminalCliInstallHint";
 import {
   createTerminalLayoutScheduler,
   type TerminalLayoutScheduler,
@@ -198,109 +199,6 @@ function setMacosTerminalNativeFocus(focused: boolean): void {
   void invoke("set_macos_terminal_focused", { focused }).catch(() => {});
 }
 
-function attachMacTerminalTextareaEditGuard(
-  textarea: HTMLTextAreaElement,
-  logger: (event: string, payload?: Record<string, unknown>) => void,
-): () => void {
-  if (!IS_MAC) return () => {};
-
-  let composing = false;
-  let lockTimer: ReturnType<typeof setTimeout> | null = null;
-  const cleanups: Array<() => void> = [];
-
-  const clearLockTimer = () => {
-    if (lockTimer) {
-      clearTimeout(lockTimer);
-      lockTimer = null;
-    }
-  };
-
-  const lock = (reason: string) => {
-    clearLockTimer();
-    if (composing) return;
-    textarea.readOnly = true;
-    logger("textarea.edit-guard.lock", { reason });
-  };
-
-  const scheduleLock = (reason: string) => {
-    clearLockTimer();
-    lockTimer = setTimeout(() => {
-      lockTimer = null;
-      lock(reason);
-    }, 0);
-  };
-
-  const unlock = (reason: string) => {
-    clearLockTimer();
-    textarea.readOnly = false;
-    logger("textarea.edit-guard.unlock", { reason });
-  };
-
-  const add = <K extends keyof HTMLElementEventMap>(
-    target: HTMLElement,
-    type: K,
-    handler: (event: HTMLElementEventMap[K]) => void,
-  ) => {
-    target.addEventListener(type, handler as EventListener, true);
-    cleanups.push(() => target.removeEventListener(type, handler as EventListener, true));
-  };
-
-  const addDocument = <K extends keyof DocumentEventMap>(
-    type: K,
-    handler: (event: DocumentEventMap[K]) => void,
-  ) => {
-    textarea.ownerDocument.addEventListener(type, handler as EventListener, true);
-    cleanups.push(() => textarea.ownerDocument.removeEventListener(type, handler as EventListener, true));
-  };
-
-  add(textarea, "focus", () => lock("focus"));
-  add(textarea, "blur", () => lock("blur"));
-  add(textarea, "keydown", (event) => {
-    if (isTerminalPasteShortcut(event as KeyboardEvent, true)) {
-      lock("keydown.paste-shortcut");
-      return;
-    }
-    unlock("keydown");
-    scheduleLock("keydown");
-  });
-  add(textarea, "keypress", () => {
-    unlock("keypress");
-    scheduleLock("keypress");
-  });
-  add(textarea, "beforeinput", (event) => {
-    if ((event as InputEvent).inputType === "insertFromPaste") {
-      lock("beforeinput.paste");
-      return;
-    }
-    unlock("beforeinput");
-    scheduleLock("beforeinput");
-  });
-  add(textarea, "input", () => scheduleLock("input"));
-  add(textarea, "compositionstart", () => {
-    composing = true;
-    unlock("compositionstart");
-  });
-  add(textarea, "compositionend", () => {
-    composing = false;
-    scheduleLock("compositionend");
-  });
-  addDocument("selectionchange", () => {
-    if (textarea.ownerDocument.activeElement === textarea && !composing) {
-      lock("selectionchange");
-    }
-  });
-
-  lock("init");
-
-  return () => {
-    clearLockTimer();
-    while (cleanups.length > 0) {
-      cleanups.pop()?.();
-    }
-    textarea.readOnly = false;
-  };
-}
-
 function normalizeTerminalFontSize(value?: number | null): number {
   if (!Number.isFinite(value)) return DEFAULT_TERMINAL_FONT_SIZE;
   const rounded = Math.round(value as number);
@@ -437,7 +335,6 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
     const wheelHandlerRef = useRef<((e: WheelEvent) => void) | null>(null);
     const pasteHandlerRef = useRef<((e: ClipboardEvent) => void) | null>(null);
     const nativeMenuCleanupRef = useRef<(() => void) | null>(null);
-    const textareaEditGuardCleanupRef = useRef<(() => void) | null>(null);
     const inputDebugCleanupRef = useRef<(() => void) | null>(null);
     const inputTraceSeqRef = useRef(0);
     const lastShortcutPasteAtRef = useRef(0);
@@ -773,8 +670,6 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       }
       nativeMenuCleanupRef.current?.();
       nativeMenuCleanupRef.current = null;
-      textareaEditGuardCleanupRef.current?.();
-      textareaEditGuardCleanupRef.current = null;
       inputDebugCleanupRef.current?.();
       inputDebugCleanupRef.current = null;
 
@@ -1245,7 +1140,6 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           textarea.autocapitalize = "off";
           textarea.setAttribute("autocorrect", "off");
           textarea.setAttribute("data-cc-panes-terminal-input", "true");
-          textareaEditGuardCleanupRef.current = attachMacTerminalTextareaEditGuard(textarea, debugLog);
           const keydownPasteHandler = (event: KeyboardEvent) => {
             if (event.target !== textarea) return;
             if (!isTerminalPasteShortcut(event, IS_MAC)) return;
@@ -1730,6 +1624,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
             const cliNotFoundMatch = errorMsg.match(/(\w+) CLI not found/);
             if (cliNotFoundMatch) {
               const toolName = cliNotFoundMatch[1];
+              const installHint = getCliInstallHint(toolName);
               console.error(`[TerminalView] ${toolName} CLI not found in PATH`);
               term.writeln(
                 `\x1b[31m${toolName} CLI is not installed or not in PATH.\x1b[0m`
@@ -1737,6 +1632,9 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
               term.writeln(
                 `\x1b[33mPlease install the ${toolName} CLI and make sure it's available in your PATH.\x1b[0m`
               );
+              if (installHint) {
+                term.writeln(`\x1b[33m${installHint}\x1b[0m`);
+              }
             } else {
               term.writeln(
                 `\x1b[31mFailed to initialize terminal session: ${errorMsg}\x1b[0m`
