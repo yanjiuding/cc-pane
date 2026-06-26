@@ -1688,6 +1688,12 @@ impl TerminalService {
                     project_path: project_path.to_string(),
                     workspace_path: workspace_path.map(|s| s.to_string()),
                     provider: provider.clone(),
+                    executable_override: self
+                        .settings_service
+                        .get_settings()
+                        .cli_launchers
+                        .command_for(cli_tool_id)
+                        .map(str::to_string),
                     resume_id: resume_id.map(|s| s.to_string()),
                     issued_session_id: issued_session_id.clone(),
                     skip_mcp: effective_skip_mcp,
@@ -2533,7 +2539,8 @@ impl TerminalService {
             .map_err(AppError::from)?;
         let delay_ms = std::cmp::min(200 + (text_len as u64 / 512) * 30, 5000);
         std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-        self.write_unlocked(session_id, "\r").map_err(AppError::from)?;
+        self.write_unlocked(session_id, "\r")
+            .map_err(AppError::from)?;
         Ok(())
     }
 

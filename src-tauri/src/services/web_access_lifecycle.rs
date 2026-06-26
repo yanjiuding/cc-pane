@@ -256,13 +256,9 @@ fn resolve_web_dist_dir(resource_dir: Option<&Path>) -> Option<PathBuf> {
         }
     }
 
-    for candidate in workspace_web_dist_candidates() {
-        if candidate.join("index.html").exists() {
-            return Some(candidate);
-        }
-    }
-
-    None
+    workspace_web_dist_candidates()
+        .into_iter()
+        .find(|candidate| candidate.join("index.html").exists())
 }
 
 fn workspace_web_dist_candidates() -> Vec<PathBuf> {

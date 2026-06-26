@@ -688,9 +688,6 @@ impl CliToolAdapter for CodexAdapter {
     }
 
     fn build_command(&self, ctx: &CliAdapterContext) -> Result<CliCommandResult> {
-        let path = resolve_executable("codex")?;
-        let codex_cmd = path.to_string_lossy().into_owned();
-
         let mut args = Vec::new();
         let env_inject = HashMap::new();
 
@@ -735,16 +732,18 @@ impl CliToolAdapter for CodexAdapter {
             args.push(prompt.clone());
         }
 
+        let (command, args) = ctx.resolve_launch("codex", args)?;
+
         info!(
             session_id = %ctx.session_id,
-            command = %codex_cmd,
+            command = %command,
             resume_id = ?ctx.resume_id,
             args = ?crate::redact_args_for_log(&args),
             "codex: build_command result"
         );
 
         Ok(CliCommandResult {
-            command: codex_cmd,
+            command,
             args,
             env_remove: vec![],
             env_inject,
@@ -802,6 +801,29 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    fn test_context(executable_override: Option<&str>) -> CliAdapterContext {
+        CliAdapterContext {
+            session_id: "test-session".to_string(),
+            project_path: "/tmp/project".to_string(),
+            workspace_path: None,
+            provider: None,
+            executable_override: executable_override.map(str::to_string),
+            resume_id: Some("thread-123".to_string()),
+            issued_session_id: None,
+            skip_mcp: true,
+            yolo_mode: false,
+            append_system_prompt: None,
+            initial_prompt: Some("hello".to_string()),
+            orchestrator_port: None,
+            orchestrator_token: None,
+            launch_id: None,
+            data_dir: std::env::temp_dir(),
+            shared_mcp_urls: HashMap::new(),
+            allowed_mcp_server_ids: Vec::new(),
+            disable_unlisted_mcp_servers: false,
+        }
+    }
+
     #[cfg(not(windows))]
     #[test]
     fn sync_project_hooks_writes_codex_config_and_reports_degraded_status() {
@@ -839,6 +861,21 @@ mod tests {
         assert!(session.supported);
         assert!(!plan.supported);
         assert_eq!(plan.reason.as_deref(), Some(PLAN_ARCHIVE_UNSUPPORTED));
+    }
+
+    #[test]
+    fn build_command_uses_executable_override() {
+        let adapter = CodexAdapter::new();
+        let ctx = test_context(Some("/opt/codex-next/bin/codex"));
+
+        let result = adapter.build_command(&ctx).unwrap();
+
+        assert_eq!(result.command, "/opt/codex-next/bin/codex");
+        assert!(result
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "resume" && pair[1] == "thread-123"));
+        assert_eq!(result.args.last().map(String::as_str), Some("hello"));
     }
 
     #[test]

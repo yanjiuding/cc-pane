@@ -1,8 +1,7 @@
 //! Cursor CLI 适配器
 
 use crate::{
-    resolve_executable, CliAdapterContext, CliCommandResult, CliToolAdapter, CliToolCapabilities,
-    CliToolInfo,
+    CliAdapterContext, CliCommandResult, CliToolAdapter, CliToolCapabilities, CliToolInfo,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -55,9 +54,6 @@ impl CliToolAdapter for CursorAdapter {
     }
 
     fn build_command(&self, ctx: &CliAdapterContext) -> Result<CliCommandResult> {
-        let path = resolve_executable("cursor-agent")?;
-        let cursor_cmd = path.to_string_lossy().into_owned();
-
         let mut args = Vec::new();
         if let Some(resume_id) = ctx.resume_id.as_ref() {
             args.push("--resume".to_string());
@@ -76,15 +72,17 @@ impl CliToolAdapter for CursorAdapter {
             }
         }
 
+        let (command, args) = ctx.resolve_launch("cursor-agent", args)?;
+
         info!(
             session_id = %ctx.session_id,
-            command = %cursor_cmd,
+            command = %command,
             args = ?args,
             "cursor: building command"
         );
 
         Ok(CliCommandResult {
-            command: cursor_cmd,
+            command,
             args,
             env_remove: vec![],
             env_inject,

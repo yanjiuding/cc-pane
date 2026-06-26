@@ -70,6 +70,16 @@ export const settingsService = {
     return invokeOrApi<boolean>("test_proxy", undefined, async () => false);
   },
 
+  async testCliLauncher(command: string, versionArgs?: string[]): Promise<string> {
+    return invokeOrApi<string>(
+      "test_cli_launcher",
+      { command, versionArgs },
+      async () => {
+        throw new Error("CLI launcher testing is only available in the desktop app");
+      },
+    );
+  },
+
   async getDataDirInfo(): Promise<DataDirInfo> {
     return invokeOrApi<DataDirInfo>("get_data_dir_info", undefined, async () => ({
       currentPath: "",

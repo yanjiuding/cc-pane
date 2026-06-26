@@ -59,6 +59,20 @@ describe("settingsService", () => {
     });
   });
 
+  describe("testCliLauncher", () => {
+    it("应该调用 test_cli_launcher 命令并返回输出", async () => {
+      mockTauriInvoke({ test_cli_launcher: "2.1.191 (Claude Code)" });
+
+      const result = await settingsService.testCliLauncher("reclaude", ["--version"]);
+
+      expect(invoke).toHaveBeenCalledWith("test_cli_launcher", {
+        command: "reclaude",
+        versionArgs: ["--version"],
+      });
+      expect(result).toBe("2.1.191 (Claude Code)");
+    });
+  });
+
   describe("getDataDirInfo", () => {
     it("应该调用 get_data_dir_info 命令并返回目录信息", async () => {
       const info: DataDirInfo = {

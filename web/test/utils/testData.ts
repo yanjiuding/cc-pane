@@ -145,6 +145,9 @@ export function createTestSettings(overrides?: Partial<AppSettings>): AppSetting
       enableItn: false,
       maxRecordSeconds: 60,
     },
+    cliLaunchers: {
+      overrides: {},
+    },
     layoutSwitcher: {
       windowX: null,
       windowY: null,

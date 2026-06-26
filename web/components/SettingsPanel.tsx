@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
-import { Settings, Globe, Terminal, Keyboard, Info, Cloud, Bell, Camera, Share2, Mic, Bot, Wifi } from "lucide-react";
+import { Settings, Globe, Terminal, Keyboard, Info, Cloud, Bell, Camera, Share2, Mic, Bot, Wifi, Cable } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +16,7 @@ import NotificationSection from "./settings/NotificationSection";
 import ProviderSection from "./settings/ProviderSection";
 import ProxySection from "./settings/ProxySection";
 import TerminalSection from "./settings/TerminalSection";
+import CliLaunchersSection from "./settings/CliLaunchersSection";
 import ShortcutsSection from "./settings/ShortcutsSection";
 import AboutSection from "./settings/AboutSection";
 import ScreenshotSection from "./settings/ScreenshotSection";
@@ -59,6 +60,7 @@ export default function SettingsPanel({ open, onOpenChange }: SettingsPanelProps
     { id: "notification", label: t("notification"), icon: Bell },
     { id: "web-access", label: "Web", icon: Wifi },
     { id: "provider", label: t("provider"), icon: Cloud },
+    { id: "cli-launchers", label: t("cliLaunchers"), icon: Cable },
     { id: "proxy", label: t("proxy"), icon: Globe },
     { id: "terminal", label: t("terminal"), icon: Terminal },
     { id: "voice", label: t("voice"), icon: Mic },
@@ -143,6 +145,9 @@ export default function SettingsPanel({ open, onOpenChange }: SettingsPanelProps
               <WebAccessSection value={draft.webAccess} onChange={(v) => setDraft({ ...draft, webAccess: v })} />
             )}
             {activeSection === "provider" && <ProviderSection />}
+            {activeSection === "cli-launchers" && (
+              <CliLaunchersSection value={draft.cliLaunchers} onChange={(v) => setDraft({ ...draft, cliLaunchers: v })} />
+            )}
             {activeSection === "proxy" && (
               <ProxySection value={draft.proxy} onChange={(v) => setDraft({ ...draft, proxy: v })} />
             )}

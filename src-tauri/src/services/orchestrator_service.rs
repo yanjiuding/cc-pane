@@ -36,9 +36,11 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use cc_cli_adapters::normalize_cli_command;
 use cc_memory::models::{
     MemoryCategory, MemoryQuery, MemoryScope, StoreMemoryRequest, UpdateMemoryRequest,
 };
+use cc_panes_core::models::settings::CliLauncherOverride;
 use cc_panes_core::models::shared_mcp::{
     BridgeMode, SharedMcpConfig, SharedMcpServerConfig, SharedMcpServerStatus,
 };
@@ -1773,6 +1775,26 @@ struct McpSharedMcpServerNameParams {
     name: String,
 }
 
+// ============ CLI Launcher MCP 参数 ============
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct McpCliLauncherToolParams {
+    /// CLI 工具 ID，例如 claude、codex、gemini、kimi、glm、opencode、cursor。
+    #[serde(alias = "cli_tool_id", alias = "cliTool")]
+    cli_tool_id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct McpSetCliLauncherOverrideParams {
+    /// CLI 工具 ID，例如 claude、codex、gemini、kimi、glm、opencode、cursor。
+    #[serde(alias = "cli_tool_id", alias = "cliTool")]
+    cli_tool_id: String,
+    /// 要用于新本地会话的可执行程序路径或命令名，例如 reclaude 或 C:\...\reclaude.exe。
+    command: String,
+}
+
 // ============ Runtime Config MCP 参数 ============
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -1903,6 +1925,44 @@ fn required_trimmed(value: &str, field: &str) -> std::result::Result<String, Str
     } else {
         Ok(trimmed.to_string())
     }
+}
+
+fn normalize_cli_launcher_tool_id(
+    cli_tool_id: &str,
+    supported_ids: &[String],
+) -> std::result::Result<String, String> {
+    let cli_tool_id = cli_tool_id.trim().to_ascii_lowercase();
+    if cli_tool_id.is_empty() {
+        return Err("cliToolId cannot be empty".to_string());
+    }
+    if cli_tool_id == CliTool::None.as_id() {
+        return Err("cliToolId 'none' does not have a launcher command".to_string());
+    }
+    if !supported_ids.iter().any(|id| id == &cli_tool_id) {
+        return Err(format!(
+            "Unknown cliToolId '{}'; supported values: {}",
+            cli_tool_id,
+            supported_ids.join(", ")
+        ));
+    }
+    Ok(cli_tool_id)
+}
+
+fn normalize_cli_launcher_override_command(
+    command: &str,
+) -> std::result::Result<Option<String>, String> {
+    let command = normalize_cli_command(command).trim();
+    if command.is_empty() {
+        return Ok(None);
+    }
+    if command.contains('\n') || command.contains('\r') {
+        return Err("CLI launcher command cannot contain newlines".to_string());
+    }
+    if command.chars().count() > 1024 {
+        return Err("CLI launcher command is too long (max 1024 chars)".to_string());
+    }
+    validate_command(command).map_err(|error| error.to_string())?;
+    Ok(Some(command.to_string()))
 }
 
 fn clean_string_list(values: Option<&[String]>) -> Vec<String> {
@@ -2553,6 +2613,89 @@ impl McpToolHandler {
             &self.state.shared_mcp_service.get_running_servers_urls(),
         )
     }
+
+    fn supported_cli_launcher_ids(&self) -> Vec<String> {
+        self.state
+            .terminal_service
+            .cli_registry()
+            .list_tools()
+            .into_iter()
+            .map(|info| info.id.clone())
+            .collect()
+    }
+
+    fn list_cli_launcher_overrides_impl(&self) -> serde_json::Value {
+        let supported_tools = self
+            .state
+            .terminal_service
+            .cli_registry()
+            .list_tools()
+            .into_iter()
+            .map(|info| {
+                serde_json::json!({
+                    "id": info.id,
+                    "displayName": info.display_name,
+                    "defaultCommand": info.executable,
+                    "versionArgs": info.version_args,
+                })
+            })
+            .collect::<Vec<_>>();
+        let settings = self.state.settings_service.get_settings();
+        serde_json::json!({
+            "supportedTools": supported_tools,
+            "overrides": settings.cli_launchers.overrides,
+            "effectiveOn": "new local sessions"
+        })
+    }
+
+    fn set_cli_launcher_override_impl(
+        &self,
+        params: McpSetCliLauncherOverrideParams,
+    ) -> std::result::Result<serde_json::Value, String> {
+        let supported_ids = self.supported_cli_launcher_ids();
+        let cli_tool_id = normalize_cli_launcher_tool_id(&params.cli_tool_id, &supported_ids)?;
+        let command = normalize_cli_launcher_override_command(&params.command)?;
+        let mut settings = self.state.settings_service.get_settings();
+        let cleared = match command {
+            Some(command) => {
+                settings
+                    .cli_launchers
+                    .overrides
+                    .insert(cli_tool_id.clone(), CliLauncherOverride { command });
+                false
+            }
+            None => {
+                settings.cli_launchers.overrides.remove(&cli_tool_id);
+                true
+            }
+        };
+        settings.merge_missing_defaults();
+        let saved_command = settings
+            .cli_launchers
+            .command_for(&cli_tool_id)
+            .map(str::to_string);
+        self.state
+            .settings_service
+            .update_settings(settings)
+            .map_err(|error| error.to_string())?;
+
+        Ok(serde_json::json!({
+            "cliToolId": cli_tool_id,
+            "command": saved_command,
+            "cleared": cleared,
+            "effectiveOn": "new local sessions"
+        }))
+    }
+
+    fn clear_cli_launcher_override_impl(
+        &self,
+        params: McpCliLauncherToolParams,
+    ) -> std::result::Result<serde_json::Value, String> {
+        self.set_cli_launcher_override_impl(McpSetCliLauncherOverrideParams {
+            cli_tool_id: params.cli_tool_id,
+            command: String::new(),
+        })
+    }
 }
 
 #[tool_router]
@@ -2867,6 +3010,42 @@ impl McpToolHandler {
     ) -> String {
         info!(name = %params.name, dry_run = params.dry_run.unwrap_or(false), "mcp::create_runtime_config");
         match self.create_runtime_config_impl(params) {
+            Ok(result) => serde_json::to_string_pretty(&result)
+                .unwrap_or_else(|error| format!("错误: 序列化失败: {}", error)),
+            Err(error) => format!("错误: {}", error),
+        }
+    }
+
+    /// 列出 AI 可管理的 CLI 启动命令覆盖配置。覆盖只影响新建的本地会话。
+    #[tool]
+    async fn list_cli_launcher_overrides(&self) -> String {
+        debug!("mcp::list_cli_launcher_overrides");
+        serde_json::to_string_pretty(&self.list_cli_launcher_overrides_impl())
+            .unwrap_or_else(|error| format!("错误: 序列化失败: {}", error))
+    }
+
+    /// 设置某个 CLI 工具的新本地会话启动命令覆盖。传空字符串会清除覆盖。
+    #[tool]
+    async fn set_cli_launcher_override(
+        &self,
+        Parameters(params): Parameters<McpSetCliLauncherOverrideParams>,
+    ) -> String {
+        info!(cli_tool_id = %params.cli_tool_id, "mcp::set_cli_launcher_override");
+        match self.set_cli_launcher_override_impl(params) {
+            Ok(result) => serde_json::to_string_pretty(&result)
+                .unwrap_or_else(|error| format!("错误: 序列化失败: {}", error)),
+            Err(error) => format!("错误: {}", error),
+        }
+    }
+
+    /// 清除某个 CLI 工具的新本地会话启动命令覆盖，恢复使用默认命令。
+    #[tool]
+    async fn clear_cli_launcher_override(
+        &self,
+        Parameters(params): Parameters<McpCliLauncherToolParams>,
+    ) -> String {
+        info!(cli_tool_id = %params.cli_tool_id, "mcp::clear_cli_launcher_override");
+        match self.clear_cli_launcher_override_impl(params) {
             Ok(result) => serde_json::to_string_pretty(&result)
                 .unwrap_or_else(|error| format!("错误: 序列化失败: {}", error)),
             Err(error) => format!("错误: {}", error),
@@ -7300,6 +7479,56 @@ mod tests {
         cleanup_stale_tasks(&mut tasks);
 
         assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn test_normalize_cli_launcher_tool_id_accepts_registered_tools() {
+        let supported = vec![
+            "claude".to_string(),
+            "codex".to_string(),
+            "gemini".to_string(),
+        ];
+
+        assert_eq!(
+            normalize_cli_launcher_tool_id(" Claude ", &supported).unwrap(),
+            "claude"
+        );
+        assert_eq!(
+            normalize_cli_launcher_tool_id("codex", &supported).unwrap(),
+            "codex"
+        );
+    }
+
+    #[test]
+    fn test_normalize_cli_launcher_tool_id_rejects_none_and_unknown() {
+        let supported = vec!["claude".to_string()];
+
+        assert!(normalize_cli_launcher_tool_id("none", &supported)
+            .unwrap_err()
+            .contains("does not have a launcher"));
+        assert!(normalize_cli_launcher_tool_id("reclaude", &supported)
+            .unwrap_err()
+            .contains("Unknown cliToolId"));
+    }
+
+    #[test]
+    fn test_normalize_cli_launcher_override_command_trims_quotes_and_clears_blank() {
+        assert_eq!(
+            normalize_cli_launcher_override_command(r#" "C:\Program Files\reclaude.exe" "#)
+                .unwrap()
+                .as_deref(),
+            Some(r"C:\Program Files\reclaude.exe")
+        );
+        assert_eq!(
+            normalize_cli_launcher_override_command("   ").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn test_normalize_cli_launcher_override_command_rejects_shell_operators() {
+        assert!(normalize_cli_launcher_override_command("claude; rm -rf /").is_err());
+        assert!(normalize_cli_launcher_override_command("claude\n--version").is_err());
     }
 
     #[derive(Clone, Default)]

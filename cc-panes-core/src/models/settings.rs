@@ -30,6 +30,8 @@ pub struct AppSettings {
     #[serde(default)]
     pub ccchan: CCChanSettings,
     #[serde(default)]
+    pub cli_launchers: CliLauncherSettings,
+    #[serde(default)]
     pub layout_switcher: LayoutSwitcherSettings,
     #[serde(default)]
     pub web_access: WebAccessSettings,
@@ -41,6 +43,7 @@ impl AppSettings {
         self.shortcuts.merge_missing_defaults();
         self.voice.merge_missing_defaults();
         self.ccchan.merge_missing_defaults();
+        self.cli_launchers.merge_missing_defaults();
         self.web_access.merge_missing_defaults();
     }
 }
@@ -294,6 +297,54 @@ pub struct CCChanSettings {
     pub window_x: Option<f64>,
     #[serde(default)]
     pub window_y: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliLauncherSettings {
+    #[serde(default)]
+    pub overrides: HashMap<String, CliLauncherOverride>,
+}
+
+impl CliLauncherSettings {
+    pub fn command_for(&self, cli_tool_id: &str) -> Option<&str> {
+        self.overrides
+            .get(cli_tool_id)
+            .and_then(|override_value| override_value.command())
+    }
+
+    pub fn merge_missing_defaults(&mut self) {
+        self.overrides = self
+            .overrides
+            .drain()
+            .filter_map(|(cli_tool_id, mut override_value)| {
+                let cli_tool_id = cli_tool_id.trim().to_string();
+                if cli_tool_id.is_empty() {
+                    return None;
+                }
+                override_value.command = override_value.command.trim().to_string();
+                if override_value.command.is_empty() {
+                    None
+                } else {
+                    Some((cli_tool_id, override_value))
+                }
+            })
+            .collect();
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CliLauncherOverride {
+    #[serde(default)]
+    pub command: String,
+}
+
+impl CliLauncherOverride {
+    pub fn command(&self) -> Option<&str> {
+        let command = self.command.trim();
+        (!command.is_empty()).then_some(command)
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -871,5 +922,62 @@ mod tests {
         assert_eq!(settings.mimo_model, "mimo-v2.5");
         assert_eq!(settings.language, None);
         assert_eq!(settings.max_record_seconds, 60);
+    }
+
+    #[test]
+    fn app_settings_deserializes_cli_launchers_default_for_legacy_config() {
+        let settings: AppSettings = toml::from_str("").unwrap();
+
+        assert!(settings.cli_launchers.overrides.is_empty());
+    }
+
+    #[test]
+    fn cli_launcher_settings_returns_trimmed_command() {
+        let settings = CliLauncherSettings {
+            overrides: HashMap::from([(
+                "claude".to_string(),
+                CliLauncherOverride {
+                    command: "  C:\\Tools\\reclaude.exe  ".to_string(),
+                },
+            )]),
+        };
+
+        assert_eq!(
+            settings.command_for("claude"),
+            Some("C:\\Tools\\reclaude.exe")
+        );
+        assert_eq!(settings.command_for("codex"), None);
+    }
+
+    #[test]
+    fn cli_launcher_merge_missing_defaults_removes_blank_commands() {
+        let mut settings = CliLauncherSettings {
+            overrides: HashMap::from([
+                (
+                    " claude ".to_string(),
+                    CliLauncherOverride {
+                        command: "  reclaude  ".to_string(),
+                    },
+                ),
+                (
+                    "codex".to_string(),
+                    CliLauncherOverride {
+                        command: "  ".to_string(),
+                    },
+                ),
+                (
+                    " ".to_string(),
+                    CliLauncherOverride {
+                        command: "tool".to_string(),
+                    },
+                ),
+            ]),
+        };
+
+        settings.merge_missing_defaults();
+
+        assert_eq!(settings.overrides.len(), 1);
+        assert_eq!(settings.command_for("claude"), Some("reclaude"));
+        assert_eq!(settings.command_for("codex"), None);
     }
 }

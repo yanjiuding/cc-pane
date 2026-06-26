@@ -38,6 +38,7 @@ describe("useSettingsStore", () => {
 
       const state = useSettingsStore.getState();
       expect(state.settings).toEqual({ ...mockSettings, ccchan: DEFAULT_CCCHAN_SETTINGS });
+      expect(state.settings?.cliLaunchers).toEqual({ overrides: {} });
       expect(state.loading).toBe(false);
     });
 
@@ -112,6 +113,7 @@ describe("useSettingsStore", () => {
       expect(defaults.proxy.enabled).toBe(false);
       expect(defaults.general.language).toBe("zh-CN");
       expect(defaults.notification.enabled).toBe(true);
+      expect(defaults.cliLaunchers).toEqual({ overrides: {} });
     });
 
     it("快捷键绑定应有 34 个", () => {

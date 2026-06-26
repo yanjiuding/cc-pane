@@ -294,6 +294,7 @@ use commands::{
     store_memory,
     submit_to_session,
     sync_spec_tasks,
+    test_cli_launcher,
     test_proxy,
     toggle_always_on_top,
     toggle_todo_my_day,
@@ -378,74 +379,75 @@ fn with_macos_app_menu<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::
         AboutMetadata, PredefinedMenuItem, Submenu, HELP_SUBMENU_ID, WINDOW_SUBMENU_ID,
     };
 
-    builder.menu(|app| {
-        let app_menu = Submenu::with_items(
-            app,
-            "CC-Panes",
-            true,
-            &[
-                &PredefinedMenuItem::about(
-                    app,
-                    Some("About CC-Panes"),
-                    Some(AboutMetadata {
-                        name: Some("CC-Panes".to_string()),
-                        version: Some(env!("CARGO_PKG_VERSION").to_string()),
-                        ..Default::default()
-                    }),
-                )?,
-                &PredefinedMenuItem::separator(app)?,
-                &PredefinedMenuItem::hide(app, None)?,
-                &PredefinedMenuItem::hide_others(app, None)?,
-                &PredefinedMenuItem::show_all(app, None)?,
-                &PredefinedMenuItem::separator(app)?,
-                &PredefinedMenuItem::quit(app, None)?,
-            ],
-        )?;
-        let edit_menu = Submenu::with_items(
-            app,
-            "Edit",
-            true,
-            &[
-                &PredefinedMenuItem::undo(app, None)?,
-                &PredefinedMenuItem::redo(app, None)?,
-                &PredefinedMenuItem::separator(app)?,
-                &PredefinedMenuItem::cut(app, None)?,
-                &PredefinedMenuItem::copy(app, None)?,
-                &MenuItem::with_id(app, APP_MENU_PASTE_ID, "Paste", true, None::<&str>)?,
-                &PredefinedMenuItem::select_all(app, None)?,
-            ],
-        )?;
-        let window_menu = Submenu::with_id_and_items(
-            app,
-            WINDOW_SUBMENU_ID,
-            "Window",
-            true,
-            &[
-                &PredefinedMenuItem::minimize(app, None)?,
-                &PredefinedMenuItem::maximize(app, None)?,
-                &PredefinedMenuItem::fullscreen(app, None)?,
-                &PredefinedMenuItem::separator(app)?,
-                &PredefinedMenuItem::bring_all_to_front(app, None)?,
-            ],
-        )?;
-        window_menu.set_as_windows_menu_for_nsapp()?;
-        let help_menu = Submenu::with_id_and_items(
-            app,
-            HELP_SUBMENU_ID,
-            "Help",
-            true,
-            &[&PredefinedMenuItem::services(app, None)?],
-        )?;
-        help_menu.set_as_help_menu_for_nsapp()?;
+    builder
+        .menu(|app| {
+            let app_menu = Submenu::with_items(
+                app,
+                "CC-Panes",
+                true,
+                &[
+                    &PredefinedMenuItem::about(
+                        app,
+                        Some("About CC-Panes"),
+                        Some(AboutMetadata {
+                            name: Some("CC-Panes".to_string()),
+                            version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                            ..Default::default()
+                        }),
+                    )?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::hide(app, None)?,
+                    &PredefinedMenuItem::hide_others(app, None)?,
+                    &PredefinedMenuItem::show_all(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::quit(app, None)?,
+                ],
+            )?;
+            let edit_menu = Submenu::with_items(
+                app,
+                "Edit",
+                true,
+                &[
+                    &PredefinedMenuItem::undo(app, None)?,
+                    &PredefinedMenuItem::redo(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::cut(app, None)?,
+                    &PredefinedMenuItem::copy(app, None)?,
+                    &MenuItem::with_id(app, APP_MENU_PASTE_ID, "Paste", true, None::<&str>)?,
+                    &PredefinedMenuItem::select_all(app, None)?,
+                ],
+            )?;
+            let window_menu = Submenu::with_id_and_items(
+                app,
+                WINDOW_SUBMENU_ID,
+                "Window",
+                true,
+                &[
+                    &PredefinedMenuItem::minimize(app, None)?,
+                    &PredefinedMenuItem::maximize(app, None)?,
+                    &PredefinedMenuItem::fullscreen(app, None)?,
+                    &PredefinedMenuItem::separator(app)?,
+                    &PredefinedMenuItem::bring_all_to_front(app, None)?,
+                ],
+            )?;
+            window_menu.set_as_windows_menu_for_nsapp()?;
+            let help_menu = Submenu::with_id_and_items(
+                app,
+                HELP_SUBMENU_ID,
+                "Help",
+                true,
+                &[&PredefinedMenuItem::services(app, None)?],
+            )?;
+            help_menu.set_as_help_menu_for_nsapp()?;
 
-        Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu, &help_menu])
-    })
-    .on_menu_event(|app, event| {
-        if event.id.as_ref() == APP_MENU_PASTE_ID {
-            info!("[macos-app-menu] Paste menu event intercepted");
-            let _ = app.emit(APP_MENU_PASTE_EVENT, AppMenuPastePayload { source: "menu" });
-        }
-    })
+            Menu::with_items(app, &[&app_menu, &edit_menu, &window_menu, &help_menu])
+        })
+        .on_menu_event(|app, event| {
+            if event.id.as_ref() == APP_MENU_PASTE_ID {
+                info!("[macos-app-menu] Paste menu event intercepted");
+                let _ = app.emit(APP_MENU_PASTE_EVENT, AppMenuPastePayload { source: "menu" });
+            }
+        })
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -2030,6 +2032,7 @@ pub fn run() {
             get_settings,
             update_settings,
             test_proxy,
+            test_cli_launcher,
             transcribe_voice_input,
             get_data_dir_info,
             migrate_data_dir,

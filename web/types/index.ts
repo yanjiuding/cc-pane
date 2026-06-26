@@ -87,6 +87,8 @@ export type {
   SearchScope,
   ScreenshotSettings,
   VoiceSettings,
+  CliLauncherSettings,
+  CliLauncherOverride,
   LayoutSwitcherSettings,
   WebAccessSettings,
   WebAccessStatus,

@@ -754,6 +754,12 @@ impl CCChanService {
             project_path: chat_dir.to_string_lossy().to_string(),
             workspace_path: None,
             provider,
+            executable_override: self
+                .settings_service
+                .get_settings()
+                .cli_launchers
+                .command_for("claude")
+                .map(str::to_string),
             resume_id: resume_id.map(str::to_string),
             issued_session_id: None,
             skip_mcp: true,
@@ -802,6 +808,12 @@ impl CCChanService {
             project_path: chat_dir.to_string_lossy().to_string(),
             workspace_path: None,
             provider,
+            executable_override: self
+                .settings_service
+                .get_settings()
+                .cli_launchers
+                .command_for("codex")
+                .map(str::to_string),
             resume_id: resume_id.map(str::to_string),
             issued_session_id: None,
             skip_mcp: true,

@@ -3,11 +3,13 @@ use crate::models::Workspace;
 use crate::services::SettingsService;
 use crate::utils::AppPaths;
 use crate::utils::AppResult;
+use cc_cli_adapters::{no_window_command, normalize_cli_command};
 use serde::Serialize;
 use std::net::TcpStream;
 use std::path::Path;
+use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{Manager, State};
 use tracing::{debug, info};
 
@@ -44,6 +46,82 @@ pub fn test_proxy(service: State<'_, Arc<SettingsService>>) -> AppResult<bool> {
     TcpStream::connect_timeout(&socket_addr, Duration::from_secs(5))
         .map(|_| true)
         .map_err(|e| format!("Failed to connect to proxy {}: {}", addr, e).into())
+}
+
+/// 测试 CLI 启动命令。只运行 `<command> --version` 这类轻量版本探测，
+/// 不注入用户 prompt / token / provider 环境。
+#[tauri::command]
+pub fn test_cli_launcher(command: String, version_args: Option<Vec<String>>) -> AppResult<String> {
+    let command = normalize_cli_command(&command);
+    if command.is_empty() {
+        return Err("CLI command is empty".into());
+    }
+
+    let args = version_args.unwrap_or_else(|| vec!["--version".to_string()]);
+    let mut child = no_window_command(command)
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("Failed to start CLI command: {}", error))?;
+
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| format!("Failed to read CLI output: {}", error))?;
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let text = first_non_empty([stdout.trim(), stderr.trim()])
+                    .unwrap_or_else(|| "Command completed without output".to_string());
+                if !output.status.success() {
+                    return Err(format!(
+                        "CLI command exited with {}: {}",
+                        output
+                            .status
+                            .code()
+                            .map(|code| code.to_string())
+                            .unwrap_or_else(|| "signal".to_string()),
+                        truncate_cli_launcher_output(&text)
+                    )
+                    .into());
+                }
+                return Ok(truncate_cli_launcher_output(&text));
+            }
+            Ok(None) => {
+                if started.elapsed() > Duration::from_secs(8) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("CLI command timed out".into());
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(error) => {
+                return Err(format!("Failed to wait for CLI command: {}", error).into());
+            }
+        }
+    }
+}
+
+fn first_non_empty<'a>(values: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    values
+        .into_iter()
+        .find(|value| !value.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn truncate_cli_launcher_output(text: &str) -> String {
+    const MAX_CHARS: usize = 600;
+    let mut chars = text.chars();
+    let truncated: String = chars.by_ref().take(MAX_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
 }
 
 /// 数据目录信息

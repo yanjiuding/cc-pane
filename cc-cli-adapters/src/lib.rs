@@ -442,6 +442,9 @@ pub struct CliAdapterContext {
     pub project_path: String,
     pub workspace_path: Option<String>,
     pub provider: Option<CliProvider>,
+    /// Optional executable override from CC-Panes settings. This replaces only
+    /// the executable used to launch the adapter; the adapter still owns args.
+    pub executable_override: Option<String>,
     pub resume_id: Option<String>,
     /// CC-Panes 预先发号的会话 id（仅新会话）。Claude 通过 `--session-id` 使用，
     /// 使 resume id 在启动前即确定，替代事后扫目录反查。
@@ -473,6 +476,162 @@ pub struct CliAdapterContext {
     /// 通过 per-launch override 显式 disabled，避免运行配置筛选后仍继承用户全局 MCP。
     #[allow(dead_code)]
     pub disable_unlisted_mcp_servers: bool,
+}
+
+impl CliAdapterContext {
+    pub fn command_override(&self) -> Option<&str> {
+        self.executable_override
+            .as_deref()
+            .map(normalize_cli_command)
+            .filter(|value| !value.is_empty())
+    }
+
+    pub fn resolve_command(&self, executable: &str) -> Result<String> {
+        if let Some(command) = self.command_override() {
+            return Ok(command.to_string());
+        }
+        resolve_executable(executable).map(|path| path.to_string_lossy().into_owned())
+    }
+
+    /// 解析可执行文件并在 Windows 上把 npm `.cmd`/`.bat` shim 改写为可被 PTY
+    /// (`CreateProcess`) 直接启动的命令。
+    ///
+    /// PTY 在 Windows 上通过 `CreateProcess` 拉起进程，无法直接执行 `.cmd`/`.bat`
+    /// 批处理文件——而 npm 全局安装的 CLI（opencode/gemini/kimi/crush/cursor 等）
+    /// 解析出来的正是 `.cmd` shim。此方法负责把 `.cmd` 改写为 `node <entry>` 形式。
+    ///
+    /// 用户显式 override 的命令不做改写，原样透传。
+    pub fn resolve_launch(
+        &self,
+        executable: &str,
+        args: Vec<String>,
+    ) -> Result<(String, Vec<String>)> {
+        if let Some(command) = self.command_override() {
+            return Ok((command.to_string(), args));
+        }
+        let path = resolve_executable(executable)?;
+        Ok(rewrite_windows_npm_shim(
+            path.to_string_lossy().into_owned(),
+            args,
+        ))
+    }
+}
+
+/// 判断路径是否为 Windows 批处理 shim（`.cmd`/`.bat`）。
+#[cfg(any(windows, test))]
+fn is_windows_batch_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| {
+            let ext = ext.to_ascii_lowercase();
+            ext == "cmd" || ext == "bat"
+        })
+        .unwrap_or(false)
+}
+
+/// 为 npm shim 寻找 `node` 可执行文件：优先 shim 同目录的 `node.exe`，否则 PATH。
+#[cfg(any(windows, test))]
+fn node_for_npm_shim(shim_path: &Path) -> Option<PathBuf> {
+    if let Some(dir) = shim_path.parent() {
+        let adjacent_node = dir.join("node.exe");
+        if adjacent_node.is_file() {
+            return Some(adjacent_node);
+        }
+    }
+    which::which("node").ok()
+}
+
+/// 从 npm 生成的 `.cmd` shim 内容中解析真正的 JS 入口绝对路径。
+///
+/// npm shim 末行形如：
+/// ```text
+/// ... "%_prog%"  "%dp0%\node_modules\opencode-ai\bin\opencode" %*
+/// ```
+/// 这里提取 `%dp0%` 之后的相对路径，并用 shim 所在目录替换 `%dp0%`。
+#[cfg(any(windows, test))]
+fn parse_npm_shim_entry(shim_path: &Path) -> Option<PathBuf> {
+    let dir = shim_path.parent()?;
+    let contents = std::fs::read_to_string(shim_path).ok()?;
+
+    for line in contents.lines() {
+        // 只看真正的执行行（含 `%*` 透传参数），跳过 `IF EXIST "%dp0%\node.exe"`
+        // 之类的探测行，避免误把 node.exe 当成入口。
+        if !line.contains("%dp0%") || !line.contains("%*") {
+            continue;
+        }
+        // 取该行里以 `%dp0%` 开头、由引号包裹的 token。
+        let mut search = line;
+        while let Some(start) = search.find("\"%dp0%") {
+            let after_quote = &search[start + 1..]; // 跳过起始引号
+            if let Some(end) = after_quote.find('"') {
+                let token = &after_quote[..end]; // 形如 %dp0%\node_modules\...\opencode
+                let rel = token
+                    .trim_start_matches("%dp0%")
+                    .trim_start_matches(['\\', '/']);
+                if !rel.is_empty() {
+                    // shim 内是 Windows 反斜杠分隔，按 `\` 和 `/` 拆分后逐段 join，
+                    // 让路径在任意平台都能正确拼接（便于跨平台单测）。
+                    let mut entry = dir.to_path_buf();
+                    for segment in rel.split(['\\', '/']).filter(|s| !s.is_empty()) {
+                        entry.push(segment);
+                    }
+                    if entry.is_file() {
+                        return Some(entry);
+                    }
+                }
+                search = &after_quote[end + 1..];
+            } else {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// 在 Windows 上把 npm `.cmd`/`.bat` shim 改写为可被 PTY 直接启动的命令。
+///
+/// - 非 Windows 或非批处理文件：原样透传。
+/// - 批处理文件：解析出 `node <entry>` 直接启动；解析失败时回退到
+///   `cmd.exe /c <shim> <args>`（至少能拉起，优于直接失败）。
+#[cfg(windows)]
+pub fn rewrite_windows_npm_shim(command: String, args: Vec<String>) -> (String, Vec<String>) {
+    let path = PathBuf::from(&command);
+    if !is_windows_batch_file(&path) {
+        return (command, args);
+    }
+
+    if let (Some(node), Some(entry)) = (node_for_npm_shim(&path), parse_npm_shim_entry(&path)) {
+        let mut effective_args = vec![entry.to_string_lossy().into_owned()];
+        effective_args.extend(args);
+        return (node.to_string_lossy().into_owned(), effective_args);
+    }
+
+    tracing::warn!(
+        command = %command,
+        "windows npm shim: node/entry 解析失败，回退到 cmd.exe /c"
+    );
+    let mut effective_args = vec!["/c".to_string(), command];
+    effective_args.extend(args);
+    ("cmd.exe".to_string(), effective_args)
+}
+
+/// 非 Windows 平台：原样透传。
+#[cfg(not(windows))]
+pub fn rewrite_windows_npm_shim(command: String, args: Vec<String>) -> (String, Vec<String>) {
+    (command, args)
+}
+
+pub fn normalize_cli_command(command: &str) -> &str {
+    let command = command.trim();
+    if command.len() >= 2 {
+        let bytes = command.as_bytes();
+        if (bytes[0] == b'"' && bytes[command.len() - 1] == b'"')
+            || (bytes[0] == b'\'' && bytes[command.len() - 1] == b'\'')
+        {
+            return command[1..command.len() - 1].trim();
+        }
+    }
+    command
 }
 
 /// 供 adapter 使用的轻量 Provider 视图，避免依赖主 crate 类型
@@ -712,6 +871,29 @@ impl Default for CliToolRegistry {
 mod registry_tests {
     use super::*;
 
+    fn test_context(executable_override: Option<&str>) -> CliAdapterContext {
+        CliAdapterContext {
+            session_id: "test-session".to_string(),
+            project_path: "/tmp/project".to_string(),
+            workspace_path: None,
+            provider: None,
+            executable_override: executable_override.map(str::to_string),
+            resume_id: None,
+            issued_session_id: None,
+            skip_mcp: true,
+            yolo_mode: false,
+            append_system_prompt: None,
+            initial_prompt: None,
+            orchestrator_port: None,
+            orchestrator_token: None,
+            launch_id: None,
+            data_dir: std::env::temp_dir(),
+            shared_mcp_urls: HashMap::new(),
+            allowed_mcp_server_ids: Vec::new(),
+            disable_unlisted_mcp_servers: false,
+        }
+    }
+
     #[test]
     fn builtin_registry_matches_desktop_adapter_set() {
         let registry = CliToolRegistry::with_builtin_adapters();
@@ -727,6 +909,134 @@ mod registry_tests {
         );
         assert!(registry.get("claude").is_some());
         assert!(registry.get("codex").is_some());
+    }
+
+    #[test]
+    fn context_resolve_command_prefers_trimmed_override() {
+        let ctx = test_context(Some("  C:\\Tools\\reclaude.exe  "));
+
+        assert_eq!(
+            ctx.resolve_command("definitely-not-installed").unwrap(),
+            "C:\\Tools\\reclaude.exe"
+        );
+    }
+
+    #[test]
+    fn context_resolve_command_strips_wrapping_quotes_from_override() {
+        let ctx = test_context(Some(r#"  "C:\Program Files\reclaude\reclaude.exe"  "#));
+
+        assert_eq!(
+            ctx.resolve_command("definitely-not-installed").unwrap(),
+            r"C:\Program Files\reclaude\reclaude.exe"
+        );
+    }
+
+    #[test]
+    fn context_resolve_command_ignores_blank_override() {
+        let ctx = test_context(Some("  "));
+
+        let err = ctx.resolve_command("definitely-not-installed").unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("definitely-not-installed CLI not found"));
+    }
+
+    /// 标准 npm `.cmd` shim 末行的真实模板（opencode-ai 包）。
+    const NPM_SHIM_CMD: &str = "@ECHO off\r\n\
+GOTO start\r\n\
+:find_dp0\r\n\
+SET dp0=%~dp0\r\n\
+EXIT /b\r\n\
+:start\r\n\
+SETLOCAL\r\n\
+CALL :find_dp0\r\n\
+\r\n\
+IF EXIST \"%dp0%\\node.exe\" (\r\n\
+  SET \"_prog=%dp0%\\node.exe\"\r\n\
+) ELSE (\r\n\
+  SET \"_prog=node\"\r\n\
+  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n\
+)\r\n\
+\r\n\
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\opencode-ai\\bin\\opencode\" %*\r\n";
+
+    fn fresh_dir(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ccpanes_shim_{}_{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn parse_npm_shim_entry_extracts_js_entry() {
+        let dir = fresh_dir("parse");
+        let shim = dir.join("opencode.cmd");
+        std::fs::write(&shim, NPM_SHIM_CMD).unwrap();
+
+        // 入口文件必须真实存在（parser 会 is_file() 校验）。
+        let entry = dir
+            .join("node_modules")
+            .join("opencode-ai")
+            .join("bin")
+            .join("opencode");
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        std::fs::write(&entry, b"#!/usr/bin/env node\n").unwrap();
+
+        let parsed = parse_npm_shim_entry(&shim).expect("should parse npm shim entry");
+        assert_eq!(parsed, entry);
+    }
+
+    #[test]
+    fn parse_npm_shim_entry_returns_none_when_entry_missing() {
+        let dir = fresh_dir("parse_missing");
+        let shim = dir.join("opencode.cmd");
+        std::fs::write(&shim, NPM_SHIM_CMD).unwrap();
+        // 不创建 node_modules 入口 → 解析应失败。
+        assert!(parse_npm_shim_entry(&shim).is_none());
+    }
+
+    #[test]
+    fn rewrite_passes_through_non_batch_command() {
+        let args = vec!["--help".to_string()];
+        let (command, out_args) =
+            rewrite_windows_npm_shim("C:\\bin\\codex.exe".to_string(), args.clone());
+        assert_eq!(command, "C:\\bin\\codex.exe");
+        assert_eq!(out_args, args);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rewrite_batch_shim_runs_node_with_entry() {
+        let dir = fresh_dir("rewrite");
+        let shim = dir.join("opencode.cmd");
+        std::fs::write(&shim, NPM_SHIM_CMD).unwrap();
+
+        // 相邻 node.exe（node_for_npm_shim 优先选用）。
+        let node = dir.join("node.exe");
+        std::fs::write(&node, b"").unwrap();
+
+        let entry = dir
+            .join("node_modules")
+            .join("opencode-ai")
+            .join("bin")
+            .join("opencode");
+        std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
+        std::fs::write(&entry, b"").unwrap();
+
+        let (command, out_args) = rewrite_windows_npm_shim(
+            shim.to_string_lossy().into_owned(),
+            vec!["hello prompt".to_string()],
+        );
+
+        assert_eq!(command, node.to_string_lossy());
+        assert_eq!(
+            out_args,
+            vec![
+                entry.to_string_lossy().into_owned(),
+                "hello prompt".to_string()
+            ]
+        );
     }
 }
 

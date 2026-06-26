@@ -1,8 +1,7 @@
 //! GLM CLI 适配器（底层执行 crush）
 
 use crate::{
-    resolve_executable, CliAdapterContext, CliCommandResult, CliToolAdapter, CliToolCapabilities,
-    CliToolInfo,
+    CliAdapterContext, CliCommandResult, CliToolAdapter, CliToolCapabilities, CliToolInfo,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -55,8 +54,6 @@ impl CliToolAdapter for GlmAdapter {
     }
 
     fn build_command(&self, ctx: &CliAdapterContext) -> Result<CliCommandResult> {
-        let path = resolve_executable("crush")?;
-        let crush_cmd = path.to_string_lossy().into_owned();
         let adapter_root = ctx.data_dir.join("cli-adapters").join("glm");
         let config_path = adapter_root.join("crush.json");
         let data_path = adapter_root.join("data");
@@ -109,15 +106,17 @@ impl CliToolAdapter for GlmAdapter {
             args.push(prompt.clone());
         }
 
+        let (command, args) = ctx.resolve_launch("crush", args)?;
+
         info!(
             session_id = %ctx.session_id,
-            command = %crush_cmd,
+            command = %command,
             args = ?args,
             "glm: building command"
         );
 
         Ok(CliCommandResult {
-            command: crush_cmd,
+            command,
             args,
             env_remove: vec![],
             env_inject,

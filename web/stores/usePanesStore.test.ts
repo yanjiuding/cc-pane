@@ -471,9 +471,21 @@ describe("usePanesStore", () => {
   });
 
   describe("setActivePane", () => {
-    it("应更新 activePaneId", () => {
+    it("应更新 activePaneId 到存在的面板", () => {
+      const { rootPane, splitRight } = usePanesStore.getState();
+      const originalPaneId = rootPane.id;
+      // 分屏后新建面板成为活动面板，再切回原面板验证更新生效
+      splitRight(originalPaneId);
+      expect(usePanesStore.getState().activePaneId).not.toBe(originalPaneId);
+
+      usePanesStore.getState().setActivePane(originalPaneId);
+      expect(usePanesStore.getState().activePaneId).toBe(originalPaneId);
+    });
+
+    it("忽略不存在的面板 id", () => {
+      const originalPaneId = usePanesStore.getState().activePaneId;
       usePanesStore.getState().setActivePane("custom-pane-id");
-      expect(usePanesStore.getState().activePaneId).toBe("custom-pane-id");
+      expect(usePanesStore.getState().activePaneId).toBe(originalPaneId);
     });
   });
 

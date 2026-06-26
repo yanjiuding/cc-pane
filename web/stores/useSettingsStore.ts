@@ -5,7 +5,7 @@ import { handleErrorSilent } from "@/utils";
 import { getDefaultSidebarFavoriteLaunchActionIds } from "@/components/sidebar/launchMenu";
 import { DEFAULT_CCCHAN_SETTINGS } from "./useCCChanStore";
 import type { CCChanSettings } from "@/ccchan/types";
-import type { LayoutSwitcherSettings, WebAccessSettings } from "@/types";
+import type { CliLauncherSettings, LayoutSwitcherSettings, WebAccessSettings } from "@/types";
 
 const defaultCloseToTray = () => {
   if (typeof navigator === "undefined") {
@@ -43,10 +43,23 @@ const DEFAULT_WEB_ACCESS_SETTINGS: WebAccessSettings = {
   lockOnIdleMinutes: 30,
 };
 
+const DEFAULT_CLI_LAUNCHER_SETTINGS: CliLauncherSettings = {
+  overrides: {},
+};
+
 function withCCChanSettings(settings: AppSettings): AppSettingsWithCCChan {
   const maybeWithCCChan = settings as Partial<AppSettingsWithCCChan>;
+  const maybeSettings = settings as Partial<AppSettings>;
   return {
     ...settings,
+    cliLaunchers: {
+      ...DEFAULT_CLI_LAUNCHER_SETTINGS,
+      ...maybeSettings.cliLaunchers,
+      overrides: {
+        ...DEFAULT_CLI_LAUNCHER_SETTINGS.overrides,
+        ...maybeSettings.cliLaunchers?.overrides,
+      },
+    },
     layoutSwitcher: {
       ...DEFAULT_LAYOUT_SWITCHER_SETTINGS,
       ...settings.layoutSwitcher,
@@ -186,6 +199,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       enableItn: false,
       maxRecordSeconds: 60,
     },
+    cliLaunchers: DEFAULT_CLI_LAUNCHER_SETTINGS,
     layoutSwitcher: DEFAULT_LAYOUT_SWITCHER_SETTINGS,
     webAccess: DEFAULT_WEB_ACCESS_SETTINGS,
   }),

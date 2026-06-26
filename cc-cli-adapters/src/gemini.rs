@@ -1,8 +1,7 @@
 //! Gemini CLI 适配器
 
 use crate::{
-    resolve_executable, CliAdapterContext, CliCommandResult, CliToolAdapter, CliToolCapabilities,
-    CliToolInfo,
+    CliAdapterContext, CliCommandResult, CliToolAdapter, CliToolCapabilities, CliToolInfo,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -55,9 +54,6 @@ impl CliToolAdapter for GeminiAdapter {
     }
 
     fn build_command(&self, ctx: &CliAdapterContext) -> Result<CliCommandResult> {
-        let path = resolve_executable("gemini")?;
-        let gemini_cmd = path.to_string_lossy().into_owned();
-
         info!(
             session_id = %ctx.session_id,
             "gemini: building command"
@@ -70,8 +66,10 @@ impl CliToolAdapter for GeminiAdapter {
             args.push(prompt.clone());
         }
 
+        let (command, args) = ctx.resolve_launch("gemini", args)?;
+
         Ok(CliCommandResult {
-            command: gemini_cmd,
+            command,
             args,
             env_remove: vec![],
             env_inject: HashMap::new(),

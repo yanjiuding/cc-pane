@@ -784,7 +784,6 @@ impl CliToolAdapter for ClaudeAdapter {
     }
 
     fn build_command(&self, ctx: &CliAdapterContext) -> Result<CliCommandResult> {
-        let path = Self::resolve_claude_path()?;
         let mut args = Vec::new();
 
         // Resume（claude --resume 复用原会话 id，无需重新发号/捕获）
@@ -841,11 +840,22 @@ impl CliToolAdapter for ClaudeAdapter {
             args.push(prompt.clone());
         }
 
+        let command;
         #[cfg(windows)]
-        let (command, args) = Self::windows_npm_shim_invocation(&path, args);
+        let args = if let Some(override_command) = ctx.command_override() {
+            command = override_command.to_string();
+            args
+        } else {
+            let path = Self::resolve_claude_path()?;
+            let (resolved_command, resolved_args) = Self::windows_npm_shim_invocation(&path, args);
+            command = resolved_command;
+            resolved_args
+        };
 
         #[cfg(not(windows))]
-        let command = path.to_string_lossy().into_owned();
+        {
+            command = ctx.resolve_command("claude")?;
+        }
 
         info!(
             session_id = %ctx.session_id,
@@ -929,6 +939,29 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::tempdir;
 
+    fn test_context(executable_override: Option<&str>) -> CliAdapterContext {
+        CliAdapterContext {
+            session_id: "test-session".to_string(),
+            project_path: "/tmp/project".to_string(),
+            workspace_path: None,
+            provider: None,
+            executable_override: executable_override.map(str::to_string),
+            resume_id: None,
+            issued_session_id: Some("issued-session".to_string()),
+            skip_mcp: true,
+            yolo_mode: false,
+            append_system_prompt: None,
+            initial_prompt: Some("hello".to_string()),
+            orchestrator_port: None,
+            orchestrator_token: None,
+            launch_id: None,
+            data_dir: std::env::temp_dir(),
+            shared_mcp_urls: HashMap::new(),
+            allowed_mcp_server_ids: Vec::new(),
+            disable_unlisted_mcp_servers: false,
+        }
+    }
+
     #[test]
     fn sync_project_hooks_writes_settings_and_reports_status() {
         let dir = tempdir().unwrap();
@@ -977,6 +1010,24 @@ mod tests {
         assert!(!plan.enabled);
         assert!(session.supported);
         assert!(plan.supported);
+    }
+
+    #[test]
+    fn build_command_uses_executable_override_without_resolving_claude() {
+        let adapter = ClaudeAdapter::new();
+        let ctx = test_context(Some(r"C:\Tools\reclaude.exe"));
+
+        let result = adapter.build_command(&ctx).unwrap();
+
+        assert_eq!(result.command, r"C:\Tools\reclaude.exe");
+        assert!(result
+            .args
+            .windows(2)
+            .any(|pair| pair[0] == "--session-id" && pair[1] == "issued-session"));
+        assert_eq!(
+            &result.args[result.args.len() - 2..],
+            ["--".to_string(), "hello".to_string()]
+        );
     }
 
     #[test]

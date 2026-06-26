@@ -21,6 +21,7 @@ export interface CliToolInfo {
   id: string;
   displayName: string;
   executable: string;
+  versionArgs: string[];
   installed: boolean;
   version: string | null;
   path: string | null;

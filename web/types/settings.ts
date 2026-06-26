@@ -8,6 +8,7 @@ export interface AppSettings {
   notification: NotificationSettings;
   screenshot: ScreenshotSettings;
   voice: VoiceSettings;
+  cliLaunchers: CliLauncherSettings;
   layoutSwitcher: LayoutSwitcherSettings;
   webAccess: WebAccessSettings;
 }
@@ -124,6 +125,14 @@ export interface VoiceSettings {
   language: string | null;
   enableItn: boolean;
   maxRecordSeconds: number;
+}
+
+export interface CliLauncherSettings {
+  overrides: Record<string, CliLauncherOverride>;
+}
+
+export interface CliLauncherOverride {
+  command: string;
 }
 
 /** 布局浮窗设置 */

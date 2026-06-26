@@ -1,8 +1,7 @@
 //! Kimi CLI 适配器
 
 use crate::{
-    resolve_executable, CliAdapterContext, CliCommandResult, CliToolAdapter, CliToolCapabilities,
-    CliToolInfo,
+    CliAdapterContext, CliCommandResult, CliToolAdapter, CliToolCapabilities, CliToolInfo,
 };
 use anyhow::Result;
 use std::collections::HashMap;
@@ -87,8 +86,6 @@ impl CliToolAdapter for KimiAdapter {
     }
 
     fn build_command(&self, ctx: &CliAdapterContext) -> Result<CliCommandResult> {
-        let path = resolve_executable("kimi")?;
-        let kimi_cmd = path.to_string_lossy().into_owned();
         let mut args = Vec::new();
 
         if let Some(config_path) = self.write_session_config(ctx)? {
@@ -110,15 +107,17 @@ impl CliToolAdapter for KimiAdapter {
         let share_dir = ctx.data_dir.join("cli-adapters").join("kimi").join("share");
         std::fs::create_dir_all(&share_dir)?;
 
+        let (command, args) = ctx.resolve_launch("kimi", args)?;
+
         info!(
             session_id = %ctx.session_id,
-            command = %kimi_cmd,
+            command = %command,
             args = ?args,
             "kimi: building command"
         );
 
         Ok(CliCommandResult {
-            command: kimi_cmd,
+            command,
             args,
             env_remove: vec![],
             env_inject: HashMap::from([(
