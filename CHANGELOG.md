@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.4 - 2026-06-26
+
+### Fixed
+
+- Fixed workspace right-click OpenCode launch so clicking the OpenCode entry starts it directly.
+- Improved CLI executable discovery for macOS GUI launches, covering nvm, Homebrew, Cargo, local bin, and cached shell PATH locations.
+
 ## 0.10.3 - 2026-06-26
 
 ### Fixed
