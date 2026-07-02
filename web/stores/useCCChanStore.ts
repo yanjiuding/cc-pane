@@ -15,9 +15,11 @@ const fallbackSprite = `data:image/svg+xml;utf8,${encodeURIComponent(`
 export const DEFAULT_CCCHAN_SETTINGS: CCChanSettings = {
   aiEngine: "claude",
   defaultPetId: "homie",
-  autoStart: true,
+  // 宠物模块默认不打开：全新用户默认不自动显示、浮窗默认隐藏，
+  // 需要时可从状态栏 cc酱 开关手动召出。
+  autoStart: false,
   soundEnabled: true,
-  windowVisible: true,
+  windowVisible: false,
   windowX: null,
   windowY: null,
 };

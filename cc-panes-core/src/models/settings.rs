@@ -287,11 +287,13 @@ pub struct CCChanSettings {
     pub ai_engine: String,
     #[serde(default = "default_ccchan_pet_id")]
     pub default_pet_id: String,
-    #[serde(default = "default_true")]
+    // 宠物模块默认不打开：开机自动显示与浮窗可见均默认 false（bool 的 serde
+    // 默认即 false）。老用户已持久化的设置不受影响，仅全新安装默认隐藏。
+    #[serde(default)]
     pub auto_start: bool,
     #[serde(default = "default_true")]
     pub sound_enabled: bool,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub window_visible: bool,
     #[serde(default)]
     pub window_x: Option<f64>,
@@ -690,9 +692,9 @@ impl Default for CCChanSettings {
         Self {
             ai_engine: default_ccchan_ai_engine(),
             default_pet_id: default_ccchan_pet_id(),
-            auto_start: true,
+            auto_start: false,
             sound_enabled: true,
-            window_visible: true,
+            window_visible: false,
             window_x: None,
             window_y: None,
         }
