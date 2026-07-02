@@ -203,20 +203,34 @@ fn parse_skill_metadata(content: &str, fallback_name: &str) -> (String, Option<S
 }
 
 fn split_frontmatter(content: &str) -> Option<(&str, &str)> {
-    let mut lines = content.lines();
-    if lines.next()?.trim() != "---" {
-        return None;
-    }
+    // 用 split_inclusive('\n') 保留换行符，按真实字节长度累加游标，
+    // 避免手动假设行终止符长度（CRLF 是 2 字节，LF 是 1 字节）。旧实现按
+    // `line_len + 1` 累加，遇到 CRLF 文件时游标逐行偏移，最终可能落在多字节
+    // UTF-8 字符内部导致 slice panic（见 issue #34）。所有边界都取自累加的
+    // 字节长度或 '\n'（ASCII）分割点，始终落在合法 char 边界上。
+    let mut cursor: usize = 0;
+    let mut frontmatter_start: Option<usize> = None;
 
-    let mut offset: usize = 4;
-    for line in lines {
-        let line_len = line.len();
-        if line.trim() == "---" {
-            let frontmatter = &content[4..offset.saturating_sub(1)];
-            let body_start = (offset + line_len + 1).min(content.len());
-            return Some((frontmatter, &content[body_start..]));
+    for line in content.split_inclusive('\n') {
+        let line_start = cursor;
+        cursor += line.len();
+        let trimmed = line.trim_end_matches(['\n', '\r']).trim();
+
+        match frontmatter_start {
+            // 第一行必须是起始分隔符 `---`
+            None => {
+                if trimmed != "---" {
+                    return None;
+                }
+                frontmatter_start = Some(cursor);
+            }
+            // 遇到结束分隔符 `---`：frontmatter 为两分隔符之间的内容，body 为其后全部
+            Some(start) => {
+                if trimmed == "---" {
+                    return Some((&content[start..line_start], &content[cursor..]));
+                }
+            }
         }
-        offset += line_len + 1;
     }
     None
 }
@@ -342,5 +356,33 @@ mod tests {
 
         assert_eq!(skill.name, "plain-skill");
         assert_eq!(skill.description.as_deref(), Some("Plain skill"));
+    }
+
+    #[test]
+    fn parses_crlf_frontmatter_with_non_ascii_without_panicking() {
+        // 回归 issue #34：CRLF + 长中文 description 会让旧的按 `line_len + 1`
+        // 累加的偏移落在多字节 UTF-8 字符内部，slice 时 panic。
+        let content = "---\r\nname: guizang-ppt-skill\r\ndescription: 生成横向翻页网页 PPT（单 HTML 文件），含 WebGL 背景、章节幕封、数据大字报、图片网格等模板。当用户提到\"杂志风 PPT\"、\"瑞士风 PPT\"、\"Swiss Style\"时使用。\r\n---\r\n正文内容。";
+
+        let (name, description) = parse_skill_metadata(content, "guizang-ppt-skill");
+
+        assert_eq!(name, "guizang-ppt-skill");
+        let description = description.expect("description should be parsed");
+        assert!(description.starts_with("生成横向翻页网页 PPT"));
+        assert!(description.ends_with("时使用。"));
+    }
+
+    #[test]
+    fn split_frontmatter_handles_crlf_and_lf_equivalently() {
+        let lf = "---\nname: a\ndescription: 你好世界\n---\nbody";
+        let crlf = "---\r\nname: a\r\ndescription: 你好世界\r\n---\r\nbody";
+
+        let (fm_lf, body_lf) = split_frontmatter(lf).expect("lf frontmatter");
+        let (fm_crlf, body_crlf) = split_frontmatter(crlf).expect("crlf frontmatter");
+
+        assert!(fm_lf.contains("description: 你好世界"));
+        assert!(fm_crlf.contains("description: 你好世界"));
+        assert_eq!(body_lf, "body");
+        assert_eq!(body_crlf, "body");
     }
 }
