@@ -531,6 +531,16 @@ fn is_windows_batch_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// 判断 shim 入口是否为 Windows PE 原生二进制（`.exe`）。这类入口必须直接
+/// 运行，不能作为脚本传给 `node`。
+#[cfg(any(windows, test))]
+fn is_pe_binary(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("exe"))
+        .unwrap_or(false)
+}
+
 /// 为 npm shim 寻找 `node` 可执行文件：优先 shim 同目录的 `node.exe`，否则 PATH。
 #[cfg(any(windows, test))]
 fn node_for_npm_shim(shim_path: &Path) -> Option<PathBuf> {
@@ -580,6 +590,13 @@ fn parse_npm_shim_entry(shim_path: &Path) -> Option<PathBuf> {
                     if entry.is_file() {
                         return Some(entry);
                     }
+                    // npm shim 的入口 token 常省略扩展名（如 `...\bin\opencode`）。
+                    // 若同名 `.exe` 存在，说明该 CLI 分发的是原生 PE 二进制
+                    // （opencode 等），返回该 `.exe` 供上层直接运行。
+                    let exe_entry = entry.with_extension("exe");
+                    if exe_entry.is_file() {
+                        return Some(exe_entry);
+                    }
                 }
                 search = &after_quote[end + 1..];
             } else {
@@ -593,8 +610,10 @@ fn parse_npm_shim_entry(shim_path: &Path) -> Option<PathBuf> {
 /// 在 Windows 上把 npm `.cmd`/`.bat` shim 改写为可被 PTY 直接启动的命令。
 ///
 /// - 非 Windows 或非批处理文件：原样透传。
-/// - 批处理文件：解析出 `node <entry>` 直接启动；解析失败时回退到
-///   `cmd.exe /c <shim> <args>`（至少能拉起，优于直接失败）。
+/// - 批处理文件：
+///   - 入口是 PE 原生二进制（`.exe`，如 opencode）：直接运行该 `.exe`，不经 node。
+///   - 入口是 JS 脚本：解析出 `node <entry>` 直接启动。
+///   - 解析失败：回退到 `cmd.exe /c <shim> <args>`（至少能拉起，优于直接失败）。
 #[cfg(windows)]
 pub fn rewrite_windows_npm_shim(command: String, args: Vec<String>) -> (String, Vec<String>) {
     let path = PathBuf::from(&command);
@@ -602,10 +621,17 @@ pub fn rewrite_windows_npm_shim(command: String, args: Vec<String>) -> (String, 
         return (command, args);
     }
 
-    if let (Some(node), Some(entry)) = (node_for_npm_shim(&path), parse_npm_shim_entry(&path)) {
-        let mut effective_args = vec![entry.to_string_lossy().into_owned()];
-        effective_args.extend(args);
-        return (node.to_string_lossy().into_owned(), effective_args);
+    if let Some(entry) = parse_npm_shim_entry(&path) {
+        // 入口是 PE 二进制：PTY 可直接 CreateProcess 拉起，绝不能交给 node。
+        if is_pe_binary(&entry) {
+            return (entry.to_string_lossy().into_owned(), args);
+        }
+        // 入口是 JS 脚本：用 node 运行。
+        if let Some(node) = node_for_npm_shim(&path) {
+            let mut effective_args = vec![entry.to_string_lossy().into_owned()];
+            effective_args.extend(args);
+            return (node.to_string_lossy().into_owned(), effective_args);
+        }
     }
 
     tracing::warn!(
@@ -1040,6 +1066,54 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
                 "hello prompt".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn parse_npm_shim_entry_falls_back_to_sibling_exe() {
+        let dir = fresh_dir("parse_exe");
+        let shim = dir.join("opencode.cmd");
+        std::fs::write(&shim, NPM_SHIM_CMD).unwrap();
+
+        // 只创建 PE 二进制入口（无扩展名的入口文件不存在），parser 应回退到 .exe。
+        let exe_entry = dir
+            .join("node_modules")
+            .join("opencode-ai")
+            .join("bin")
+            .join("opencode.exe");
+        std::fs::create_dir_all(exe_entry.parent().unwrap()).unwrap();
+        std::fs::write(&exe_entry, b"MZ").unwrap();
+
+        let parsed = parse_npm_shim_entry(&shim).expect("should resolve .exe entry");
+        assert_eq!(parsed, exe_entry);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rewrite_batch_shim_runs_exe_entry_directly() {
+        let dir = fresh_dir("rewrite_exe");
+        let shim = dir.join("opencode.cmd");
+        std::fs::write(&shim, NPM_SHIM_CMD).unwrap();
+
+        // 相邻 node.exe 存在也不应被选用——入口是 PE 二进制时必须直接运行。
+        let node = dir.join("node.exe");
+        std::fs::write(&node, b"").unwrap();
+
+        let exe_entry = dir
+            .join("node_modules")
+            .join("opencode-ai")
+            .join("bin")
+            .join("opencode.exe");
+        std::fs::create_dir_all(exe_entry.parent().unwrap()).unwrap();
+        std::fs::write(&exe_entry, b"MZ").unwrap();
+
+        let (command, out_args) = rewrite_windows_npm_shim(
+            shim.to_string_lossy().into_owned(),
+            vec!["hello prompt".to_string()],
+        );
+
+        // 直接运行 .exe，不经 node，参数原样透传。
+        assert_eq!(command, exe_entry.to_string_lossy());
+        assert_eq!(out_args, vec!["hello prompt".to_string()]);
     }
 }
 
