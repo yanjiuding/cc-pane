@@ -760,6 +760,7 @@ impl CCChanService {
                 .cli_launchers
                 .command_for("claude")
                 .map(str::to_string),
+            adapter_options: Default::default(),
             resume_id: resume_id.map(str::to_string),
             issued_session_id: None,
             skip_mcp: true,
@@ -814,6 +815,7 @@ impl CCChanService {
                 .cli_launchers
                 .command_for("codex")
                 .map(str::to_string),
+            adapter_options: Default::default(),
             resume_id: resume_id.map(str::to_string),
             issued_session_id: None,
             skip_mcp: true,

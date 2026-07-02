@@ -445,6 +445,8 @@ pub struct CliAdapterContext {
     /// Optional executable override from CC-Panes settings. This replaces only
     /// the executable used to launch the adapter; the adapter still owns args.
     pub executable_override: Option<String>,
+    /// Per-launch adapter options keyed by CLI tool specific option names.
+    pub adapter_options: HashMap<String, serde_json::Value>,
     pub resume_id: Option<String>,
     /// CC-Panes 预先发号的会话 id（仅新会话）。Claude 通过 `--session-id` 使用，
     /// 使 resume id 在启动前即确定，替代事后扫目录反查。
@@ -878,6 +880,7 @@ mod registry_tests {
             workspace_path: None,
             provider: None,
             executable_override: executable_override.map(str::to_string),
+            adapter_options: Default::default(),
             resume_id: None,
             issued_session_id: None,
             skip_mcp: true,

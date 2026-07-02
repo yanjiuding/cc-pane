@@ -58,6 +58,7 @@ export type { Provider, ProviderType } from "./provider";
 export { PROVIDER_TYPE_META } from "./provider";
 export type {
   LaunchProfile,
+  LaunchProfileAdapterOptions,
   LaunchProfileDraft,
   LaunchProfileMcpMode,
   LaunchProfileMcpPolicy,
@@ -67,6 +68,7 @@ export type {
   LaunchProfileSkillMode,
   LaunchProfileSkillPolicy,
   LaunchProviderSelection,
+  KimiConfigMode,
   ResolvedMcpServer,
   ResolvedSkill,
 } from "./launch-profile";

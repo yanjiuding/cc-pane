@@ -1236,11 +1236,24 @@ impl TerminalService {
         let profile_provider_id = resolved_profile
             .as_ref()
             .and_then(|profile| profile.provider_id.as_deref());
+        let adapter_options = resolved_profile
+            .as_ref()
+            .map(|profile| profile.adapter_options.clone())
+            .unwrap_or_default();
+        let use_native_kimi_config = cli_tool == CliTool::Kimi
+            && adapter_options
+                .get("kimiConfigMode")
+                .and_then(serde_json::Value::as_str)
+                == Some("native");
         let requested_provider_id = provider_id.filter(|id| !id.trim().is_empty());
-        let effective_provider_id = match provider_selection {
-            LaunchProviderSelection::None => None,
-            LaunchProviderSelection::Explicit => requested_provider_id,
-            LaunchProviderSelection::Inherit => requested_provider_id.or(profile_provider_id),
+        let effective_provider_id = if use_native_kimi_config {
+            None
+        } else {
+            match provider_selection {
+                LaunchProviderSelection::None => None,
+                LaunchProviderSelection::Explicit => requested_provider_id,
+                LaunchProviderSelection::Inherit => requested_provider_id.or(profile_provider_id),
+            }
         };
         let mut env_vars = self.settings_service.get_proxy_env_vars();
         let provider_vars = self.provider_service.get_env_vars(effective_provider_id);
@@ -1694,6 +1707,7 @@ impl TerminalService {
                         .cli_launchers
                         .command_for(cli_tool_id)
                         .map(str::to_string),
+                    adapter_options: adapter_options.clone(),
                     resume_id: resume_id.map(|s| s.to_string()),
                     issued_session_id: issued_session_id.clone(),
                     skip_mcp: effective_skip_mcp,

@@ -808,6 +808,7 @@ mod tests {
             workspace_path: None,
             provider: None,
             executable_override: executable_override.map(str::to_string),
+            adapter_options: Default::default(),
             resume_id: Some("thread-123".to_string()),
             issued_session_id: None,
             skip_mcp: true,

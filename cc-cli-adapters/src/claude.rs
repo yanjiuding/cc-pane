@@ -946,6 +946,7 @@ mod tests {
             workspace_path: None,
             provider: None,
             executable_override: executable_override.map(str::to_string),
+            adapter_options: Default::default(),
             resume_id: None,
             issued_session_id: Some("issued-session".to_string()),
             skip_mcp: true,

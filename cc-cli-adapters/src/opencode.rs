@@ -290,6 +290,7 @@ mod tests {
             workspace_path: None,
             provider: None,
             executable_override: None,
+            adapter_options: Default::default(),
             resume_id: None,
             issued_session_id: None,
             skip_mcp: false,
