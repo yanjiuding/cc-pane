@@ -66,3 +66,7 @@ pub async fn get_recent_journal(
         .map(Json)
         .map_err(service_error)
 }
+
+#[cfg(test)]
+#[path = "journal_tests.rs"]
+mod journal_tests;

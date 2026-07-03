@@ -114,3 +114,7 @@ fn safe_join(root: &Path, request_path: &str) -> Option<PathBuf> {
 fn is_spa_route(path: &str) -> bool {
     !path.starts_with("api/") && !path.starts_with("ws/") && !path.contains('.')
 }
+
+#[cfg(test)]
+#[path = "static_files_tests.rs"]
+mod static_files_tests;
