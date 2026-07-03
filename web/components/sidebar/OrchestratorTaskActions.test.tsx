@@ -10,10 +10,10 @@ import {
 } from "@/stores";
 import type { TaskBinding, TerminalStatusInfo } from "@/types";
 
-const killIdempotent = vi.fn(async () => undefined);
-const createSession = vi.fn(async () => "session-new");
-const submitToSession = vi.fn(async () => undefined);
-const getCurrentBranch = vi.fn(async () => "main");
+const killIdempotent = vi.fn(async (..._a: unknown[]) => undefined);
+const createSession = vi.fn(async (..._a: unknown[]) => "session-new");
+const submitToSession = vi.fn(async (..._a: unknown[]) => undefined);
+const getCurrentBranch = vi.fn(async (..._a: unknown[]) => "main");
 
 vi.mock("@/services", () => ({
   localHistoryService: { getCurrentBranch: (...a: unknown[]) => getCurrentBranch(...a) },

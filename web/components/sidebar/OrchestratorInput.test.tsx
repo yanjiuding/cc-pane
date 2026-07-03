@@ -15,8 +15,8 @@ import {
   resetTestDataCounter,
 } from "@/test/utils/testData";
 
-const createMock = vi.fn(async () => ({ id: "binding-1" }));
-const getCurrentBranch = vi.fn(async () => "main");
+const createMock = vi.fn(async (..._args: unknown[]) => ({ id: "binding-1" }));
+const getCurrentBranch = vi.fn(async (..._args: unknown[]) => "main");
 
 vi.mock("@/services", () => ({
   localHistoryService: {
