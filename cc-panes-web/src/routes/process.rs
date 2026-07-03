@@ -52,3 +52,7 @@ pub async fn kill_claude_processes(
         .map(Json)
         .map_err(service_error)
 }
+
+#[cfg(test)]
+#[path = "process_tests.rs"]
+mod process_tests;
