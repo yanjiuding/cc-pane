@@ -79,6 +79,7 @@
   "voiceStopRecording": "Stop recording",
   "voiceTranscribing": "Transcribing",
   "voiceNoSession": "Terminal session is not ready",
+  "launchProfileMismatch": "Launch profile \"{{profile}}\" doesn't apply to {{cli}}; using \"{{used}}\" instead (profile-level settings like YOLO may not take effect)",
   "voiceUnavailable": "This pane is unavailable",
   "voiceEnableInSettings": "Enable voice input in Settings first",
   "voiceApiKeyMissing": "Configure the current voice service API key first",

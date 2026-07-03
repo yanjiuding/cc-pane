@@ -13,6 +13,21 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// 启动配置解析诊断：当用户**显式选中**的 profile 存在、却因 CLI/运行环境不匹配被
+/// 静默丢弃（回落到默认配置或无）时携带的信息，供启动链路提示"所选配置未生效"。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileResolutionDiagnostic {
+    pub requested_profile_id: String,
+    pub requested_profile_name: String,
+    /// 请求的 profile 的 target_tools 不包含当前 CLI。
+    pub cli_mismatch: bool,
+    /// 请求的 profile 的 target_runtime 与当前运行环境不符。
+    pub runtime_mismatch: bool,
+    /// 实际回落使用的 profile（可能为 None，即无任何默认可用）。
+    pub used_profile_id: Option<String>,
+    pub used_profile_name: Option<String>,
+}
+
 pub struct LaunchProfileService {
     config_path: PathBuf,
     user_skills_dir: PathBuf,
@@ -343,6 +358,28 @@ impl LaunchProfileService {
         cli_tool: Option<&str>,
         runtime_kind: Option<&str>,
     ) -> Option<LaunchProfile> {
+        self.resolve_launch_profile_with_diagnostic(
+            profile_id,
+            workspace,
+            project_id,
+            cli_tool,
+            runtime_kind,
+        )
+        .0
+    }
+
+    /// 与 [`resolve_launch_profile`](Self::resolve_launch_profile) 相同的解析，但额外返回诊断：
+    /// 当**显式传入**的 `profile_id` 对应的 profile 存在、却因 CLI/运行环境不匹配未能被选中
+    /// （被静默丢弃、回落到默认或无）时，返回 `Some(ProfileResolutionDiagnostic)`。
+    /// 启动链路据此提示用户"所选配置未生效"，避免 YOLO 等 profile 级设置无声失效。
+    pub fn resolve_launch_profile_with_diagnostic(
+        &self,
+        profile_id: Option<&str>,
+        workspace: Option<&Workspace>,
+        project_id: Option<&str>,
+        cli_tool: Option<&str>,
+        runtime_kind: Option<&str>,
+    ) -> (Option<LaunchProfile>, Option<ProfileResolutionDiagnostic>) {
         let profiles = self.list_profiles();
         let runtime_kind = Self::normalize_runtime_ref(runtime_kind);
         let runtime_kind = runtime_kind.as_deref();
@@ -358,7 +395,7 @@ impl LaunchProfileService {
             .or(project_profile_id)
             .or_else(|| workspace.and_then(|ws| ws.launch_profile_id.as_deref()));
 
-        candidate_id
+        let resolved = candidate_id
             .and_then(|id| {
                 profiles
                     .iter()
@@ -381,7 +418,31 @@ impl LaunchProfileService {
                         Self::runtime_match_score(profile, runtime_kind).unwrap_or(0)
                     })
                     .cloned()
-            })
+            });
+
+        // 诊断：仅当用户「显式选中」了一个存在的 profile，但它因 CLI/runtime 不匹配
+        // 未能成为 resolved（被静默丢弃）时给出信号。默认/工作区回落不触发提示。
+        let diagnostic = profile_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .and_then(|id| profiles.iter().find(|profile| profile.id == id))
+            .and_then(|requested| {
+                let cli_ok = Self::profile_matches_cli(requested, cli_tool);
+                let runtime_ok = Self::profile_matches_runtime(requested, runtime_kind);
+                if cli_ok && runtime_ok {
+                    return None;
+                }
+                Some(ProfileResolutionDiagnostic {
+                    requested_profile_id: requested.id.clone(),
+                    requested_profile_name: requested.name.clone(),
+                    cli_mismatch: !cli_ok,
+                    runtime_mismatch: !runtime_ok,
+                    used_profile_id: resolved.as_ref().map(|profile| profile.id.clone()),
+                    used_profile_name: resolved.as_ref().map(|profile| profile.name.clone()),
+                })
+            });
+
+        (resolved, diagnostic)
     }
 
     pub fn selected_profile_compatibility(
@@ -1300,6 +1361,127 @@ mod tests {
 
         assert_eq!(resolution.provider_id.as_deref(), Some("explicit-provider"));
         assert!(!resolution.degraded);
+    }
+
+    fn mk_profile(
+        service: &LaunchProfileService,
+        name: &str,
+        tools: &[&str],
+        runtime: Option<&str>,
+        yolo: bool,
+        is_default: bool,
+    ) -> LaunchProfile {
+        service
+            .create_profile(LaunchProfileDraft {
+                name: Some(name.into()),
+                alias: None,
+                description: None,
+                provider_id: None,
+                adapter_options: Default::default(),
+                target_tools: tools.iter().map(|tool| tool.to_string()).collect(),
+                target_runtime: runtime.map(str::to_string),
+                yolo_mode: yolo,
+                mcp_policy: Default::default(),
+                skill_policy: Default::default(),
+                is_default,
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn diagnostic_none_when_explicit_profile_matches_cli() {
+        let service = test_service();
+        let codex = mk_profile(&service, "Codex YOLO", &["codex"], None, true, false);
+        let (resolved, diag) = service.resolve_launch_profile_with_diagnostic(
+            Some(&codex.id),
+            None,
+            None,
+            Some("codex"),
+            Some("local"),
+        );
+        assert_eq!(resolved.as_ref().map(|profile| profile.yolo_mode), Some(true));
+        assert!(diag.is_none());
+    }
+
+    #[test]
+    fn diagnostic_flags_cli_mismatch_and_yolo_not_applied() {
+        let service = test_service();
+        // 用户在 codex-only 的 profile 上开了 YOLO
+        let codex_yolo = mk_profile(&service, "Codex YOLO", &["codex"], None, true, false);
+        // 存在一个 claude 默认（无 YOLO）供回落
+        mk_profile(&service, "Claude Default", &["claude"], None, false, true);
+        // 显式选中 codex-yolo，但本次启动的是 claude
+        let (resolved, diag) = service.resolve_launch_profile_with_diagnostic(
+            Some(&codex_yolo.id),
+            None,
+            None,
+            Some("claude"),
+            Some("local"),
+        );
+        // 关键：静默回落到 claude 默认 → YOLO 未生效
+        assert_eq!(resolved.as_ref().map(|profile| profile.yolo_mode), Some(false));
+        let diag = diag.expect("显式 profile 因 CLI 不匹配被丢弃时应给出诊断");
+        assert!(diag.cli_mismatch);
+        assert!(!diag.runtime_mismatch);
+        assert_eq!(diag.requested_profile_id, codex_yolo.id);
+        assert_eq!(diag.used_profile_name.as_deref(), Some("Claude Default"));
+    }
+
+    #[test]
+    fn diagnostic_flags_runtime_mismatch() {
+        let service = test_service();
+        let local_only =
+            mk_profile(&service, "Codex Local", &["codex"], Some("local"), true, false);
+        let (_resolved, diag) = service.resolve_launch_profile_with_diagnostic(
+            Some(&local_only.id),
+            None,
+            None,
+            Some("codex"),
+            Some("wsl"),
+        );
+        let diag = diag.expect("显式 profile 因 runtime 不匹配被丢弃时应给出诊断");
+        assert!(diag.runtime_mismatch);
+        assert!(!diag.cli_mismatch);
+    }
+
+    #[test]
+    fn diagnostic_none_without_explicit_selection() {
+        let service = test_service();
+        // 只有默认、无显式选择：即便走默认回落也不应打扰用户
+        mk_profile(&service, "Claude Default", &["claude"], None, false, true);
+        let (_resolved, diag) = service.resolve_launch_profile_with_diagnostic(
+            None,
+            None,
+            None,
+            Some("claude"),
+            Some("local"),
+        );
+        assert!(diag.is_none());
+    }
+
+    #[test]
+    fn per_cli_defaults_apply_yolo_independently() {
+        // 印证用户想要的用法：codex 默认开 YOLO、claude 默认关，各自独立生效、互不干扰。
+        let service = test_service();
+        mk_profile(&service, "Codex Default", &["codex"], None, true, true);
+        mk_profile(&service, "Claude Default", &["claude"], None, false, true);
+        let (codex_res, codex_diag) = service.resolve_launch_profile_with_diagnostic(
+            None,
+            None,
+            None,
+            Some("codex"),
+            Some("local"),
+        );
+        let (claude_res, claude_diag) = service.resolve_launch_profile_with_diagnostic(
+            None,
+            None,
+            None,
+            Some("claude"),
+            Some("local"),
+        );
+        assert_eq!(codex_res.map(|profile| profile.yolo_mode), Some(true));
+        assert_eq!(claude_res.map(|profile| profile.yolo_mode), Some(false));
+        assert!(codex_diag.is_none() && claude_diag.is_none());
     }
 
     #[test]

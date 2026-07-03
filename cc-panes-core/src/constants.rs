@@ -46,6 +46,9 @@ pub mod events {
     /// 会话的 agent resume id 已确定性获得（Claude 发号 / Codex OSC 标题捕获）。
     /// 后端监听此事件写入 launch_history 并转发 history-updated 给前端。
     pub const TERMINAL_RESUME_ID_DETECTED: &str = "terminal-resume-id-detected";
+    /// 启动时的非致命警告（前端 toast 提示）。当前用于：显式选中的启动配置因
+    /// CLI/运行环境不匹配被丢弃、已回落到默认配置（YOLO 等 profile 级设置可能未生效）。
+    pub const TERMINAL_LAUNCH_WARNING: &str = "terminal-launch-warning";
 }
 
 /// 终端默认值

@@ -56,6 +56,7 @@ import { useWorkspaceWatcher } from "@/hooks/useWorkspaceWatcher";
 import { useOrchestratorListener } from "@/hooks/useOrchestratorListener";
 import useOrchestratorSync from "@/hooks/useOrchestratorSync";
 import useLayoutSwitcherSync from "@/hooks/useLayoutSwitcherSync";
+import { useLaunchWarnings } from "@/hooks/useLaunchWarnings";
 import { historyService, terminalService, localHistoryService, checkUpdateSilent, markTabReclaimed as popupMarkReclaimed, getPoppedTabs, sessionRestoreService, layoutSnapshotService, providerService } from "@/services";
 import { terminalRestoreLaunchQueue } from "@/components/panes/terminalRestoreQueue";
 import { waitForTauri } from "@/utils";
@@ -559,6 +560,9 @@ function MainApp() {
 
   // Layout switcher 浮窗与主窗布局状态同步。
   useLayoutSwitcherSync();
+
+  // 启动非致命警告（如所选启动配置因 CLI/环境不匹配被回落）toast 提示。
+  useLaunchWarnings();
 
   // 后端桌面通知成功发出时，播放应用内提示音补足系统通知静音场景。
   useEffect(() => {

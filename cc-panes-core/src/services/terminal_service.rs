@@ -1227,15 +1227,20 @@ impl TerminalService {
         } else {
             "local"
         };
-        let resolved_profile = self.launch_profile_service.read().as_ref().and_then(|svc| {
-            svc.resolve_launch_profile(
-                launch_profile_id,
-                resolved_workspace.as_ref(),
-                None,
-                Some(cli_tool.as_id()),
-                Some(runtime_kind),
-            )
-        });
+        let (resolved_profile, profile_diagnostic) = self
+            .launch_profile_service
+            .read()
+            .as_ref()
+            .map(|svc| {
+                svc.resolve_launch_profile_with_diagnostic(
+                    launch_profile_id,
+                    resolved_workspace.as_ref(),
+                    None,
+                    Some(cli_tool.as_id()),
+                    Some(runtime_kind),
+                )
+            })
+            .unwrap_or((None, None));
         let profile_provider_id = resolved_profile
             .as_ref()
             .and_then(|profile| profile.provider_id.as_deref());
@@ -1302,6 +1307,38 @@ impl TerminalService {
             .as_ref()
             .map(|profile| profile.yolo_mode)
             .unwrap_or(false);
+        // 方案 A：显式选中的启动配置因 CLI/运行环境不匹配被静默丢弃时，不再无声回落——
+        // 记录 warn 并向前端广播提示，避免 YOLO 等 profile 级设置无声失效。
+        if let Some(diagnostic) = profile_diagnostic.as_ref() {
+            warn!(
+                requested_profile = %diagnostic.requested_profile_name,
+                cli = cli_tool.as_id(),
+                runtime = runtime_kind,
+                cli_mismatch = diagnostic.cli_mismatch,
+                runtime_mismatch = diagnostic.runtime_mismatch,
+                used_profile = diagnostic.used_profile_name.as_deref().unwrap_or("<none>"),
+                "所选启动配置不适用于当前 CLI/运行环境，已回落到默认配置（YOLO 等 profile 级设置可能未生效）"
+            );
+            if let Some(emitter) = self.emitter.read().as_ref() {
+                let _ = emitter.emit(
+                    EV::TERMINAL_LAUNCH_WARNING,
+                    serde_json::json!({
+                        "kind": "profileMismatch",
+                        "launchId": launch_id,
+                        "projectPath": project_path,
+                        "cliTool": cli_tool.as_id(),
+                        "runtimeKind": runtime_kind,
+                        "requestedProfileId": diagnostic.requested_profile_id,
+                        "requestedProfileName": diagnostic.requested_profile_name,
+                        "cliMismatch": diagnostic.cli_mismatch,
+                        "runtimeMismatch": diagnostic.runtime_mismatch,
+                        "usedProfileId": diagnostic.used_profile_id,
+                        "usedProfileName": diagnostic.used_profile_name,
+                        "yoloEffective": effective_yolo_mode,
+                    }),
+                );
+            }
+        }
         let profile_skill_prompt = self
             .launch_profile_service
             .read()
