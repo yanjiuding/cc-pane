@@ -1,0 +1,142 @@
+import "@/i18n";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
+import { settingsService } from "@/services";
+import { useCliTools } from "@/hooks/useCliTools";
+import type { CliLauncherSettings, CliToolInfo } from "@/types";
+import CliLaunchersSection from "./CliLaunchersSection";
+
+vi.mock("@/hooks/useCliTools", () => ({
+  useCliTools: vi.fn(),
+}));
+
+vi.mock("@/services/settingsService", () => ({
+  settingsService: {
+    testCliLauncher: vi.fn(),
+  },
+}));
+
+vi.mock("sonner", () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+  },
+}));
+
+function createTool(overrides: Partial<CliToolInfo> = {}): CliToolInfo {
+  return {
+    id: "claude",
+    displayName: "Claude Code",
+    executable: "claude",
+    installed: true,
+    path: "C:/bin/claude.cmd",
+    version: "1.0.0",
+    versionArgs: ["--version"],
+    ...overrides,
+  } as CliToolInfo;
+}
+
+function mockTools(tools: CliToolInfo[], loading = false) {
+  vi.mocked(useCliTools).mockReturnValue({
+    tools,
+    loading,
+    refresh: vi.fn(),
+    getToolById: (id: string) => tools.find((t) => t.id === id),
+    installedTools: tools.filter((t) => t.installed),
+  });
+}
+
+describe("CliLaunchersSection", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTools([createTool()]);
+  });
+
+  it("shows a loading hint while tools are being fetched", () => {
+    mockTools([], true);
+    render(<CliLaunchersSection value={{ overrides: {} }} onChange={vi.fn()} />);
+
+    expect(screen.getByText(/加载中|Loading/i)).toBeInTheDocument();
+  });
+
+  it("renders each tool with its installed badge and default command hint", () => {
+    mockTools([
+      createTool(),
+      createTool({ id: "codex", displayName: "Codex CLI", executable: "codex", installed: false, path: null as unknown as string }),
+    ]);
+    render(<CliLaunchersSection value={{ overrides: {} }} onChange={vi.fn()} />);
+
+    expect(screen.getByText("Claude Code")).toBeInTheDocument();
+    expect(screen.getByText("Codex CLI")).toBeInTheDocument();
+    expect(screen.getByText("C:/bin/claude.cmd")).toBeInTheDocument();
+  });
+
+  it("adds an override when a custom command is typed", () => {
+    const onChange = vi.fn();
+    render(<CliLaunchersSection value={{ overrides: {} }} onChange={onChange} />);
+
+    fireEvent.change(screen.getByPlaceholderText("claude"), {
+      target: { value: "node C:/dev/claude.js" },
+    });
+
+    expect(onChange).toHaveBeenCalledWith({
+      overrides: { claude: { command: "node C:/dev/claude.js" } },
+    });
+  });
+
+  it("removes the override when the command is cleared or reset", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const value: CliLauncherSettings = { overrides: { claude: { command: "custom" } } };
+    render(<CliLaunchersSection value={value} onChange={onChange} />);
+
+    fireEvent.change(screen.getByDisplayValue("custom"), { target: { value: "   " } });
+    expect(onChange).toHaveBeenLastCalledWith({ overrides: {} });
+
+    const resetButton = screen.getAllByRole("button")[0];
+    await user.click(resetButton);
+    expect(onChange).toHaveBeenLastCalledWith({ overrides: {} });
+  });
+
+  it("disables reset when there is no override", () => {
+    render(<CliLaunchersSection value={{ overrides: {} }} onChange={vi.fn()} />);
+
+    expect(screen.getAllByRole("button")[0]).toBeDisabled();
+  });
+
+  it("tests the override command and reports success", async () => {
+    const user = userEvent.setup();
+    vi.mocked(settingsService.testCliLauncher).mockResolvedValue("claude 1.0.0" as never);
+    render(
+      <CliLaunchersSection
+        value={{ overrides: { claude: { command: "my-claude" } } }}
+        onChange={vi.fn()}
+      />,
+    );
+
+    const buttons = screen.getAllByRole("button");
+    await user.click(buttons[buttons.length - 1]);
+
+    await waitFor(() =>
+      expect(settingsService.testCliLauncher).toHaveBeenCalledWith("my-claude", ["--version"]),
+    );
+    expect(toast.success).toHaveBeenCalled();
+  });
+
+  it("falls back to the executable and --version when nothing is overridden", async () => {
+    const user = userEvent.setup();
+    mockTools([createTool({ versionArgs: [] })]);
+    vi.mocked(settingsService.testCliLauncher).mockRejectedValue(new Error("not found"));
+    render(<CliLaunchersSection value={{ overrides: {} }} onChange={vi.fn()} />);
+
+    const buttons = screen.getAllByRole("button");
+    await user.click(buttons[buttons.length - 1]);
+
+    await waitFor(() =>
+      expect(settingsService.testCliLauncher).toHaveBeenCalledWith("claude", ["--version"]),
+    );
+    expect(toast.error).toHaveBeenCalled();
+  });
+});
