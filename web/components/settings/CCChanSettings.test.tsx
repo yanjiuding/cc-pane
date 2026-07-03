@@ -1,0 +1,112 @@
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FALLBACK_PET, useCCChanStore } from "@/stores/useCCChanStore";
+import type { CCChanSettings as CCChanSettingsValue } from "@/ccchan/types";
+import CCChanSettings from "./CCChanSettings";
+
+function createValue(overrides: Partial<CCChanSettingsValue> = {}): CCChanSettingsValue {
+  return {
+    aiEngine: "claude",
+    defaultPetId: FALLBACK_PET.id,
+    autoStart: false,
+    soundEnabled: true,
+    windowVisible: true,
+    windowX: 100,
+    windowY: 200,
+    ...overrides,
+  } as CCChanSettingsValue;
+}
+
+const loadMock = vi.fn(async () => {});
+
+describe("CCChanSettings", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useCCChanStore.setState({ pets: [FALLBACK_PET], load: loadMock });
+  });
+
+  it("loads pets from the store on mount", () => {
+    render(<CCChanSettings value={createValue()} onChange={vi.fn()} />);
+
+    expect(loadMock).toHaveBeenCalled();
+  });
+
+  it("switches the AI engine and highlights the active option", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<CCChanSettings value={createValue()} onChange={onChange} />);
+
+    await user.click(screen.getByRole("button", { name: "Codex" }));
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ aiEngine: "codex" }));
+  });
+
+  it("lists store pets in the role select and emits selection changes", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    useCCChanStore.setState({
+      pets: [
+        FALLBACK_PET,
+        { ...FALLBACK_PET, id: "neko", displayName: "Neko", description: "猫猫" },
+      ],
+      load: loadMock,
+    });
+    render(<CCChanSettings value={createValue()} onChange={onChange} />);
+
+    const select = screen.getByRole("combobox");
+    expect(select.querySelectorAll("option")).toHaveLength(2);
+
+    await user.selectOptions(select, "neko");
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ defaultPetId: "neko" }));
+  });
+
+  it("falls back to FALLBACK_PET when the store has no pets", () => {
+    useCCChanStore.setState({ pets: [], load: loadMock });
+    render(<CCChanSettings value={createValue()} onChange={vi.fn()} />);
+
+    const select = screen.getByRole("combobox");
+    const options = Array.from(select.querySelectorAll("option"));
+    expect(options).toHaveLength(1);
+    expect(options[0]).toHaveValue(FALLBACK_PET.id);
+  });
+
+  it("toggles autoStart / soundEnabled / windowVisible checkboxes", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<CCChanSettings value={createValue()} onChange={onChange} />);
+
+    const checkboxes = screen.getAllByRole("checkbox");
+    expect(checkboxes).toHaveLength(3);
+
+    await user.click(checkboxes[0]);
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ autoStart: true }));
+
+    await user.click(checkboxes[1]);
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ soundEnabled: false }));
+
+    await user.click(checkboxes[2]);
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ windowVisible: false }));
+  });
+
+  it("shows the current window position and resets it to null", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<CCChanSettings value={createValue()} onChange={onChange} />);
+
+    expect(screen.getByText(/x: 100 · y: 200/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "重置位置" }));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({ windowX: null, windowY: null }),
+    );
+  });
+
+  it("renders a dash placeholder when the position is unset", () => {
+    render(
+      <CCChanSettings value={createValue({ windowX: null, windowY: null })} onChange={vi.fn()} />,
+    );
+
+    expect(screen.getByText(/x: - · y: -/)).toBeInTheDocument();
+  });
+});
