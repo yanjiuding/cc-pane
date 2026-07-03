@@ -70,3 +70,7 @@ pub async fn set_project_cli_hook_enabled(
         .map_err(service_error)?;
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+#[path = "system_tests.rs"]
+mod system_tests;

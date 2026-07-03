@@ -52,3 +52,7 @@ pub async fn list_codex_sessions(
     };
     result.map(Json).map_err(service_error)
 }
+
+#[cfg(test)]
+#[path = "agent_sessions_tests.rs"]
+mod agent_sessions_tests;
