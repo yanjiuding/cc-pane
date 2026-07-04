@@ -6,6 +6,7 @@ trigger: |
   - 已经有 plan（写了或刚写），准备让 Codex 按 plan 改代码
   不触发：
   - 用户想让 Claude 自己改代码 → 不走本 skill
+  - 想派给另一个 Claude Code worker → /ccbook:plantocc
   - plan 还没做评审且涉及高风险 → 先走 /ccbook:planreview 评审
 ---
 

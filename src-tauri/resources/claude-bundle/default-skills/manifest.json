@@ -21,6 +21,7 @@
     { "name": "built-in-spec", "file": "built-in-spec.md" },
     { "name": "openspec", "file": "openspec.md" },
     { "name": "plantocodex", "file": "plantocodex.md" },
+    { "name": "plantocc", "file": "plantocc.md" },
     { "name": "planreview", "file": "planreview.md" },
     { "name": "plan2codexwsl", "file": "plan2codexwsl.md" },
     { "name": "cleanup-processes", "file": "cleanup-processes.md" },
