@@ -174,7 +174,10 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       onboardingCompleted: false,
       defaultCliTool: "claude",
       launchFavorites: getDefaultSidebarFavoriteLaunchActionIds(),
-      hideNonFavoriteLaunchActions: false,
+      // 默认收起非常用启动项：新用户初次登录只见收藏的 3 条（终端 / claude / codex），
+      // 侧边栏"隐藏非常用菜单"开关可随时展开全部 7 个 CLI × 环境变体，
+      // 避免一上来就是 ~30 条密密麻麻的长列表。老用户的已存设置不受影响。
+      hideNonFavoriteLaunchActions: true,
     },
     notification: {
       enabled: true,

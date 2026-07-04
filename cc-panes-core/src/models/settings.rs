@@ -730,7 +730,9 @@ impl Default for GeneralSettings {
             onboarding_completed: false,
             default_cli_tool: default_cli_tool(),
             launch_favorites: default_launch_favorites(),
-            hide_non_favorite_launch_actions: false,
+            // 新装用户默认收起非常用启动项（只见收藏的几条）。字段上的
+            // #[serde(default)] 保持 false：老 config.toml 缺该键时行为不变。
+            hide_non_favorite_launch_actions: true,
         }
     }
 }
