@@ -1726,12 +1726,12 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       if (fontChanged) {
         // WebGL caches glyphs in a texture atlas keyed by the previous font; if
         // it is not cleared the new font renders from stale (blurry/garbled)
-        // glyphs. Wait for the new font to load, then rebuild the atlas.
-        const ready =
-          typeof document !== "undefined" && document.fonts?.ready
-            ? document.fonts.ready
-            : Promise.resolve();
-        void ready
+        // glyphs. `document.fonts.ready` alone is not enough here: canvas
+        // measurement does not trigger @font-face lazy-loading, so a
+        // not-yet-requested family leaves `ready` already resolved and the
+        // atlas rebuilds from the fallback font. Explicitly request the
+        // family first (same path as terminal creation).
+        void waitForTerminalFont(terminalFontSize, terminalFontFamily)
           .then(() => {
             if (terminalInstanceRef.current !== term) return;
             rendererControllerRef.current?.clearTextureAtlas("settings.font-change");
