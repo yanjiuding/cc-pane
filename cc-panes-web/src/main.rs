@@ -342,13 +342,7 @@ async fn main() -> anyhow::Result<()> {
 
     let app = routes::build_router(state);
 
-    let host = args.host.unwrap_or_else(|| {
-        if loaded_settings.web_access.allow_lan && loaded_settings.web_access.auth_required() {
-            "0.0.0.0".to_string()
-        } else {
-            "127.0.0.1".to_string()
-        }
-    });
+    let host = resolve_bind_host(args.host, &loaded_settings.web_access)?;
     let addr: SocketAddr = format!("{host}:{}", args.port).parse()?;
     info!(addr = %addr, cwd = cwd_str, "CC-Panes Web starting");
 
@@ -361,6 +355,37 @@ async fn main() -> anyhow::Result<()> {
     )
     .await?;
     Ok(())
+}
+
+/// 决定监听地址。安全约束：非回环绑定必须已启用认证并配置密码——
+/// 无论来自设置（allow_lan）还是显式 `--host`，后者此前可绕过校验（硬失败而非静默回退，
+/// 避免"以为暴露成功/实际没暴露"的认知错位）。
+fn resolve_bind_host(
+    explicit: Option<String>,
+    web_access: &cc_panes_core::models::settings::WebAccessSettings,
+) -> anyhow::Result<String> {
+    let is_loopback =
+        |host: &str| matches!(host, "127.0.0.1" | "::1" | "[::1]" | "localhost");
+    match explicit {
+        None => {
+            if web_access.allow_lan && web_access.auth_required() {
+                Ok("0.0.0.0".to_string())
+            } else {
+                Ok("127.0.0.1".to_string())
+            }
+        }
+        Some(host) if is_loopback(host.trim()) => Ok(host),
+        Some(host) => {
+            if web_access.auth_required() {
+                Ok(host)
+            } else {
+                anyhow::bail!(
+                    "refusing to bind non-loopback host '{host}': web password is not configured. \
+                     Enable authentication and set a password in desktop settings, or remove --host."
+                )
+            }
+        }
+    }
 }
 
 struct BackendConfig {
@@ -486,6 +511,57 @@ mod tests {
             cli_registry,
             daemon_manifest,
         }
+    }
+
+    fn web_access_with_password(
+        allow_lan: bool,
+    ) -> cc_panes_core::models::settings::WebAccessSettings {
+        let mut settings = cc_panes_core::models::settings::WebAccessSettings {
+            allow_lan,
+            auth_enabled: true,
+            ..Default::default()
+        };
+        settings.set_password("test-password").expect("set password");
+        settings
+    }
+
+    #[test]
+    fn resolve_bind_host_defaults_follow_settings() {
+        let no_auth = cc_panes_core::models::settings::WebAccessSettings::default();
+        assert_eq!(
+            resolve_bind_host(None, &no_auth).expect("resolve"),
+            "127.0.0.1"
+        );
+        assert_eq!(
+            resolve_bind_host(None, &web_access_with_password(true)).expect("resolve"),
+            "0.0.0.0"
+        );
+    }
+
+    #[test]
+    fn resolve_bind_host_allows_explicit_loopback_without_auth() {
+        let no_auth = cc_panes_core::models::settings::WebAccessSettings::default();
+        assert_eq!(
+            resolve_bind_host(Some("127.0.0.1".to_string()), &no_auth).expect("resolve"),
+            "127.0.0.1"
+        );
+    }
+
+    #[test]
+    fn resolve_bind_host_rejects_explicit_non_loopback_without_auth() {
+        let no_auth = cc_panes_core::models::settings::WebAccessSettings::default();
+        let error = resolve_bind_host(Some("0.0.0.0".to_string()), &no_auth)
+            .expect_err("must refuse non-loopback bind without password");
+        assert!(error.to_string().contains("web password is not configured"));
+    }
+
+    #[test]
+    fn resolve_bind_host_allows_explicit_non_loopback_with_auth() {
+        assert_eq!(
+            resolve_bind_host(Some("0.0.0.0".to_string()), &web_access_with_password(false))
+                .expect("resolve"),
+            "0.0.0.0"
+        );
     }
 
     #[test]
