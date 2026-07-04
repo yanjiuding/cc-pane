@@ -55,6 +55,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -75,6 +76,13 @@ jobs:
 
       - name: Check formatting
         run: cargo fmt --all -- --check
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # copy-hook.cjs 会校验 dist/index.html 存在（web-dist 资源），必须先构建前端
+      - name: Build frontend
+        run: npm run build
 
       - name: Build hook binary
         run: node scripts/build-hook.cjs --release
