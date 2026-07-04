@@ -1,3 +1,4 @@
+use super::error::AppError;
 use std::io;
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -21,23 +22,90 @@ pub const GIT_CHECKOUT_TIMEOUT: Duration = Duration::from_secs(60);
 ///
 /// 环境变量相比命令行参数（`ps`/任务管理器/审计日志可见）暴露面也更小。
 /// 仅 https 场景返回非空；http 明文传输不注入，避免凭证走裸 HTTP。
+///
+/// header 以 `http.https://<host>/.extraHeader` 形式限定到目标主机——
+/// 未限定的 `http.extraHeader` 会随该次 git 进程的所有 HTTP 请求发送，
+/// 跨主机 302 重定向（企业 Git → CDN/镜像）时凭证会泄漏给第三方主机。
 pub fn git_https_credential_env(url: &str, user: &str, pass: &str) -> Vec<(String, String)> {
     use base64::Engine;
-    if !url.starts_with("https://") || user.is_empty() || pass.is_empty() {
+    if user.is_empty() || pass.is_empty() {
         return Vec::new();
     }
+    let Ok(parsed) = url::Url::parse(url) else {
+        return Vec::new();
+    };
+    if parsed.scheme() != "https" {
+        return Vec::new();
+    }
+    let Some(host) = parsed.host_str() else {
+        return Vec::new();
+    };
+    let host_with_port = match parsed.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    };
     let token = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{pass}"));
     vec![
         ("GIT_CONFIG_COUNT".to_string(), "1".to_string()),
         (
             "GIT_CONFIG_KEY_0".to_string(),
-            "http.extraHeader".to_string(),
+            format!("http.https://{host_with_port}/.extraHeader"),
         ),
         (
             "GIT_CONFIG_VALUE_0".to_string(),
             format!("Authorization: Basic {token}"),
         ),
     ]
+}
+
+/// 为 git clone 准备（干净 URL, 认证环境变量）。
+///
+/// 统一处理两种凭证来源：显式的 username/password 字段，以及用户直接粘贴的
+/// `https://user:pass@host/repo.git` 内嵌形式。内嵌凭证会被剥离并转入
+/// `Authorization` header——否则 git 会把带口令的 URL 原样写进克隆仓库的
+/// `.git/config`（`remote.origin.url`），明文长期落盘。显式字段优先于内嵌。
+///
+/// 凭证 + 非 https 协议直接报错（而不是静默丢弃凭证后让 git 以晦涩的
+/// "could not read Username" 失败）。
+pub fn prepare_git_clone_auth(
+    url: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> Result<(String, Vec<(String, String)>), AppError> {
+    let mut parsed =
+        url::Url::parse(url).map_err(|e| AppError::from(format!("Invalid Git URL: {e}")))?;
+
+    let decode = |s: &str| {
+        urlencoding::decode(s)
+            .map(|c| c.into_owned())
+            .unwrap_or_else(|_| s.to_string())
+    };
+    let embedded_user = (!parsed.username().is_empty()).then(|| decode(parsed.username()));
+    let embedded_pass = parsed.password().map(decode);
+    let _ = parsed.set_username("");
+    let _ = parsed.set_password(None);
+    let clean_url = parsed.to_string();
+
+    let user = username
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or(embedded_user);
+    let pass = password
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or(embedded_pass);
+    let (Some(user), Some(pass)) = (user, pass) else {
+        return Ok((clean_url, Vec::new()));
+    };
+
+    if parsed.scheme() != "https" {
+        return Err(AppError::from(
+            "Git credentials are only supported for HTTPS URLs (plain HTTP would send them in cleartext)"
+                .to_string(),
+        ));
+    }
+    let env = git_https_credential_env(&clean_url, &user, &pass);
+    Ok((clean_url, env))
 }
 
 /// 把 URL 里可能内嵌的 `user:pass@` 凭证脱敏后再进日志。
@@ -94,13 +162,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn credential_env_uses_basic_auth_header_not_url() {
+    fn credential_env_uses_host_scoped_basic_auth_header_not_url() {
         let env = git_https_credential_env("https://github.com/o/r.git", "user", "pat");
         assert_eq!(env.len(), 3);
         assert_eq!(env[0], ("GIT_CONFIG_COUNT".into(), "1".into()));
+        // host 限定：跨主机 redirect 时不外发（对比裸 http.extraHeader）
         assert_eq!(
             env[1],
-            ("GIT_CONFIG_KEY_0".into(), "http.extraHeader".into())
+            (
+                "GIT_CONFIG_KEY_0".into(),
+                "http.https://github.com/.extraHeader".into()
+            )
         );
         // base64("user:pat") = dXNlcjpwYXQ=
         assert_eq!(
@@ -113,10 +185,69 @@ mod tests {
     }
 
     #[test]
+    fn credential_env_keeps_non_default_port_in_scope() {
+        let env = git_https_credential_env("https://git.corp.example:8443/o/r.git", "u", "p");
+        assert_eq!(
+            env[1],
+            (
+                "GIT_CONFIG_KEY_0".into(),
+                "http.https://git.corp.example:8443/.extraHeader".into()
+            )
+        );
+    }
+
+    #[test]
     fn credential_env_empty_for_http_or_missing_creds() {
         assert!(git_https_credential_env("http://host/r.git", "u", "p").is_empty());
         assert!(git_https_credential_env("https://host/r.git", "", "p").is_empty());
         assert!(git_https_credential_env("https://host/r.git", "u", "").is_empty());
+    }
+
+    #[test]
+    fn prepare_auth_strips_embedded_userinfo_into_header() {
+        let (clean_url, env) =
+            prepare_git_clone_auth("https://user:s%40cret@github.com/o/r.git", None, None).unwrap();
+        // URL 里的凭证被剥离，git 不会把口令写进 .git/config
+        assert_eq!(clean_url, "https://github.com/o/r.git");
+        assert_eq!(env.len(), 3);
+        // percent-encoded 的口令解码后再进 Basic token: base64("user:s@cret")
+        use base64::Engine;
+        let expected = base64::engine::general_purpose::STANDARD.encode("user:s@cret".as_bytes());
+        assert_eq!(env[2].1, format!("Authorization: Basic {expected}"));
+    }
+
+    #[test]
+    fn prepare_auth_explicit_fields_win_over_embedded() {
+        let (clean_url, env) = prepare_git_clone_auth(
+            "https://old:old@github.com/o/r.git",
+            Some("newuser"),
+            Some("newpass"),
+        )
+        .unwrap();
+        assert_eq!(clean_url, "https://github.com/o/r.git");
+        use base64::Engine;
+        let expected = base64::engine::general_purpose::STANDARD.encode("newuser:newpass");
+        assert_eq!(env[2].1, format!("Authorization: Basic {expected}"));
+    }
+
+    #[test]
+    fn prepare_auth_no_credentials_passes_url_through() {
+        let (clean_url, env) =
+            prepare_git_clone_auth("https://github.com/o/r.git", None, None).unwrap();
+        assert_eq!(clean_url, "https://github.com/o/r.git");
+        assert!(env.is_empty());
+        // 空字符串字段视同未提供
+        let (_, env) =
+            prepare_git_clone_auth("https://github.com/o/r.git", Some(""), Some("")).unwrap();
+        assert!(env.is_empty());
+    }
+
+    #[test]
+    fn prepare_auth_rejects_credentials_over_plain_http() {
+        assert!(prepare_git_clone_auth("http://host/r.git", Some("u"), Some("p")).is_err());
+        assert!(prepare_git_clone_auth("http://u:p@host/r.git", None, None).is_err());
+        // 无凭证的 http 仍放行（validate_git_url 允许 http）
+        assert!(prepare_git_clone_auth("http://host/r.git", None, None).is_ok());
     }
 
     #[test]

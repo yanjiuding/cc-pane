@@ -8,7 +8,7 @@ use axum::{
 use cc_panes_core::{
     services::WorktreeInfo,
     utils::{
-        git_https_credential_env, output_with_timeout, validate_git_url, validate_path, AppResult,
+        output_with_timeout, prepare_git_clone_auth, validate_git_url, validate_path, AppResult,
         GIT_LOCAL_TIMEOUT, GIT_NETWORK_TIMEOUT,
     },
 };
@@ -158,14 +158,16 @@ fn clone_repository(request: GitCloneRequest) -> AppResult<String> {
         args.push("1".into());
     }
 
-    // 凭证经 GIT_CONFIG_* 环境变量注入，URL 保持干净（不落 .git/config、不进命令行）
-    let credential_env = match (&request.username, &request.password) {
-        (Some(user), Some(pass)) => git_https_credential_env(&request.url, user, pass),
-        _ => Vec::new(),
-    };
+    // 凭证经 GIT_CONFIG_* 环境变量注入 host 限定的 Authorization header，
+    // URL 内嵌的 user:pass@ 也会被剥离（不落 .git/config、不进命令行）
+    let (clean_url, credential_env) = prepare_git_clone_auth(
+        &request.url,
+        request.username.as_deref(),
+        request.password.as_deref(),
+    )?;
 
     let clone_path_str = clone_path.to_string_lossy().to_string();
-    args.push(request.url.clone());
+    args.push(clean_url);
     args.push(clone_path_str.clone());
 
     let output = output_with_timeout(

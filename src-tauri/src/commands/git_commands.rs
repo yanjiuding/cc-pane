@@ -189,16 +189,16 @@ pub async fn git_clone(app_handle: AppHandle, request: GitCloneRequest) -> AppRe
         args.push("1".into());
     }
 
-    // 凭证经 GIT_CONFIG_* 环境变量走 Authorization header（见
-    // git_https_credential_env），URL 保持干净——不落 .git/config、不进命令行。
-    let credential_env = match (&request.username, &request.password) {
-        (Some(user), Some(pass)) => {
-            cc_panes_core::utils::git_https_credential_env(&request.url, user, pass)
-        }
-        _ => Vec::new(),
-    };
+    // 凭证经 GIT_CONFIG_* 环境变量走 host 限定的 Authorization header（见
+    // prepare_git_clone_auth），URL 内嵌的 user:pass@ 也会被剥离——保证
+    // 凭证不落 .git/config、不进命令行。
+    let (clean_url, credential_env) = cc_panes_core::utils::prepare_git_clone_auth(
+        &request.url,
+        request.username.as_deref(),
+        request.password.as_deref(),
+    )?;
 
-    args.push(request.url.clone());
+    args.push(clean_url);
     let clone_path_str = clone_path.to_string_lossy().to_string();
     args.push(clone_path_str.clone());
 
