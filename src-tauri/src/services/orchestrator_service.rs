@@ -3804,8 +3804,15 @@ impl McpToolHandler {
     #[tool]
     async fn close_file(&self, Parameters(params): Parameters<McpCloseFileParams>) -> String {
         info!(file = %params.file_path, "mcp::close_file");
+        // open_file 发给前端的是 canonicalize 后的路径，前端按字符串精确匹配 tab；
+        // 这里必须做同样的规范化，否则分隔符/大小写/相对路径差异会导致关不掉。
+        // 文件已被删除时 canonicalize 会失败，此时用原始路径尽力匹配。
+        let file_path = std::path::Path::new(&params.file_path)
+            .canonicalize()
+            .map(|p| strip_unc_prefix(p.to_string_lossy().to_string()))
+            .unwrap_or_else(|_| params.file_path.clone());
         let event = OrchestratorCloseFileEvent {
-            file_path: params.file_path.clone(),
+            file_path: file_path.clone(),
         };
         let _ = self
             .state
@@ -3813,7 +3820,7 @@ impl McpToolHandler {
             .emit("orchestrator-close-file", &event);
         serde_json::json!({
             "success": true,
-            "filePath": params.file_path,
+            "filePath": file_path,
         })
         .to_string()
     }
