@@ -6,7 +6,7 @@ trigger: |
   - 已经有 plan（写了或刚写），准备让 Codex 按 plan 改代码
   不触发：
   - 用户想让 Claude 自己改代码 → 不走本 skill
-  - plan 还没做评审且涉及高风险 → 先走 /ccpanes:plan2codexwsl 评审
+  - plan 还没做评审且涉及高风险 → 先走 /ccpanes:planreview 评审
 ---
 
 # plantocodex — Plan → Codex 执行交接
@@ -27,13 +27,13 @@ trigger: |
 **不用**：
 - 用户希望 Claude 自己改代码
 - 小到不值得一个新 Codex 实例（< 50 行简单 patch）
-- Plan 还没经过同行评审且涉及高风险 → 先走 `/ccpanes:plan2codexwsl` 评审，再用本 skill 派实现
+- Plan 还没经过同行评审且涉及高风险 → 先走 `/ccpanes:planreview` 评审，再用本 skill 派实现
 
 ---
 
 ## 前置检查
 
-1. **plan 文件已落盘**？没有则先按 plan2codexwsl 的"plan mode 与 Write 的单一路径策略"写到 `.claude/plans/<topic>.md`。记 `<plan_path>`。
+1. **plan 文件已落盘**？没有则先按 planreview 的"plan mode 与 Write 的单一路径策略"写到 `.claude/plans/<topic>.md`。记 `<plan_path>`。
 2. **ccpanes 已注册当前项目 + 目标 worktree**？`mcp__ccpanes__list_projects` 确认。WSL 启动要用其中已登记的 UNC 路径（`\\wsl.localhost\Ubuntu\...`）或 `/mnt/...`。
 3. **当前 Claude 自己的 sessionId**？读环境变量 `CC_PANES_PTY_SESSION_ID`。这是注册 leader 的前提，否则 worker 反馈推不到你这边。
 
@@ -216,18 +216,18 @@ git diff <worktree-or-main>
 
 ---
 
-## 与 plan2codexwsl 的区别
+## 与 planreview 的区别
 
-| 维度 | plan2codexwsl | plantocodex |
-|------|---------------|-------------|
+| 维度 | planreview | plantocodex |
+|------|------------|-------------|
 | Codex 角色 | 评审 plan | 执行 plan |
 | 是否改代码 | 否 | 是 |
 | Plan 后续 | Claude 重写 plan | 不改 plan,改代码 |
 | 用户拍板 | 必须（评审条目逐条） | 不必（执行类） |
 | 退出 plan mode | 评审吸收完之后 | Codex 启动前 |
-| 串联 | plan2codexwsl 输出已评审 planPath | plantocodex 接同一 planPath |
+| 串联 | planreview 输出已评审 planPath | plantocodex 接同一 planPath |
 
-**推荐串联**（高风险 plan）：`plan2codexwsl` 评审 → 用户拍板 → 重写 plan → 用户 ExitPlanMode → `plantocodex` 派实现。
+**推荐串联**（高风险 plan）：`planreview` 评审 → 用户拍板 → 重写 plan → 用户 ExitPlanMode → `plantocodex` 派实现（WSL 环境细节见 `/ccpanes:plan2codexwsl`）。
 
 ---
 
@@ -239,4 +239,4 @@ git diff <worktree-or-main>
 - ❌ 把 `get_session_status` 返回的 `active/idle/exited` 当作完整枚举 → 漏掉 thinking/waitingInput/error
 - ❌ `launch_task.projectPath` 自己拼 `/mnt/...` → 不匹配 cc-panes 注册路径，启动失败
 - ❌ "超过 10 分钟提醒用户"作为唯一兜底 → 没有渐进性，体验差
-- ❌ Claude 自己改代码 → 这是 plan2codexwsl 之外，但和本 skill 角色冲突
+- ❌ Claude 自己改代码 → 和本 skill 角色冲突（评审也不改代码，见 planreview）
