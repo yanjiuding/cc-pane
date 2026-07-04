@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.6 - 2026-07-04
+
+### Fixed
+
+- Workspace/project-bound launch profiles that do not match the target CLI or runtime are now silently dropped in favor of the default profile, instead of triggering a spurious "profile mismatch" warning on every launch.
+- Toggling the cc-chan pet from the status bar or its context menu now persists visibility, so a hidden pet no longer reappears on the next launch.
+
 ## 0.10.5 - 2026-06-27
 
 ### Added
