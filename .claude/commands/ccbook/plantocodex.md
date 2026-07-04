@@ -132,7 +132,7 @@ mcp__ccpanes__submit_to_session(
 
 worker 调 `report_to_leader` 时，PTY 会直接把 `[worker-report] id=... status=completed summary=...` 推到 leader 对话里。**不用主动 poll。**
 
-**但**：如果 leader 此刻正在 thinking（执行其他工具调用），PTY 反馈会被 cc-panes 跳过返回 `{sent: false, skipReason: "leader busy"}`，**默默丢失**。所以 prompt 必须要求 Codex 也调 `update_task_binding` 持久化状态。
+**但**：如果 leader 此刻正在 thinking（执行其他工具调用），PTY 反馈返回 `{sent: false, queued: true, skipReason: "leader busy"}`——引擎会排队，leader 回到空闲时自动补投，不会丢。补投队列仅在 leader 崩溃/exited 时被清空，所以 prompt 仍必须要求 Codex 调 `update_task_binding` 持久化状态（reconcile 的唯一依据）。
 
 **软超时兜底**（不强制 kill，给用户选）：
 
@@ -210,8 +210,8 @@ git diff <worktree-or-main>
      status: "completed",
      summary: "Codex 执行完成,改动 M 文件,详见 PTY"
    )
-3. 如果 report_to_leader 返回 {sent: false, skipReason: "leader busy"},
-   不重试 — TaskBinding 已持久化,leader 会通过 reconcile 找回。
+3. 如果 report_to_leader 返回 {sent: false, queued: true, skipReason: "leader busy"},
+   不重试 — 引擎已排队,leader 空闲后会自动收到补投;TaskBinding 也已持久化兜底。
 ```
 
 ---
@@ -235,7 +235,7 @@ git diff <worktree-or-main>
 
 - ❌ 用 `CronCreate` 每分钟轮询 → 烧 token，且 cc-panes 已内置 worker 自动反馈
 - ❌ 跳过 `register_plan_leader` / `register_plan_worker` → PTY 反馈无目标
-- ❌ Codex prompt 不要求 `update_task_binding` → leader busy 时反馈丢失，主 Agent 永远收不到通知
+- ❌ Codex prompt 不要求 `update_task_binding` → leader 崩溃/退出时补投队列被清，主 Agent 永远收不到通知
 - ❌ 把 `get_session_status` 返回的 `active/idle/exited` 当作完整枚举 → 漏掉 thinking/waitingInput/error
 - ❌ `launch_task.projectPath` 自己拼 `/mnt/...` → 不匹配 cc-panes 注册路径，启动失败
 - ❌ "超过 10 分钟提醒用户"作为唯一兜底 → 没有渐进性，体验差

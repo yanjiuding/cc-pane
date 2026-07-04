@@ -139,7 +139,7 @@ mcp__ccpanes__register_plan_leader(
 | Claude Task 子 agent | 同步返回（Task tool 调用直接拿结果） | 等 tool result |
 | CC-Panes launch_task worker | PTY `report_to_leader` + `update_task_binding` | 等 `[worker-report]` 行 |
 
-**重要**：多个 worker 并发时，PTY `report_to_leader` 在 leader busy 时会**静默丢失**（见 [[ccpanes-worker-report-pty-dropout]] memory）。所以代码型 worker 的 prompt **必须**包含：
+**重要**：多个 worker 并发时，PTY `report_to_leader` 在 leader busy 时返回 `{sent:false, queued:true}` 进入引擎补投队列，leader 空闲后自动注入（无需重试）。但队列在 leader 崩溃/退出时会被清空，所以代码型 worker 的 prompt **必须**包含：
 
 ```
 ## 收尾(必须执行)
@@ -189,6 +189,6 @@ mcp__ccpanes__register_plan_leader(
 - ❌ 把代码型 worker 都丢到主仓库并行写 → git 必爆
 - ❌ Task 子 agent 和 launch_task 不分，统一用一个 → 简单任务多花一倍 token，复杂任务又缺隔离
 - ❌ 忘记 `register_plan_leader` → worker 完成无法自动通知，只能轮询
-- ❌ worker 只 `report_to_leader` 不 `update_task_binding` → leader busy 时反馈丢失
+- ❌ worker 只 `report_to_leader` 不 `update_task_binding` → leader 崩溃/退出时补投队列被清，反馈彻底丢失
 - ❌ 主 Agent 自己 commit 不等用户确认
 - ❌ 子任务有依赖还硬拆并行 → 后做的覆盖前做的
