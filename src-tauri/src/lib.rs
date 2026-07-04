@@ -70,6 +70,7 @@ use commands::{
     delete_workspace_snapshot,
     detect_claude_session,
     detect_resume_session,
+    detect_tailscale_status,
     discover_wsl_distros,
     enter_fullscreen,
     enter_mini_mode,
@@ -1961,6 +1962,7 @@ pub fn run() {
             touch_launch_by_session,
             detect_claude_session,
             detect_resume_session,
+            detect_tailscale_status,
             start_launch_history_backfill,
             debug_encode_path,
             // Local History 命令

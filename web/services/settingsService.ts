@@ -2,8 +2,9 @@
  * 设置服务 - 与后端设置交互
  */
 
-import type { AppSettings, DataDirInfo, WebAccessStatus } from "@/types/settings";
-import { apiGet, apiJson, invokeOrApi } from "./apiClient";
+import type { AppSettings, DataDirInfo, TailscaleStatus, WebAccessStatus } from "@/types/settings";
+import { invoke } from "@tauri-apps/api/core";
+import { apiGet, apiJson, invokeOrApi, isTauriRuntime } from "./apiClient";
 
 export const settingsService = {
   async getSettings(): Promise<AppSettings> {
@@ -22,6 +23,12 @@ export const settingsService = {
     return invokeOrApi<void>("set_web_access_password", { password }, () =>
       apiJson<void>("/api/settings/web-access/password", "POST", { password }),
     );
+  },
+
+  /** 探测本机 Tailscale 状态（仅桌面端；web 运行时返回 null 并隐藏引导区块） */
+  async detectTailscaleStatus(): Promise<TailscaleStatus | null> {
+    if (!isTauriRuntime()) return null;
+    return invoke<TailscaleStatus>("detect_tailscale_status");
   },
 
   async getWebAccessStatus(): Promise<WebAccessStatus> {

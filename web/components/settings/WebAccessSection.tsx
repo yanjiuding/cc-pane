@@ -11,6 +11,7 @@ import type {
   OrchestratorBindMode,
   OrchestratorSettings,
   OrchestratorStatus,
+  TailscaleStatus,
   WebAccessSettings,
   WebAccessStatus,
 } from "@/types";
@@ -52,6 +53,8 @@ export default function WebAccessSection({
   const [status, setStatus] = useState<WebAccessStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [orchestratorStatus, setOrchestratorStatus] = useState<OrchestratorStatus | null>(null);
+  const [tailscale, setTailscale] = useState<TailscaleStatus | null>(null);
+  const [detectingTailscale, setDetectingTailscale] = useState(false);
   const [password, setPassword] = useState("");
   const [savingPassword, setSavingPassword] = useState(false);
   const loadSettings = useSettingsStore((state) => state.loadSettings);
@@ -96,6 +99,26 @@ export default function WebAccessSection({
       toast.error(`Web 密码更新失败: ${error}`);
     } finally {
       setSavingPassword(false);
+    }
+  }
+
+  async function detectTailscale() {
+    setDetectingTailscale(true);
+    try {
+      setTailscale(await settingsService.detectTailscaleStatus());
+    } catch (error) {
+      toast.error(`Tailscale 检测失败: ${error}`);
+    } finally {
+      setDetectingTailscale(false);
+    }
+  }
+
+  async function copyText(text: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success(`${label}已复制`);
+    } catch (error) {
+      toast.error(`复制失败: ${error}`);
     }
   }
 
@@ -314,6 +337,73 @@ export default function WebAccessSection({
               当前实际监听 {orchestratorStatus.bind.host}
               {orchestratorStatus.port != null ? `:${orchestratorStatus.port}` : ""}（{orchestratorStatus.bind.reason}）
             </p>
+          )}
+        </div>
+      )}
+
+      {isTauriRuntime() && (
+        <div className="flex flex-col gap-2 pt-3" style={{ borderTop: "1px solid var(--app-border)" }}>
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>Tailscale 远程访问（推荐）</Label>
+              <p className="text-xs m-0" style={{ color: "var(--app-text-tertiary)" }}>
+                通过 Tailscale Serve 从你自己的设备安全访问 Web 端：无需开局域网、服务保持仅本机监听。CC-Panes 只做只读检测，不代执行、不保存任何 Tailscale 凭证。
+              </p>
+            </div>
+            <Button type="button" variant="secondary" size="sm" onClick={() => void detectTailscale()} disabled={detectingTailscale}>
+              <RefreshCw className={`w-3.5 h-3.5 mr-1 ${detectingTailscale ? "animate-spin" : ""}`} />
+              检测
+            </Button>
+          </div>
+          {tailscale && !tailscale.installed && (
+            <p className="text-xs m-0" style={{ color: "var(--app-text-secondary)" }}>
+              未检测到 tailscale CLI。安装后再来：https://tailscale.com/download
+            </p>
+          )}
+          {tailscale?.installed && tailscale.backendState !== "Running" && (
+            <p className="text-xs m-0" style={{ color: "var(--app-text-secondary)" }}>
+              Tailscale 已安装但未运行{tailscale.backendState ? `（${tailscale.backendState}）` : ""}。请先在终端执行 <code>tailscale up</code> 登录。
+            </p>
+          )}
+          {tailscale?.installed && tailscale.backendState === "Running" && (
+            <div className="flex flex-col gap-2">
+              <div className="grid grid-cols-[1fr_auto] gap-2 items-center">
+                <code
+                  className="px-2 py-1.5 rounded-md text-[12px] font-mono overflow-x-auto whitespace-nowrap"
+                  style={{ border: "1px solid var(--app-border)", background: "var(--app-content)", color: "var(--app-text-primary)" }}
+                >
+                  {`tailscale serve --bg --https=443 http://127.0.0.1:${value.port}`}
+                </code>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => void copyText(`tailscale serve --bg --https=443 http://127.0.0.1:${value.port}`, "命令")}
+                >
+                  复制命令
+                </Button>
+              </div>
+              {tailscale.dnsName && (
+                <div className="grid grid-cols-[1fr_auto] gap-2 items-center">
+                  <code
+                    className="px-2 py-1.5 rounded-md text-[12px] font-mono overflow-x-auto whitespace-nowrap"
+                    style={{ border: "1px solid var(--app-border)", background: "var(--app-content)", color: "var(--app-text-primary)" }}
+                  >
+                    {`https://${tailscale.dnsName}`}
+                  </code>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => void copyText(`https://${tailscale.dnsName}`, "访问地址")}
+                  >
+                    复制地址
+                  </Button>
+                </div>
+              )}
+              <p className="text-xs m-0" style={{ color: "var(--app-text-tertiary)" }}>
+                在终端执行上面的命令后，用 tailnet 内任意设备访问该地址。建议同时启用「账号密码登录」和「远程只读模式」——经 Tailscale 访问会按远程来源处理。取消发布：<code>tailscale serve reset</code>。
+              </p>
+            </div>
           )}
         </div>
       )}

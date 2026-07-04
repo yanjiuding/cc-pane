@@ -177,6 +177,14 @@ export interface OrchestratorStatus {
   bind: OrchestratorBindDecision | null;
 }
 
+/** Tailscale 探测结果（detect_tailscale_status，只读探测） */
+export interface TailscaleStatus {
+  installed: boolean;
+  backendState: string | null;
+  dnsName: string | null;
+  tailscaleIps: string[];
+}
+
 export interface WebAccessStatus {
   enabled: boolean;
   running: boolean;

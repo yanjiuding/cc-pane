@@ -98,6 +98,7 @@ export type {
   OrchestratorBindMode,
   OrchestratorBindDecision,
   OrchestratorStatus,
+  TailscaleStatus,
   EnvironmentInfo,
 } from "./settings";
 export { BUSY_STATUSES, isBusyStatus } from "./settings";
