@@ -124,6 +124,15 @@ cc-panes/
 │       ├── models/                # 数据模型
 │       └── utils/                 # 工具（AppPaths, AppError）
 │
+├── cc-panes-mobile/               # Flutter 移动客户端（连接 cc-panes-web 的远程终端）
+│   ├── lib/
+│   │   ├── core/                  # Result<T,ApiFailure>、常量
+│   │   ├── api/                   # dio+cookie jar、auth/sessions API、WS 封装
+│   │   ├── models/                # ServerProfile / AuthStatus / SessionInfo
+│   │   ├── state/                 # riverpod providers
+│   │   └── ui/                    # screens + widgets
+│   └── test/                      # 镜像 lib 结构
+│
 ├── docs/                          # 正式设计文档、样例与文档资源
 ├── .claude/                       # 项目内命令、agents 与 hooks 源目录
 └── .cargo/config.toml             # Rust 构建输出配置（target-dir）
@@ -198,6 +207,9 @@ cargo test --workspace
 
 # 构建 release 安装包
 npm run tauri build
+
+# 移动端（cc-panes-mobile/ 目录内）
+flutter pub get && flutter analyze && flutter test
 ```
 
 ## Dev/Release 隔离
