@@ -1660,6 +1660,8 @@ export const usePanesStore = create<PanesState>()(
         leaf.sessionId = sessionId;
         syncTabTerminalState(tab);
       });
+      // 写入会话 sessionId 也要落快照——否则手机镜像看不到新会话，直到 60s 兜底保存。
+      notifyTerminalLayoutChanged("session.update");
     },
 
     setActiveTerminalPane: (tabId, terminalPaneId) => {
@@ -1872,6 +1874,8 @@ export const usePanesStore = create<PanesState>()(
         }
         state.activePaneId = pane.id;
       });
+      // 打开项目/终端 tab 也要落快照——让手机镜像近实时看到新 tab。
+      notifyTerminalLayoutChanged("project.open");
     },
 
     openProject: (opts) => {
