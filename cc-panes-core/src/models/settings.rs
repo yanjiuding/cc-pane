@@ -286,6 +286,9 @@ pub struct VoiceSettings {
     pub enable_itn: bool,
     #[serde(default = "default_voice_max_record_seconds")]
     pub max_record_seconds: u32,
+    /// 是否在终端右下角显示语音悬浮按钮（关闭后仍可用快捷键触发录音）
+    #[serde(default = "default_true")]
+    pub show_floating_button: bool,
 }
 
 impl VoiceSettings {
@@ -731,6 +734,7 @@ impl Default for VoiceSettings {
             language: None,
             enable_itn: false,
             max_record_seconds: default_voice_max_record_seconds(),
+            show_floating_button: true,
         }
     }
 }

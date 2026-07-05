@@ -145,6 +145,7 @@ export function createTestSettings(overrides?: Partial<AppSettings>): AppSetting
       language: null,
       enableItn: false,
       maxRecordSeconds: 60,
+      showFloatingButton: true,
     },
     cliLaunchers: {
       overrides: {},

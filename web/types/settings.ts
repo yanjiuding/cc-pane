@@ -128,6 +128,8 @@ export interface VoiceSettings {
   language: string | null;
   enableItn: boolean;
   maxRecordSeconds: number;
+  /** 是否在终端右下角显示语音悬浮按钮（关闭后仍可用快捷键触发录音） */
+  showFloatingButton: boolean;
 }
 
 export interface CliLauncherSettings {

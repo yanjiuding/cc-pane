@@ -18,6 +18,7 @@ function createValue(overrides: Partial<VoiceSettings> = {}): VoiceSettings {
     language: null,
     enableItn: false,
     maxRecordSeconds: 60,
+    showFloatingButton: true,
     ...overrides,
   };
 }

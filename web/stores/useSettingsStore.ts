@@ -212,6 +212,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       language: null,
       enableItn: false,
       maxRecordSeconds: 60,
+      showFloatingButton: true,
     },
     cliLaunchers: DEFAULT_CLI_LAUNCHER_SETTINGS,
     layoutSwitcher: DEFAULT_LAYOUT_SWITCHER_SETTINGS,

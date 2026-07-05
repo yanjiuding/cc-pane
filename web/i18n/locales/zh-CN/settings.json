@@ -53,6 +53,8 @@
   "voiceTitle": "语音输入",
   "voiceDesc": "每个终端窗格可录音，识别完成后把文字写入对应终端，不自动提交。",
   "voiceEnable": "启用语音输入",
+  "voiceShowFloatingButton": "在终端显示悬浮按钮",
+  "voiceShowFloatingButtonDesc": "关闭后终端右下角不再显示麦克风按钮；语音快捷键仍然可用。",
   "voiceProvider": "语音服务",
   "voiceProviderDashscope": "DashScope / Qwen-ASR",
   "voiceProviderMimo": "小米 MiMo",

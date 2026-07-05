@@ -172,6 +172,8 @@ function clamp(value: number, min: number, max: number): number {
 export default function VoiceInputButton({ sessionId, paneId, disabled = false }: VoiceInputButtonProps) {
   const { t } = useTranslation("panes");
   const voice = useSettingsStore((s) => s.settings?.voice);
+  // 设置里关掉悬浮按钮则完全不渲染（settings 未加载时按默认显示）
+  const hidden = voice ? voice.showFloatingButton === false : false;
   const activeTargetId = useVoiceInputStore((s) => s.activeTargetId);
   const toggleRequest = useVoiceInputStore((s) => s.toggleRequest);
   const setActiveTarget = useVoiceInputStore((s) => s.setActiveTarget);
@@ -421,6 +423,9 @@ export default function VoiceInputButton({ sessionId, paneId, disabled = false }
     observer.observe(parent);
     return () => observer.disconnect();
   }, [clampPosition]);
+
+  // hooks 全部执行完后再隐藏，避免违反 hooks 顺序规则
+  if (hidden) return null;
 
   const active = status !== "idle" && isActiveTarget;
   const canInteract = !unavailableReason || active;

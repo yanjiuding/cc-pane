@@ -60,6 +60,24 @@ export default function VoiceSection({ value, onChange }: VoiceSectionProps) {
         {t("voiceEnable")}
       </label>
 
+      <div className="flex flex-col gap-0.5">
+        <label className="flex items-center gap-2 text-[13px]" style={{ color: "var(--app-text-primary)" }}>
+          <input
+            type="checkbox"
+            checked={value.showFloatingButton}
+            onChange={(event) => update("showFloatingButton", event.target.checked)}
+            className="h-4 w-4 cursor-pointer"
+            style={{ accentColor: "var(--app-accent)" }}
+          />
+          {t("voiceShowFloatingButton", { defaultValue: "在终端显示悬浮按钮" })}
+        </label>
+        <p className="text-[12px] pl-6 m-0" style={{ color: "var(--app-text-tertiary)" }}>
+          {t("voiceShowFloatingButtonDesc", {
+            defaultValue: "关闭后终端右下角不再显示麦克风按钮；语音快捷键仍然可用。",
+          })}
+        </p>
+      </div>
+
       <div className="flex flex-col gap-2">
         <Label>{t("voiceProvider")}</Label>
         <div className="flex flex-wrap gap-2">

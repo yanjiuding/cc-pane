@@ -120,6 +120,19 @@ describe("VoiceInputButton", () => {
     vi.clearAllMocks();
   });
 
+  it("showFloatingButton=false 时完全不渲染悬浮按钮", () => {
+    setVoiceSettings({ showFloatingButton: false });
+    renderButton();
+
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("settings 未加载或未设置 showFloatingButton 时按默认显示", () => {
+    renderButton();
+
+    expect(screen.getByRole("button")).toBeInTheDocument();
+  });
+
   it("reports unavailability outside the Tauri runtime", async () => {
     tauriRuntime = false;
     const user = userEvent.setup();
