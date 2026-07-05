@@ -441,6 +441,58 @@ async fn launch_history_session_started_routes_update_and_upsert() {
 }
 
 #[tokio::test]
+async fn restore_workspace_snapshot_recreates_sessions_with_resume() {
+    let (state, root) = test_state("snapshot-restore");
+    let local = saved_session(&root);
+    // 非 local runtime 的 entry 应被拒绝而不是错启动到本机
+    let wsl = SavedSession {
+        session_id: "pty-session-b".to_string(),
+        runtime_kind: Some("wsl".to_string()),
+        ..saved_session(&root)
+    };
+
+    save_terminal_sessions(State(state.clone()), Json(vec![local, wsl]))
+        .await
+        .expect("save sessions");
+
+    let Json(restored) = restore_workspace_snapshot(
+        State(state.clone()),
+        Path(("workspace-a".to_string(), "snapshot-a".to_string())),
+    )
+    .await
+    .expect("restore snapshot");
+
+    assert_eq!(restored.snapshot_id, "snapshot-a");
+    assert_eq!(restored.entries.len(), 2);
+    let ok_entry = restored
+        .entries
+        .iter()
+        .find(|entry| entry.source_pty_session_id == "pty-session-a")
+        .expect("local entry");
+    assert_eq!(ok_entry.session_id.as_deref(), Some("session"));
+    assert_eq!(ok_entry.cli_tool, "codex");
+    assert_eq!(ok_entry.resume_id.as_deref(), Some("resume-a"));
+    assert!(ok_entry.error.is_none());
+
+    let wsl_entry = restored
+        .entries
+        .iter()
+        .find(|entry| entry.source_pty_session_id == "pty-session-b")
+        .expect("wsl entry");
+    assert!(wsl_entry.session_id.is_none());
+    assert!(wsl_entry.error.as_deref().unwrap_or_default().contains("wsl"));
+
+    // 不存在的快照 → 404
+    let error = restore_workspace_snapshot(
+        State(state),
+        Path(("workspace-a".to_string(), "missing".to_string())),
+    )
+    .await
+    .expect_err("missing snapshot should fail");
+    assert_eq!(error.0, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn session_restore_routes_match_core_service_operations() {
     let (state, root) = test_state("session-restore");
     let session = saved_session(&root);

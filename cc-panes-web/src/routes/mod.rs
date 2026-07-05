@@ -149,6 +149,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/workspace-snapshots/{workspace_id}/{snapshot_id}",
             delete(history::delete_workspace_snapshot),
         )
+        .route(
+            "/api/workspace-snapshots/{workspace_id}/{snapshot_id}/restore",
+            post(history::restore_workspace_snapshot),
+        )
         .route("/api/git/branch", get(git::get_git_branch))
         .route("/api/git/status", get(git::get_git_status))
         .route("/api/git/file-statuses", get(git::get_git_file_statuses))

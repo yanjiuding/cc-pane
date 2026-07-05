@@ -501,6 +501,128 @@ pub async fn delete_workspace_snapshot(
         .map_err(service_error)
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoredSnapshotEntry {
+    /// 快照里的旧 PTY id（仅溯源；恢复是新建 PTY + resume 续接对话，不附着旧 PTY）
+    pub source_pty_session_id: String,
+    pub session_id: Option<String>,
+    pub project_path: String,
+    pub cli_tool: String,
+    pub resume_id: Option<String>,
+    pub custom_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreWorkspaceSnapshotResponse {
+    pub snapshot_id: String,
+    pub entries: Vec<RestoredSnapshotEntry>,
+}
+
+/// POST /api/workspace-snapshots/{workspace_id}/{snapshot_id}/restore
+/// 按快照逐 entry 重建会话（带各自 resume id 续接对话上下文）。
+/// 非事务：单条失败不回滚已建会话，逐项返回结果由客户端呈现。
+pub async fn restore_workspace_snapshot(
+    State(state): State<AppState>,
+    Path((workspace_id, snapshot_id)): Path<(String, String)>,
+) -> Result<Json<RestoreWorkspaceSnapshotResponse>, (StatusCode, String)> {
+    let snapshot = state
+        .session_restore_service
+        .get_workspace_snapshot(&workspace_id, &snapshot_id)
+        .map_err(service_error)?
+        .ok_or((StatusCode::NOT_FOUND, "Snapshot not found".to_string()))?;
+
+    let entries = snapshot
+        .entries
+        .iter()
+        .map(|entry| restore_snapshot_entry(&state, &snapshot, entry))
+        .collect();
+
+    Ok(Json(RestoreWorkspaceSnapshotResponse {
+        snapshot_id: snapshot.id,
+        entries,
+    }))
+}
+
+fn restore_snapshot_entry(
+    state: &AppState,
+    snapshot: &WorkspaceSnapshot,
+    entry: &cc_panes_core::models::workspace_snapshot::WorkspaceSnapshotEntry,
+) -> RestoredSnapshotEntry {
+    let base = RestoredSnapshotEntry {
+        source_pty_session_id: entry.pty_session_id.clone(),
+        session_id: None,
+        project_path: entry.project_path.clone(),
+        cli_tool: entry.agent_tool.clone(),
+        resume_id: entry.agent_resume_id.clone(),
+        custom_title: entry.custom_title.clone(),
+        error: None,
+    };
+
+    // SSH/WSL 会话的恢复需要各自的连接信息，快照里没有完整保存——明确拒绝而不是错启动到本机
+    if entry
+        .runtime_kind
+        .as_deref()
+        .is_some_and(|kind| kind != "local")
+    {
+        return RestoredSnapshotEntry {
+            error: Some(format!(
+                "runtime '{}' is not supported by snapshot restore",
+                entry.runtime_kind.as_deref().unwrap_or_default()
+            )),
+            ..base
+        };
+    }
+
+    let cli_tool: cc_panes_core::models::CliTool =
+        serde_json::from_value(serde_json::Value::String(entry.agent_tool.clone()))
+            .unwrap_or_default();
+    let provider_selection = entry
+        .provider_selection
+        .as_deref()
+        .and_then(|value| {
+            serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
+        })
+        .unwrap_or_default();
+
+    let request = cc_panes_core::utils::normalize_session_request_for_current_host(
+        cc_panes_core::models::CreateSessionRequest {
+            launch_id: None,
+            project_path: entry.project_path.clone(),
+            cols: 120,
+            rows: 30,
+            workspace_name: snapshot.workspace_name.clone(),
+            provider_id: entry.provider_id.clone(),
+            provider_selection,
+            launch_profile_id: entry.launch_profile_id.clone(),
+            workspace_path: snapshot.workspace_path.clone(),
+            workspace_snapshot_id: Some(snapshot.id.clone()),
+            launch_claude: cli_tool != cc_panes_core::models::CliTool::None,
+            cli_tool,
+            resume_id: entry.agent_resume_id.clone(),
+            skip_mcp: false,
+            append_system_prompt: None,
+            initial_prompt: None,
+            ssh: None,
+            wsl: None,
+        },
+    );
+
+    match state.terminal_backend.create_session(request) {
+        Ok(session_id) => RestoredSnapshotEntry {
+            session_id: Some(session_id),
+            ..base
+        },
+        Err(error) => RestoredSnapshotEntry {
+            error: Some(error.to_string()),
+            ..base
+        },
+    }
+}
+
 #[cfg(test)]
 #[path = "history_tests.rs"]
 mod history_tests;
