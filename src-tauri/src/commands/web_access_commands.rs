@@ -23,12 +23,13 @@ pub fn start_web_access(
     web_access: State<'_, Arc<WebAccessLifecycle>>,
 ) -> AppResult<WebAccessStatus> {
     debug!("cmd::start_web_access");
-    let settings = settings_service.get_settings().web_access;
+    let all_settings = settings_service.get_settings();
     let resource_dir = app.path().resource_dir().ok();
     web_access.start(
         app_paths.inner().as_ref(),
         resource_dir.as_deref(),
-        &settings,
+        &all_settings.web_access,
+        all_settings.terminal.daemon_enabled,
     )
 }
 
@@ -40,12 +41,13 @@ pub fn restart_web_access(
     web_access: State<'_, Arc<WebAccessLifecycle>>,
 ) -> AppResult<WebAccessStatus> {
     debug!("cmd::restart_web_access");
-    let settings = settings_service.get_settings().web_access;
+    let all_settings = settings_service.get_settings();
     let resource_dir = app.path().resource_dir().ok();
     web_access.restart(
         app_paths.inner().as_ref(),
         resource_dir.as_deref(),
-        &settings,
+        &all_settings.web_access,
+        all_settings.terminal.daemon_enabled,
     )
 }
 

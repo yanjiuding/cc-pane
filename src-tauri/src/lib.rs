@@ -1383,8 +1383,13 @@ pub fn run() {
                 boot_t0.elapsed().as_millis()
             );
 
-            // ---- 实验性 terminal daemon lifecycle ----
-            if TerminalDaemonLifecycle::enabled_from_env() {
+            // ---- terminal daemon lifecycle（设置开关或 env 覆盖）----
+            let daemon_enabled_by_settings = app
+                .state::<Arc<SettingsService>>()
+                .get_settings()
+                .terminal
+                .daemon_enabled;
+            if TerminalDaemonLifecycle::enabled_from_env() || daemon_enabled_by_settings {
                 let backend_state = app.state::<Arc<TerminalBackendState>>();
                 if backend_state.kind() != TerminalBackendKind::Daemon {
                     let paths = app.state::<Arc<AppPaths>>();
@@ -1410,11 +1415,17 @@ pub fn run() {
             // ---- Web 端访问服务 lifecycle ----
             {
                 let settings_svc = app.state::<Arc<SettingsService>>();
-                let settings = settings_svc.get_settings().web_access;
+                let all_settings = settings_svc.get_settings();
+                let settings = all_settings.web_access;
                 let web_access = app.state::<Arc<WebAccessLifecycle>>();
                 let paths = app.state::<Arc<AppPaths>>();
                 let resource_dir = app.path().resource_dir().ok();
-                match web_access.start(paths.inner().as_ref(), resource_dir.as_deref(), &settings) {
+                match web_access.start(
+                    paths.inner().as_ref(),
+                    resource_dir.as_deref(),
+                    &settings,
+                    all_settings.terminal.daemon_enabled,
+                ) {
                     Ok(status) => {
                         info!(
                             url = %status.url,

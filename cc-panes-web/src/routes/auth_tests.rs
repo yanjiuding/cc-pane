@@ -292,6 +292,57 @@ async fn auth_enabled_api_requires_login_cookie() {
 }
 
 #[tokio::test]
+async fn remote_read_only_blocks_write_unless_authenticated_write_enabled() {
+    let state = test_state("read-only-authenticated-write");
+    let mut settings = remote_settings();
+    settings.web_access.ip_whitelist.clear();
+    settings.web_access.remote_read_only = true;
+    state
+        .settings_service
+        .update_settings(settings)
+        .expect("enable read-only settings");
+    let app = super::build_router(state.clone());
+    let cookie = login_cookie(app.clone()).await;
+
+    let write_request = |cookie: &str| {
+        let mut request = Request::builder()
+            .method("POST")
+            .uri("/api/sessions/session/write")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, cookie)
+            .header("x-forwarded-for", "100.64.0.5")
+            .body(Body::from(r#"{"data":"ls"}"#))
+            .expect("write request");
+        request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
+            IpAddr::from([127, 0, 0, 1]),
+            4545,
+        )));
+        request
+    };
+
+    // 开关关闭：已登录的远程会话写入仍被只读模式拒绝（回归保护）
+    let response = app
+        .clone()
+        .oneshot(write_request(&cookie))
+        .await
+        .expect("read-only response");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    // 开关开启：已登录的远程会话恢复写权限
+    let mut settings = state.settings_service.get_settings();
+    settings.web_access.remote_authenticated_write = true;
+    state
+        .settings_service
+        .update_settings(settings)
+        .expect("enable authenticated write");
+    let response = app
+        .oneshot(write_request(&cookie))
+        .await
+        .expect("authenticated write response");
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
 async fn remote_api_respects_lan_gate_and_whitelist() {
     let state = test_state("remote");
     let app = super::build_router(state.clone());

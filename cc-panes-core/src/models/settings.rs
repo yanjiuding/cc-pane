@@ -126,6 +126,11 @@ pub struct TerminalSettings {
     /// 默认 false；仅排障时打开。过渡一两个版本后整套 backfill 将移除。
     #[serde(default)]
     pub resume_id_backfill_enabled: Option<bool>,
+    /// 终端会话共享：PTY 托管到 cc-panes-daemon 独立进程，桌面与 Web/移动端
+    /// 附着同一批活会话（"无缝接力"）。重启应用生效。
+    /// 环境变量 CCPANES_TERMINAL_DAEMON 仍可覆盖强制开启（排障用）。
+    #[serde(default)]
+    pub daemon_enabled: bool,
 }
 
 impl TerminalSettings {
@@ -426,6 +431,11 @@ pub struct WebAccessSettings {
     /// 的已登录会话仅允许只读操作；回环来源（本机浏览器）始终全权。
     #[serde(default)]
     pub remote_read_only: bool,
+    /// 远程只读模式的例外：已通过密码鉴权的远程会话允许写入。
+    /// 仅在 remote_read_only 开启且 auth_required() 为真时生效——
+    /// 未配置密码时该开关不放行任何写入（fail-safe）。
+    #[serde(default)]
+    pub remote_authenticated_write: bool,
 }
 
 impl WebAccessSettings {
@@ -649,6 +659,7 @@ impl Default for TerminalSettings {
             shell: None,
             disable_conpty_sanitize: None,
             resume_id_backfill_enabled: None,
+            daemon_enabled: false,
         }
     }
 }
@@ -752,6 +763,7 @@ impl Default for WebAccessSettings {
             password_hash: None,
             lock_on_idle_minutes: default_web_lock_on_idle_minutes(),
             remote_read_only: false,
+            remote_authenticated_write: false,
         }
     }
 }

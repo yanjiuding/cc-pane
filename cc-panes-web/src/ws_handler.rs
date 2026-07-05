@@ -11,7 +11,7 @@ use tokio_tungstenite::connect_async;
 use tracing::{debug, error, warn};
 
 use crate::state::{AppState, TerminalOutputMode};
-use crate::web_auth::RequestOrigin;
+use crate::web_auth::{effective_read_only, RequestOrigin};
 
 /// Upgrade HTTP to WebSocket for a terminal session.
 /// upgrade 是 GET，read_only_guard 放行；读写区分下沉到消息层：
@@ -22,13 +22,8 @@ pub async fn ws_upgrade(
     origin: Option<Extension<RequestOrigin>>,
     State(state): State<AppState>,
 ) -> impl IntoResponse {
-    let remote = origin.is_none_or(|Extension(origin)| origin == RequestOrigin::Remote);
-    let read_only = remote
-        && state
-            .settings_service
-            .get_settings()
-            .web_access
-            .remote_read_only;
+    let origin = origin.map_or(RequestOrigin::Remote, |Extension(origin)| origin);
+    let read_only = effective_read_only(origin, &state.settings_service.get_settings().web_access);
     debug!(session_id, read_only, "WebSocket upgrade requested");
     ws.on_upgrade(move |socket| handle_ws(socket, session_id, state, read_only))
 }

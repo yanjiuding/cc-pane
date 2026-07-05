@@ -73,11 +73,15 @@ impl WebAccessLifecycle {
         }
     }
 
+    /// [daemon_expected]：终端设置里是否开启了会话共享（daemon）。
+    /// 开了但 manifest 不存在时告警——此时 Web 端会退回独立会话池，
+    /// 手机/浏览器看到的会话与桌面不是同一批。
     pub fn start(
         &self,
         app_paths: &AppPaths,
         resource_dir: Option<&Path>,
         settings: &WebAccessSettings,
+        daemon_expected: bool,
     ) -> AppResult<WebAccessStatus> {
         if !settings.enabled {
             self.stop();
@@ -112,6 +116,12 @@ impl WebAccessLifecycle {
         let daemon_manifest = app_paths.runtime_dir().join("daemon-manifest.json");
         if daemon_manifest.exists() {
             command.arg("--daemon-manifest").arg(daemon_manifest);
+        } else if daemon_expected {
+            warn!(
+                manifest = %daemon_manifest.display(),
+                "terminal daemon enabled in settings but manifest missing; \
+                 Web server will use an isolated session pool (sessions won't match desktop)"
+            );
         }
 
         let child = command.spawn().map_err(|error| {
@@ -141,9 +151,10 @@ impl WebAccessLifecycle {
         app_paths: &AppPaths,
         resource_dir: Option<&Path>,
         settings: &WebAccessSettings,
+        daemon_expected: bool,
     ) -> AppResult<WebAccessStatus> {
         self.stop();
-        self.start(app_paths, resource_dir, settings)
+        self.start(app_paths, resource_dir, settings, daemon_expected)
     }
 
     pub fn stop(&self) {

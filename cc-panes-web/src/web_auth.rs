@@ -56,6 +56,21 @@ const READ_ONLY_POST_ALLOWLIST: &[&str] = &[
     "/api/project-migrations/preview",
 ];
 
+/// 本请求来源在当前设置下是否应被限制为只读。
+///
+/// `remote_authenticated_write` 是远程只读的例外：开启后，已通过密码鉴权的
+/// 远程会话恢复写权限。仅在 `auth_required()` 为真时生效——未配置密码时
+/// 不放行任何远程写入（fail-safe）。调用方须保证请求已过 access_control
+/// 鉴权（protected 组），未鉴权路径不适用本函数。
+pub fn effective_read_only(
+    origin: RequestOrigin,
+    settings: &cc_panes_core::models::settings::WebAccessSettings,
+) -> bool {
+    origin == RequestOrigin::Remote
+        && settings.remote_read_only
+        && !(settings.remote_authenticated_write && settings.auth_required())
+}
+
 pub fn read_only_denies(
     origin: RequestOrigin,
     remote_read_only: bool,
@@ -85,7 +100,7 @@ pub async fn read_only_guard(
         .unwrap_or(RequestOrigin::Remote);
     if read_only_denies(
         origin,
-        settings.remote_read_only,
+        effective_read_only(origin, &settings),
         request.method(),
         request.uri().path(),
     ) {
@@ -150,6 +165,8 @@ pub struct AuthStatus {
     pub lock_on_idle_minutes: u16,
     /// 本请求来源在远程只读模式下是否被限制为只读
     pub read_only: bool,
+    /// 远程只读模式下是否放行已鉴权远程会话的写入（设置回显）
+    pub remote_authenticated_write: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -181,7 +198,10 @@ pub async fn status(State(state): State<AppState>, request: Request<Body>) -> Js
         .get::<axum::extract::connect_info::ConnectInfo<SocketAddr>>()
         .map(|info| info.0.ip());
     let origin = classify_origin(remote_ip, request.headers());
-    let read_only = settings.remote_read_only && origin == RequestOrigin::Remote;
+    // status 在免鉴权组，effective_read_only 的"已鉴权"前提在这里需显式核对：
+    // 未登录的远程请求即使开了 remote_authenticated_write 也如实报告只读。
+    let read_only = effective_read_only(origin, &settings)
+        || (settings.remote_read_only && origin == RequestOrigin::Remote && !authenticated);
 
     Json(AuthStatus {
         auth_required,
@@ -191,6 +211,7 @@ pub async fn status(State(state): State<AppState>, request: Request<Body>) -> Js
         allow_lan: settings.allow_lan,
         lock_on_idle_minutes: settings.lock_on_idle_minutes,
         read_only,
+        remote_authenticated_write: settings.remote_authenticated_write,
     })
 }
 
@@ -436,6 +457,49 @@ mod tests {
             &Method::POST,
             "/api/memories/search"
         ));
+    }
+
+    #[test]
+    fn effective_read_only_quadrants() {
+        let base = WebAccessSettings::default();
+        let with_password = WebAccessSettings {
+            auth_enabled: true,
+            password_salt: Some("00".into()),
+            password_hash: Some("hash".into()),
+            ..WebAccessSettings::default()
+        };
+
+        // 只读关闭：任何来源都不只读
+        let settings = WebAccessSettings {
+            remote_read_only: false,
+            remote_authenticated_write: true,
+            ..with_password.clone()
+        };
+        assert!(!effective_read_only(RequestOrigin::Remote, &settings));
+
+        // 只读开启、无例外开关：远程只读，本机全权
+        let settings = WebAccessSettings {
+            remote_read_only: true,
+            ..with_password.clone()
+        };
+        assert!(effective_read_only(RequestOrigin::Remote, &settings));
+        assert!(!effective_read_only(RequestOrigin::Local, &settings));
+
+        // 只读 + 例外开关 + 已配密码：已鉴权远程可写
+        let settings = WebAccessSettings {
+            remote_read_only: true,
+            remote_authenticated_write: true,
+            ..with_password
+        };
+        assert!(!effective_read_only(RequestOrigin::Remote, &settings));
+
+        // 只读 + 例外开关但未配密码：开关不生效（fail-safe）
+        let settings = WebAccessSettings {
+            remote_read_only: true,
+            remote_authenticated_write: true,
+            ..base
+        };
+        assert!(effective_read_only(RequestOrigin::Remote, &settings));
     }
 
     #[test]
