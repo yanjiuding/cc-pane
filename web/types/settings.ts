@@ -50,6 +50,8 @@ export interface TerminalSettings {
   disableConptySanitize: boolean | null;
   /** 启用旧版 resume id backfill（扫目录猜测，默认 false；已被确定性绑定取代，仅排障用） */
   resumeIdBackfillEnabled: boolean | null;
+  /** 终端会话共享：PTY 托管到独立 daemon，桌面与 Web/移动端附着同一批会话。重启应用生效 */
+  daemonEnabled: boolean;
 }
 
 /** Shell 信息 */
@@ -156,6 +158,8 @@ export interface WebAccessSettings {
   lockOnIdleMinutes: number;
   /** 远程只读模式：非回环来源（含 Tailscale Serve 转发）仅允许只读操作 */
   remoteReadOnly: boolean;
+  /** 远程只读的例外：已通过密码登录的远程会话允许写入；未配置密码时不生效 */
+  remoteAuthenticatedWrite: boolean;
 }
 
 /** Orchestrator（HTTP+MCP server）绑定模式 */

@@ -283,6 +283,27 @@ export default function WebAccessSection({
           />
         </div>
 
+        {value.remoteReadOnly && (
+          <div className="flex items-center justify-between pl-4">
+            <div>
+              <Label>允许已登录的远程会话写入</Label>
+              <p className="text-xs m-0" style={{ color: canUseLan ? "var(--app-text-tertiary)" : "var(--app-accent)" }}>
+                {canUseLan
+                  ? "只读模式的例外：通过账号密码登录的远程设备（如手机端）可以输入终端、执行写操作。请确认远程链路可信（建议仅配合 Tailscale 使用）。保存后重启 Web 服务生效。"
+                  : "需要先启用账号密码并设置密码，未配置密码时该开关不生效。"}
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={value.remoteAuthenticatedWrite}
+              disabled={!canUseLan}
+              onChange={(event) => update("remoteAuthenticatedWrite", event.target.checked)}
+              className="w-4 h-4 cursor-pointer"
+              style={{ accentColor: "var(--app-accent)" }}
+            />
+          </div>
+        )}
+
         <div className="flex flex-col gap-1">
           <Label>IP 白名单</Label>
           <textarea

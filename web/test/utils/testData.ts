@@ -109,6 +109,7 @@ export function createTestSettings(overrides?: Partial<AppSettings>): AppSetting
       shell: null,
       disableConptySanitize: null,
       resumeIdBackfillEnabled: null,
+      daemonEnabled: false,
     },
     shortcuts: { bindings: {} },
     general: {
@@ -165,6 +166,7 @@ export function createTestSettings(overrides?: Partial<AppSettings>): AppSetting
       passwordHash: null,
       lockOnIdleMinutes: 30,
       remoteReadOnly: false,
+      remoteAuthenticatedWrite: false,
     },
     orchestrator: {
       bindMode: "auto",

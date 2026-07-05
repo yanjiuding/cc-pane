@@ -42,6 +42,7 @@ const DEFAULT_WEB_ACCESS_SETTINGS: WebAccessSettings = {
   passwordHash: null,
   lockOnIdleMinutes: 30,
   remoteReadOnly: false,
+  remoteAuthenticatedWrite: false,
 };
 
 const DEFAULT_CLI_LAUNCHER_SETTINGS: CliLauncherSettings = {
@@ -135,6 +136,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       shell: null,
       disableConptySanitize: null,
       resumeIdBackfillEnabled: null,
+      daemonEnabled: false,
     },
     shortcuts: {
       bindings: {

@@ -280,5 +280,7 @@
   "duplicated": "已复制",
   "editGlobalConfig": "编辑通用配置",
   "resumeIdBackfill": "启用旧版 Resume ID 回填（排障用）",
-  "resumeIdBackfillHint": "旧机制：扫会话目录按时间猜测 resume id，已被确定性绑定（Claude 发号 / Codex 标题捕获）取代。默认关闭，仅排障时打开。"
+  "resumeIdBackfillHint": "旧机制：扫会话目录按时间猜测 resume id，已被确定性绑定（Claude 发号 / Codex 标题捕获）取代。默认关闭，仅排障时打开。",
+  "terminalDaemon": "终端会话共享（daemon）",
+  "terminalDaemonHint": "PTY 托管到独立守护进程：桌面与 Web/手机端看到并操作同一批会话（无缝接力）。重启应用生效。"
 }

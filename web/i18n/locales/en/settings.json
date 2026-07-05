@@ -280,5 +280,7 @@
   "duplicated": "Duplicated",
   "editGlobalConfig": "Edit Global Config",
   "resumeIdBackfill": "Enable legacy resume id backfill (troubleshooting)",
-  "resumeIdBackfillHint": "Legacy mechanism that guesses resume ids by scanning session directories. Superseded by deterministic binding (Claude issued id / Codex title capture). Keep off unless troubleshooting."
+  "resumeIdBackfillHint": "Legacy mechanism that guesses resume ids by scanning session directories. Superseded by deterministic binding (Claude issued id / Codex title capture). Keep off unless troubleshooting.",
+  "terminalDaemon": "Terminal session sharing (daemon)",
+  "terminalDaemonHint": "Host PTYs in a standalone daemon so desktop, Web and mobile attach to the same live sessions. Takes effect after app restart."
 }

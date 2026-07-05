@@ -29,6 +29,7 @@ describe("webAuthService", () => {
         allowLan: false,
         lockOnIdleMinutes: 15,
         readOnly: false,
+        remoteAuthenticatedWrite: false,
       };
       const fetchMock = mockFetch(jsonResponse(status));
 

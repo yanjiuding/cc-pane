@@ -64,6 +64,7 @@ function createValue(overrides: Partial<WebAccessSettings> = {}): WebAccessSetti
     passwordHash: null,
     lockOnIdleMinutes: 30,
     remoteReadOnly: false,
+    remoteAuthenticatedWrite: false,
     ...overrides,
   };
 }

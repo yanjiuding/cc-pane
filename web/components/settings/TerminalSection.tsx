@@ -152,6 +152,22 @@ export default function TerminalSection({ value, onChange }: TerminalSectionProp
           {t("resumeIdBackfillHint")}
         </p>
       </div>
+
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={value.daemonEnabled ?? false}
+            onChange={(e) => update("daemonEnabled", e.target.checked)}
+            className="w-4 h-4 cursor-pointer"
+            style={{ accentColor: "var(--app-accent)" }}
+          />
+          <Label>{t("terminalDaemon")}</Label>
+        </div>
+        <p className="text-[11px]" style={{ color: "var(--app-text-tertiary)" }}>
+          {t("terminalDaemonHint")}
+        </p>
+      </div>
     </div>
   );
 }

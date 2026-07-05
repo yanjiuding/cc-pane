@@ -9,6 +9,8 @@ export interface WebAuthStatus {
   lockOnIdleMinutes: number;
   /** 本请求来源在远程只读模式下是否被限制为只读 */
   readOnly: boolean;
+  /** 远程只读模式下是否放行已鉴权远程会话的写入 */
+  remoteAuthenticatedWrite: boolean;
 }
 
 export interface WebLoginRequest {
