@@ -1,0 +1,33 @@
+name: cc_panes_mobile
+description: CC-Panes 移动端 —— 远程连接桌面端 cc-panes-web 的终端客户端。
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # HTTP + Cookie 会话（ccp_web_session 需持久化）
+  dio: ^5.7.0
+  dio_cookie_manager: ^3.1.1
+  cookie_jar: ^4.0.8
+  path_provider: ^2.1.4
+  # WebSocket 终端流（IOWebSocketChannel 握手可带 Cookie header）
+  web_socket_channel: ^3.0.1
+  # 终端渲染（Phase 2）
+  xterm: ^4.0.0
+  # 状态管理
+  flutter_riverpod: ^2.5.1
+  # 凭证存储（Android Keystore / iOS Keychain）
+  flutter_secure_storage: ^9.2.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  mocktail: ^1.0.4
+
+flutter:
+  uses-material-design: true
