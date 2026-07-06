@@ -12,9 +12,10 @@ pub mod services;
 pub mod utils;
 
 use ccchan_commands::{
-    get_ccchan_pets, get_ccchan_settings, hide_ccchan, is_ccchan_chat_session_alive,
-    move_ccchan_window, resize_ccchan_for_bubble, resize_ccchan_for_chat, resize_ccchan_for_menu,
-    save_ccchan_settings, send_to_ccchan, show_ccchan, start_ccchan_chat, stop_ccchan_chat,
+    get_ccchan_pets, get_ccchan_pets_dir, get_ccchan_settings, hide_ccchan,
+    is_ccchan_chat_session_alive, move_ccchan_window, open_ccchan_pets_dir,
+    resize_ccchan_for_bubble, resize_ccchan_for_chat, resize_ccchan_for_menu, save_ccchan_settings,
+    send_to_ccchan, show_ccchan, start_ccchan_chat, stop_ccchan_chat,
 };
 use ccchan_service::{CCChanService, CcChanSessionNotifier};
 use commands::{
@@ -1943,6 +1944,8 @@ pub fn run() {
             get_ccchan_pets,
             get_ccchan_settings,
             save_ccchan_settings,
+            get_ccchan_pets_dir,
+            open_ccchan_pets_dir,
             // Git 命令
             get_git_branch,
             get_git_status,

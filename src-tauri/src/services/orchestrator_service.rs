@@ -9,7 +9,7 @@
 //! - 项目路径白名单校验
 //! - 请求频率限制
 
-use crate::ccchan_service::CCChanService;
+use crate::ccchan_service::{CCChanService, CCChanWindowMode};
 use crate::models::task_binding::{TaskBinding, TaskBindingStatus};
 use crate::models::todo::{
     CreateTodoRequest, TodoPriority, TodoQuery, TodoScope, TodoStatus, UpdateTodoRequest,
@@ -6251,9 +6251,15 @@ fn emit_ccchan_say(
     let Some(window) = app_handle.get_webview_window("ccchan") else {
         return Err("ccchan window was not created".to_string());
     };
+    let pet_size = ccchan_service.pet_size();
+    let (bubble_w, bubble_h) = ccchan_service.window_size(CCChanWindowMode::Bubble);
     window
-        .set_size(LogicalSize::new(300.0, 220.0))
+        .set_size(LogicalSize::new(bubble_w, bubble_h))
         .map_err(|error| format!("Failed to resize ccchan for bubble: {error}"))?;
+    // 气泡预留区：宠物本体被下移到窗口底部，上方留给气泡。s=120 时还原
+    // 历史值 translate(10px, 96px) 与气泡宽 260px。
+    let shift_y = (bubble_h - pet_size - 4.0).max(0.0);
+    let bubble_width = (bubble_w - 40.0).max(200.0);
     let text_json = serde_json::to_string(&text)
         .map_err(|error| format!("Failed to encode ccchan text: {error}"))?;
     let script = format!(
@@ -6264,7 +6270,7 @@ fn emit_ccchan_say(
   const root = document.getElementById("root");
   if (root) {{
     root.dataset.ccchanBubbleShift = "1";
-    root.style.transform = "translate(10px, 96px)";
+    root.style.transform = "translate(10px, {shift_y}px)";
     root.style.transition = "transform 140ms ease";
   }}
   let bubble = document.getElementById("ccchan-manual-bubble");
@@ -6276,7 +6282,7 @@ fn emit_ccchan_say(
       "left:12px",
       "top:8px",
       "z-index:2147483647",
-      "width:260px",
+      "width:{bubble_width}px",
       "box-sizing:border-box",
       "border:2px solid #38bdf8",
       "border-radius:8px",
@@ -6327,9 +6333,10 @@ fn emit_ccchan_say(
         .eval(&script)
         .map_err(|error| format!("Failed to dispatch ccchan-say-dom: {error}"))?;
     let shrink_window = window.clone();
+    let (collapsed_w, collapsed_h) = ccchan_service.window_size(CCChanWindowMode::Collapsed);
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(duration_ms));
-        let _ = shrink_window.set_size(LogicalSize::new(120.0, 120.0));
+        let _ = shrink_window.set_size(LogicalSize::new(collapsed_w, collapsed_h));
     });
     Ok(serde_json::json!({
         "success": true,

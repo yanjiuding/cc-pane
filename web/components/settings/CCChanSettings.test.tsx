@@ -1,3 +1,4 @@
+import "@/i18n";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,8 @@ function createValue(overrides: Partial<CCChanSettingsValue> = {}): CCChanSettin
     windowVisible: true,
     windowX: 100,
     windowY: 200,
+    wanderEnabled: false,
+    petSize: 120,
     ...overrides,
   } as CCChanSettingsValue;
 }
@@ -77,7 +80,7 @@ describe("CCChanSettings", () => {
     render(<CCChanSettings value={createValue()} onChange={onChange} />);
 
     const checkboxes = screen.getAllByRole("checkbox");
-    expect(checkboxes).toHaveLength(3);
+    expect(checkboxes).toHaveLength(4);
 
     await user.click(checkboxes[0]);
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ autoStart: true }));
@@ -87,6 +90,33 @@ describe("CCChanSettings", () => {
 
     await user.click(checkboxes[2]);
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ windowVisible: false }));
+
+    await user.click(checkboxes[3]);
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ wanderEnabled: true }));
+  });
+
+  it("changes the pet size via the slider and resets to the default", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<CCChanSettings value={createValue({ petSize: 200 })} onChange={onChange} />);
+
+    const slider = screen.getByRole("slider");
+    expect(slider).toHaveValue("200");
+
+    await user.click(screen.getByRole("button", { name: "重置 120" }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ petSize: 120 }));
+  });
+
+  it("opens the custom skin directory via the backend command", async () => {
+    const user = userEvent.setup();
+    const { invoke } = await import("@tauri-apps/api/core");
+    const mockInvoke = vi.mocked(invoke);
+    mockInvoke.mockResolvedValue(undefined as never);
+
+    render(<CCChanSettings value={createValue()} onChange={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "打开皮肤目录" }));
+    expect(mockInvoke).toHaveBeenCalledWith("open_ccchan_pets_dir");
   });
 
   it("shows the current window position and resets it to null", async () => {

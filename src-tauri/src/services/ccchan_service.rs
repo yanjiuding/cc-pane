@@ -153,6 +153,16 @@ struct PetDefinition {
     animations: HashMap<String, PetAnimation>,
 }
 
+/// ccchan 窗口的四种交互态；尺寸由 `CCChanService::window_size` 统一计算，
+/// 前端 `web/ccchan/ccchanLayout.ts` 保持同一公式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CCChanWindowMode {
+    Collapsed,
+    Bubble,
+    Menu,
+    Chat,
+}
+
 pub struct CCChanService {
     settings_service: Arc<SettingsService>,
     provider_service: Arc<ProviderService>,
@@ -193,10 +203,39 @@ impl CCChanService {
         Ok(())
     }
 
+    pub fn pet_size(&self) -> f64 {
+        self.settings().pet_size
+    }
+
+    pub fn window_size(&self, mode: CCChanWindowMode) -> (f64, f64) {
+        let s = self.pet_size();
+        window_size_for(mode, s)
+    }
+
+    pub fn user_pets_dir(&self) -> PathBuf {
+        self.app_paths.data_dir().join("ccchan").join("pets")
+    }
+
+    /// 确保用户皮肤目录存在，并在首次创建时放一份 README 模板，
+    /// 告诉用户 pet.json 的完整格式。已有 README 不覆盖。
+    pub fn ensure_user_pets_dir_scaffold(&self) -> AppResult<PathBuf> {
+        let dir = self.user_pets_dir();
+        std::fs::create_dir_all(&dir)
+            .map_err(|error| AppError::from(format!("cannot create pets dir: {error}")))?;
+        let readme = dir.join("README.md");
+        if !readme.exists() {
+            if let Err(error) = std::fs::write(&readme, USER_PETS_README) {
+                warn!(%error, "failed to write ccchan pets README");
+            }
+        }
+        Ok(dir)
+    }
+
     pub fn show_window(&self, app: &AppHandle) -> AppResult<()> {
         let window = ccchan_window(app)?;
+        let (width, height) = self.window_size(CCChanWindowMode::Collapsed);
         window
-            .set_size(LogicalSize::new(120.0, 120.0))
+            .set_size(LogicalSize::new(width, height))
             .map_err(|error| AppError::from(error.to_string()))?;
         window
             .set_decorations(false)
@@ -239,11 +278,45 @@ impl CCChanService {
         let manifest: PetsManifest = serde_json::from_str(&manifest_content)
             .map_err(|error| AppError::from(format!("Invalid pets manifest: {error}")))?;
 
-        manifest
+        let built_in = manifest
             .pets
             .iter()
             .map(|pet_id| self.load_pet(&root, pet_id))
-            .collect()
+            .collect::<AppResult<Vec<_>>>()?;
+        Ok(merge_pets(built_in, self.load_user_pets()))
+    }
+
+    /// 扫描用户皮肤目录（data_dir/ccchan/pets/<folder>/pet.json）。目录不存在或
+    /// 单个皮肤非法都不算错误——warn 跳过，保证内置角色始终可用。
+    fn load_user_pets(&self) -> Vec<PetMeta> {
+        let pets_dir = self.user_pets_dir();
+        let Ok(entries) = std::fs::read_dir(&pets_dir) else {
+            return Vec::new();
+        };
+        let mut pet_dirs: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+        // 按目录名排序遍历，重复 id 时保证覆盖结果确定。
+        pet_dirs.sort();
+
+        let mut pets = Vec::new();
+        for pet_dir in pet_dirs {
+            if !pet_dir.join("pet.json").is_file() {
+                continue;
+            }
+            match load_user_pet(&pet_dir) {
+                Ok(pet) => {
+                    info!(dir = %pet_dir.display(), id = %pet.id, "loaded user ccchan pet");
+                    pets.push(pet);
+                }
+                Err(error) => {
+                    warn!(dir = %pet_dir.display(), %error, "skipping invalid user ccchan pet");
+                }
+            }
+        }
+        pets
     }
 
     pub fn start_chat(
@@ -1201,9 +1274,193 @@ fn ccchan_window(app: &AppHandle) -> AppResult<WebviewWindow> {
     .map_err(|error| AppError::from(format!("Failed to create ccchan window: {error}")))
 }
 
+/// 各窗口态尺寸公式：s=120 时还原历史固定值（Collapsed 120×120、Bubble
+/// 300×220、Menu 300×280、Chat 460×680），s 更大时按增量放大，更小时不低于
+/// 历史值下限。前端 `web/ccchan/ccchanLayout.ts` 必须保持同一公式。
+pub fn window_size_for(mode: CCChanWindowMode, pet_size: f64) -> (f64, f64) {
+    let s = pet_size;
+    match mode {
+        CCChanWindowMode::Collapsed => (s, s),
+        CCChanWindowMode::Bubble => ((s + 180.0).max(300.0), (s + 100.0).max(220.0)),
+        CCChanWindowMode::Menu => ((s + 180.0).max(300.0), (s + 160.0).max(280.0)),
+        CCChanWindowMode::Chat => ((s + 340.0).max(460.0), (s + 560.0).max(680.0)),
+    }
+}
+
+/// 合并内置与用户皮肤：同 id 时用户版覆盖内置（re-skin），新 id 追加在后。
+fn merge_pets(built_in: Vec<PetMeta>, user: Vec<PetMeta>) -> Vec<PetMeta> {
+    let mut pets = built_in;
+    for user_pet in user {
+        if let Some(existing) = pets.iter_mut().find(|pet| pet.id == user_pet.id) {
+            *existing = user_pet;
+        } else {
+            pets.push(user_pet);
+        }
+    }
+    pets
+}
+
+/// 首次打开用户皮肤目录时生成的说明文件（`ensure_user_pets_dir_scaffold`）。
+const USER_PETS_README: &str = r#"# CC-Panes 自定义宠物（cc酱皮肤）
+
+在本目录下为每个自定义角色建一个文件夹：
+
+```
+pets/
+└── my-pet/                 # 文件夹名随意，建议与 id 一致
+    ├── pet.json            # 角色定义（必需）
+    └── spritesheet.png     # 精灵图（png / webp / gif / jpg，≤ 20MB）
+```
+
+## pet.json 格式
+
+```json
+{
+  "id": "my-pet",
+  "displayName": "我的宠物",
+  "description": "一句话介绍",
+  "spritesheetPath": "spritesheet.png",
+  "atlas": { "cellW": 192, "cellH": 208, "cols": 8, "rows": 9 },
+  "animations": {
+    "idle":    { "row": 0, "frames": 4, "fps": 8 },
+    "working": { "row": 1, "frames": 6, "fps": 10 },
+    "waiting": { "row": 2, "frames": 4, "fps": 6 },
+    "happy":   { "row": 3, "frames": 6, "fps": 10 },
+    "sad":     { "row": 4, "frames": 4, "fps": 6 },
+    "thinking":{ "row": 5, "frames": 4, "fps": 6 },
+    "walking": { "row": 6, "frames": 6, "fps": 10 }
+  }
+}
+```
+
+## 字段说明
+
+- `atlas`：精灵图按网格切帧。`cellW`/`cellH` 是单帧像素尺寸，`cols`/`rows` 是网格列数/行数。
+- `animations`：每个状态一行动画。`row` 是该动画所在的行（从 0 开始，必须 < rows），
+  `frames` 是帧数（从该行第 0 列开始取），`fps` 是播放速度（1~60）。
+  可选 `colOffset` 指定起始列。
+- 状态可用：`idle` / `working` / `waiting` / `happy` / `sad` / `thinking` / `walking` / `jumping`。
+  只有 `idle` 是必要的——缺失的状态会自动回退到 idle。
+- `spritesheetPath` 必须是本文件夹内的相对路径（不允许绝对路径和 `..`）。
+
+## 提示
+
+- `id` 与内置角色相同（`homie` / `doro.codex-pet`）时会**覆盖**内置形象（换皮）。
+- 改完后到 设置 → cc酱 → 「刷新角色列表」，在「默认角色」下拉里选择即可。
+- 参考模板可直接复制安装目录 `resources/ccchan/homie/` 里的文件。
+- pet.json 不合法时该角色会被跳过（日志里有 warn），不影响其他角色。
+"#;
+
+const USER_PET_JSON_MAX_BYTES: u64 = 64 * 1024;
+const USER_PET_SPRITESHEET_MAX_BYTES: u64 = 20 * 1024 * 1024;
+const USER_PET_IMAGE_EXTENSIONS: [&str; 5] = ["png", "webp", "gif", "jpg", "jpeg"];
+
+fn load_user_pet(pet_dir: &Path) -> AppResult<PetMeta> {
+    let pet_json_path = pet_dir.join("pet.json");
+    let json_len = std::fs::metadata(&pet_json_path)
+        .map_err(|error| AppError::from(format!("cannot stat pet.json: {error}")))?
+        .len();
+    if json_len > USER_PET_JSON_MAX_BYTES {
+        return Err(AppError::from(format!(
+            "pet.json too large ({json_len} bytes, max {USER_PET_JSON_MAX_BYTES})"
+        )));
+    }
+    let content = std::fs::read_to_string(&pet_json_path)
+        .map_err(|error| AppError::from(format!("cannot read pet.json: {error}")))?;
+    let definition: PetDefinition = serde_json::from_str(&content)
+        .map_err(|error| AppError::from(format!("invalid pet.json: {error}")))?;
+    validate_pet_definition(&definition)?;
+    let spritesheet_path = resolve_user_spritesheet(pet_dir, &definition.spritesheet_path)?;
+
+    Ok(PetMeta {
+        id: definition.id,
+        display_name: definition.display_name,
+        description: definition.description,
+        spritesheet_url: file_asset_url(&spritesheet_path),
+        atlas: definition.atlas,
+        animations: definition.animations,
+    })
+}
+
+fn validate_pet_definition(definition: &PetDefinition) -> AppResult<()> {
+    if definition.id.trim().is_empty() {
+        return Err(AppError::from("pet.json id is empty"));
+    }
+    let atlas = &definition.atlas;
+    if atlas.cell_w == 0 || atlas.cell_h == 0 || atlas.cols == 0 || atlas.rows == 0 {
+        return Err(AppError::from("pet.json atlas dimensions must be positive"));
+    }
+    for (state, animation) in &definition.animations {
+        if animation.row >= atlas.rows {
+            return Err(AppError::from(format!(
+                "animation '{state}' row {} out of atlas rows {}",
+                animation.row, atlas.rows
+            )));
+        }
+        if animation.frames == 0 {
+            return Err(AppError::from(format!(
+                "animation '{state}' has zero frames"
+            )));
+        }
+        if !(1..=60).contains(&animation.fps) {
+            return Err(AppError::from(format!(
+                "animation '{state}' fps {} out of range 1..=60",
+                animation.fps
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// 用户 spritesheetPath 只允许指向 pet 目录内部的图片文件：拒绝绝对路径、
+/// `..`、symlink 逃逸和非图片扩展名（asset scope 是 `**`，必须在这里兜安全）。
+fn resolve_user_spritesheet(pet_dir: &Path, sprite_rel: &str) -> AppResult<PathBuf> {
+    let rel = Path::new(sprite_rel);
+    if rel.is_absolute() {
+        return Err(AppError::from("spritesheetPath must be relative"));
+    }
+    if rel
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(AppError::from("spritesheetPath must not contain '..'"));
+    }
+    let extension = rel
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !USER_PET_IMAGE_EXTENSIONS.contains(&extension.as_str()) {
+        return Err(AppError::from(format!(
+            "spritesheetPath extension '{extension}' is not an allowed image type"
+        )));
+    }
+
+    let candidate = pet_dir.join(rel);
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|error| AppError::from(format!("spritesheet not found: {error}")))?;
+    let canonical_dir = pet_dir
+        .canonicalize()
+        .map_err(|error| AppError::from(format!("cannot canonicalize pet dir: {error}")))?;
+    if !canonical.starts_with(&canonical_dir) {
+        return Err(AppError::from("spritesheetPath escapes the pet directory"));
+    }
+    let sprite_len = std::fs::metadata(&canonical)
+        .map_err(|error| AppError::from(format!("cannot stat spritesheet: {error}")))?
+        .len();
+    if sprite_len > USER_PET_SPRITESHEET_MAX_BYTES {
+        return Err(AppError::from(format!(
+            "spritesheet too large ({sprite_len} bytes, max {USER_PET_SPRITESHEET_MAX_BYTES})"
+        )));
+    }
+    // asset URL 用未 canonicalize 的路径，避免 Windows `\\?\` 前缀进 URL。
+    Ok(candidate)
+}
+
 fn position_window(window: &WebviewWindow, settings: &CCChanSettings) -> AppResult<()> {
     let (x, y) = match (settings.window_x, settings.window_y) {
-        (Some(x), Some(y)) => clamp_position_to_visible(window, x, y),
+        (Some(x), Some(y)) => clamp_position_to_visible(window, x, y, settings.pet_size),
         _ => (80.0, 80.0),
     };
     window
@@ -1222,8 +1479,12 @@ fn position_window(window: &WebviewWindow, settings: &CCChanSettings) -> AppResu
 /// Used both on startup (resolve stale persisted positions after monitor
 /// hot-unplug / DPI change) AND on every drag-release (so a user who drags
 /// the mascot off-screen sees it snap back instead of vanishing).
-pub fn clamp_position_to_visible(window: &WebviewWindow, x: f64, y: f64) -> (f64, f64) {
-    const PET_SIZE: f64 = 120.0;
+pub fn clamp_position_to_visible(
+    window: &WebviewWindow,
+    x: f64,
+    y: f64,
+    pet_size: f64,
+) -> (f64, f64) {
     const SAFE_MARGIN: f64 = 8.0;
     const HALF_OFF_TOLERANCE: f64 = 40.0;
 
@@ -1250,11 +1511,11 @@ pub fn clamp_position_to_visible(window: &WebviewWindow, x: f64, y: f64) -> (f64
         let (lx, ly, lw, lh) = monitor_logical_rect(m);
         let cx = x.clamp(
             lx + SAFE_MARGIN,
-            (lx + lw - PET_SIZE - SAFE_MARGIN).max(lx + SAFE_MARGIN),
+            (lx + lw - pet_size - SAFE_MARGIN).max(lx + SAFE_MARGIN),
         );
         let cy = y.clamp(
             ly + SAFE_MARGIN,
-            (ly + lh - PET_SIZE - SAFE_MARGIN).max(ly + SAFE_MARGIN),
+            (ly + lh - pet_size - SAFE_MARGIN).max(ly + SAFE_MARGIN),
         );
         let dist = (cx - x).powi(2) + (cy - y).powi(2);
         if best.is_none_or(|b| dist < b.0) {
@@ -1610,6 +1871,151 @@ fn to_cli_provider(provider: crate::models::provider::Provider) -> CliProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pet_meta(id: &str, name: &str) -> PetMeta {
+        PetMeta {
+            id: id.to_string(),
+            display_name: name.to_string(),
+            description: String::new(),
+            spritesheet_url: String::new(),
+            atlas: PetAtlas {
+                cell_w: 192,
+                cell_h: 208,
+                cols: 8,
+                rows: 9,
+            },
+            animations: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn window_size_for_restores_legacy_values_at_default_pet_size() {
+        assert_eq!(
+            window_size_for(CCChanWindowMode::Collapsed, 120.0),
+            (120.0, 120.0)
+        );
+        assert_eq!(
+            window_size_for(CCChanWindowMode::Bubble, 120.0),
+            (300.0, 220.0)
+        );
+        assert_eq!(
+            window_size_for(CCChanWindowMode::Menu, 120.0),
+            (300.0, 280.0)
+        );
+        assert_eq!(
+            window_size_for(CCChanWindowMode::Chat, 120.0),
+            (460.0, 680.0)
+        );
+    }
+
+    #[test]
+    fn window_size_for_scales_up_and_floors_below_default() {
+        assert_eq!(
+            window_size_for(CCChanWindowMode::Collapsed, 240.0),
+            (240.0, 240.0)
+        );
+        assert_eq!(
+            window_size_for(CCChanWindowMode::Bubble, 240.0),
+            (420.0, 340.0)
+        );
+        // 小尺寸不低于历史窗口下限（气泡/菜单/chat 内容不缩水）
+        assert_eq!(
+            window_size_for(CCChanWindowMode::Bubble, 80.0),
+            (300.0, 220.0)
+        );
+        assert_eq!(
+            window_size_for(CCChanWindowMode::Chat, 80.0),
+            (460.0, 680.0)
+        );
+    }
+
+    #[test]
+    fn merge_pets_user_overrides_built_in_by_id_and_appends_new() {
+        let built_in = vec![pet_meta("homie", "Homie"), pet_meta("doro", "Doro")];
+        let user = vec![
+            pet_meta("homie", "Custom Homie"),
+            pet_meta("my-pet", "Mine"),
+        ];
+
+        let merged = merge_pets(built_in, user);
+
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].id, "homie");
+        assert_eq!(merged[0].display_name, "Custom Homie");
+        assert_eq!(merged[1].id, "doro");
+        assert_eq!(merged[2].id, "my-pet");
+    }
+
+    fn write_user_pet(dir: &Path, sprite_name: &str, pet_json: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("pet.json"), pet_json).unwrap();
+        if !sprite_name.is_empty() {
+            std::fs::write(dir.join(sprite_name), b"fake-png").unwrap();
+        }
+    }
+
+    fn valid_pet_json(sprite_path: &str) -> String {
+        format!(
+            r#"{{"id":"my-pet","displayName":"Mine","description":"d","spritesheetPath":"{sprite_path}","atlas":{{"cellW":192,"cellH":208,"cols":8,"rows":9}},"animations":{{"idle":{{"row":0,"frames":4,"fps":8}}}}}}"#
+        )
+    }
+
+    #[test]
+    fn load_user_pet_accepts_valid_pet() {
+        let temp = tempfile::tempdir().unwrap();
+        let pet_dir = temp.path().join("my-pet");
+        write_user_pet(
+            &pet_dir,
+            "spritesheet.png",
+            &valid_pet_json("spritesheet.png"),
+        );
+
+        let pet = load_user_pet(&pet_dir).expect("valid pet should load");
+        assert_eq!(pet.id, "my-pet");
+        assert!(pet.spritesheet_url.contains("spritesheet.png"));
+    }
+
+    #[test]
+    fn load_user_pet_rejects_path_escape_and_absolute_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        let pet_dir = temp.path().join("evil");
+        write_user_pet(&pet_dir, "", &valid_pet_json("../escape.png"));
+        assert!(load_user_pet(&pet_dir).is_err());
+
+        let abs = if cfg!(windows) {
+            "C:/Windows/x.png"
+        } else {
+            "/etc/x.png"
+        };
+        std::fs::write(pet_dir.join("pet.json"), valid_pet_json(abs)).unwrap();
+        assert!(load_user_pet(&pet_dir).is_err());
+    }
+
+    #[test]
+    fn load_user_pet_rejects_bad_extension_and_invalid_atlas() {
+        let temp = tempfile::tempdir().unwrap();
+        let pet_dir = temp.path().join("bad-ext");
+        write_user_pet(&pet_dir, "payload.exe", &valid_pet_json("payload.exe"));
+        assert!(load_user_pet(&pet_dir).is_err());
+
+        let pet_dir2 = temp.path().join("bad-atlas");
+        let bad_atlas = valid_pet_json("spritesheet.png").replace(r#""rows":9"#, r#""rows":0"#);
+        write_user_pet(&pet_dir2, "spritesheet.png", &bad_atlas);
+        assert!(load_user_pet(&pet_dir2).is_err());
+
+        let pet_dir3 = temp.path().join("bad-anim");
+        let bad_anim = valid_pet_json("spritesheet.png").replace(r#""fps":8"#, r#""fps":600"#);
+        write_user_pet(&pet_dir3, "spritesheet.png", &bad_anim);
+        assert!(load_user_pet(&pet_dir3).is_err());
+    }
+
+    #[test]
+    fn load_user_pet_rejects_broken_json() {
+        let temp = tempfile::tempdir().unwrap();
+        let pet_dir = temp.path().join("broken");
+        write_user_pet(&pet_dir, "spritesheet.png", "{not json");
+        assert!(load_user_pet(&pet_dir).is_err());
+    }
 
     #[test]
     fn parses_assistant_text_without_thinking_content() {

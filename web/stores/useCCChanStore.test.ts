@@ -69,7 +69,8 @@ describe("useCCChanStore", () => {
       await useCCChanStore.getState().load();
 
       const state = useCCChanStore.getState();
-      expect(state.settings).toEqual(settings);
+      // 旧配置缺新字段时由 normalize 补默认值
+      expect(state.settings).toEqual({ ...settings, wanderEnabled: false, petSize: 120 });
       expect(state.pets).toEqual(pets);
       expect(state.loaded).toBe(true);
       expect(state.loading).toBe(false);
@@ -129,6 +130,48 @@ describe("useCCChanStore", () => {
         settings,
       });
       expect(useCCChanStore.getState().settings).toEqual(settings);
+    });
+  });
+
+  describe("新字段默认值与规范化", () => {
+    it("默认漫游关闭、petSize 为 120", () => {
+      expect(DEFAULT_CCCHAN_SETTINGS.wanderEnabled).toBe(false);
+      expect(DEFAULT_CCCHAN_SETTINGS.petSize).toBe(120);
+    });
+
+    it("applySettings 应只更新内存并 clamp petSize", () => {
+      useCCChanStore.getState().applySettings({
+        ...DEFAULT_CCCHAN_SETTINGS,
+        wanderEnabled: true,
+        petSize: 999,
+      });
+
+      const state = useCCChanStore.getState();
+      expect(state.settings.wanderEnabled).toBe(true);
+      expect(state.settings.petSize).toBe(240);
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it("applySettings 对非法 petSize 回退默认值", () => {
+      useCCChanStore.getState().applySettings({ petSize: Number.NaN });
+      expect(useCCChanStore.getState().settings.petSize).toBe(120);
+
+      useCCChanStore.getState().applySettings({ petSize: 10 });
+      expect(useCCChanStore.getState().settings.petSize).toBe(80);
+    });
+
+    it("saveSettings 应先 clamp 再落盘", async () => {
+      mockTauriInvoke({ save_ccchan_settings: undefined });
+
+      await useCCChanStore.getState().saveSettings({
+        ...DEFAULT_CCCHAN_SETTINGS,
+        petSize: 500,
+      });
+
+      expect(mockInvoke).toHaveBeenCalledWith("save_ccchan_settings", {
+        settings: { ...DEFAULT_CCCHAN_SETTINGS, petSize: 240 },
+      });
+      expect(useCCChanStore.getState().settings.petSize).toBe(240);
     });
   });
 

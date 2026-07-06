@@ -340,6 +340,11 @@ pub struct CCChanSettings {
     pub window_x: Option<f64>,
     #[serde(default)]
     pub window_y: Option<f64>,
+    // 随机漫游默认关闭：宠物待在原地，仍可手动拖拽。
+    #[serde(default)]
+    pub wander_enabled: bool,
+    #[serde(default = "default_ccchan_pet_size")]
+    pub pet_size: f64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -504,6 +509,9 @@ impl WebAccessSettings {
     }
 }
 
+pub const CCCHAN_PET_SIZE_MIN: f64 = 80.0;
+pub const CCCHAN_PET_SIZE_MAX: f64 = 240.0;
+
 impl CCChanSettings {
     pub fn merge_missing_defaults(&mut self) {
         if !matches!(self.ai_engine.as_str(), "claude" | "codex") {
@@ -511,6 +519,11 @@ impl CCChanSettings {
         }
         if self.default_pet_id.trim().is_empty() {
             self.default_pet_id = default_ccchan_pet_id();
+        }
+        if !self.pet_size.is_finite()
+            || !(CCCHAN_PET_SIZE_MIN..=CCCHAN_PET_SIZE_MAX).contains(&self.pet_size)
+        {
+            self.pet_size = default_ccchan_pet_size();
         }
     }
 }
@@ -520,7 +533,12 @@ fn default_ccchan_ai_engine() -> String {
 }
 
 fn default_ccchan_pet_id() -> String {
-    "doro.codex-pet".to_string()
+    // 与前端 useCCChanStore 的 DEFAULT_CCCHAN_SETTINGS / FALLBACK_PET 保持一致。
+    "homie".to_string()
+}
+
+fn default_ccchan_pet_size() -> f64 {
+    120.0
 }
 
 fn default_true() -> bool {
@@ -653,7 +671,7 @@ impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
             font_size: DEFAULT_TERMINAL_FONT_SIZE,
-            font_family: "Consolas, \"Courier New\", monospace".to_string(),
+            font_family: "\"Maple Mono NF CN\", \"Maple Mono\", \"Cascadia Code\", \"Cascadia Mono\", \"JetBrains Mono\", Consolas, \"Sarasa Mono SC\", \"Microsoft YaHei UI\", \"PingFang SC\", monospace".to_string(),
             cursor_style: "block".to_string(),
             cursor_blink: false,
             scrollback: crate::constants::terminal::DEFAULT_SCROLLBACK,
@@ -749,6 +767,8 @@ impl Default for CCChanSettings {
             window_visible: false,
             window_x: None,
             window_y: None,
+            wander_enabled: false,
+            pet_size: default_ccchan_pet_size(),
         }
     }
 }
@@ -956,6 +976,38 @@ mod tests {
     }
 
     #[test]
+    fn ccchan_merge_missing_defaults_normalizes_pet_size_and_pet_id() {
+        let mut settings = CCChanSettings::default();
+        assert!(!settings.wander_enabled);
+        assert_eq!(settings.pet_size, 120.0);
+        assert_eq!(settings.default_pet_id, "homie");
+
+        settings.pet_size = 10.0;
+        settings.default_pet_id = "  ".to_string();
+        settings.merge_missing_defaults();
+        assert_eq!(settings.pet_size, 120.0);
+        assert_eq!(settings.default_pet_id, "homie");
+
+        settings.pet_size = f64::NAN;
+        settings.merge_missing_defaults();
+        assert_eq!(settings.pet_size, 120.0);
+
+        settings.pet_size = 240.0;
+        settings.merge_missing_defaults();
+        assert_eq!(settings.pet_size, 240.0);
+    }
+
+    #[test]
+    fn ccchan_settings_deserializes_legacy_config_without_new_fields() {
+        let settings: CCChanSettings =
+            serde_json::from_str(r#"{"aiEngine":"claude","defaultPetId":"doro.codex-pet"}"#)
+                .expect("legacy ccchan settings");
+        assert!(!settings.wander_enabled);
+        assert_eq!(settings.pet_size, 120.0);
+        assert_eq!(settings.default_pet_id, "doro.codex-pet");
+    }
+
+    #[test]
     fn voice_merge_missing_defaults_normalizes_invalid_values() {
         let mut settings = VoiceSettings {
             provider: "unknown".to_string(),
@@ -969,6 +1021,7 @@ mod tests {
             language: Some(" ".to_string()),
             enable_itn: true,
             max_record_seconds: 999,
+            show_floating_button: true,
         };
 
         settings.merge_missing_defaults();

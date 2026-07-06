@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { emitTo } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { Settings, Globe, Terminal, Keyboard, Info, Cloud, Bell, Camera, Share2, Mic, Bot, Wifi, Cable } from "lucide-react";
@@ -91,6 +92,13 @@ export default function SettingsPanel({ open, onOpenChange }: SettingsPanelProps
       };
       await useCCChanStore.getState().saveSettings(draft.ccchan);
       await saveSettings(settingsToSave);
+      // 推送 normalized 后的 ccchan settings 给独立的宠物窗口（未开时失败可忽略，
+      // 下次显示会重新 load）。
+      try {
+        await emitTo("ccchan", "ccchan:settings-updated", useCCChanStore.getState().settings);
+      } catch {
+        /* ccchan window not open or non-Tauri runtime */
+      }
       toast.success(t("saved"));
       onOpenChange(false);
     } catch (e) {

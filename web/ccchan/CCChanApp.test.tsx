@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CCCHAN_SETTINGS, FALLBACK_PET, useCCChanStore } from "@/stores/useCCChanStore";
 import { useTerminalStatusStore } from "@/stores";
 import { CCChanApp } from "./CCChanApp";
@@ -45,10 +45,10 @@ function createWebviewListenerRegistry() {
   };
 }
 
-function mockCcChanInvoke() {
+function mockCcChanInvoke(settings = DEFAULT_CCCHAN_SETTINGS) {
   const mockInvoke = invoke as ReturnType<typeof vi.fn>;
   mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-    if (cmd === "get_ccchan_settings") return Promise.resolve(DEFAULT_CCCHAN_SETTINGS);
+    if (cmd === "get_ccchan_settings") return Promise.resolve(settings);
     if (cmd === "get_ccchan_pets") return Promise.resolve([FALLBACK_PET]);
     if (cmd === "get_all_terminal_status") return Promise.resolve([]);
     if (cmd === "resize_ccchan_for_chat") return Promise.resolve(undefined);
@@ -169,5 +169,113 @@ describe("CCChanApp pet interactions", () => {
 
     expect(await screen.findByText("这条回复关闭后还应该在。")).toBeInTheDocument();
     expect(mockInvoke.mock.calls.filter(([cmd]) => cmd === "start_ccchan_chat")).toHaveLength(1);
+  });
+
+  it("applies settings pushed via ccchan:settings-updated without reloading", async () => {
+    const listeners = createWebviewListenerRegistry();
+    mockCcChanInvoke();
+
+    render(<CCChanApp />);
+
+    await waitFor(() => {
+      expect(listeners.listenerCount("ccchan:settings-updated")).toBeGreaterThan(0);
+    });
+
+    act(() => {
+      listeners.emit("ccchan:settings-updated", {
+        ...DEFAULT_CCCHAN_SETTINGS,
+        wanderEnabled: true,
+        petSize: 200,
+      });
+    });
+
+    const settings = useCCChanStore.getState().settings;
+    expect(settings.wanderEnabled).toBe(true);
+    expect(settings.petSize).toBe(200);
+  });
+});
+
+describe("CCChanApp wandering", () => {
+  const wanderMonitor = {
+    position: { x: 0, y: 0 },
+    size: { width: 1920, height: 1080 },
+    scaleFactor: 1,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    createWebviewListenerRegistry();
+    useCCChanStore.setState({
+      settings: DEFAULT_CCCHAN_SETTINGS,
+      pets: [FALLBACK_PET],
+      expanded: false,
+      chatSessionId: null,
+      loading: false,
+      loaded: false,
+    });
+    useTerminalStatusStore.setState({
+      statusMap: new Map(),
+      _unlisten: null,
+      _idleCheckInterval: null,
+      _initialized: false,
+    });
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function moveCalls(mockInvoke: ReturnType<typeof vi.fn>) {
+    return mockInvoke.mock.calls.filter(([cmd]) => cmd === "move_ccchan_window");
+  }
+
+  it("does not wander when wanderEnabled is off (default)", async () => {
+    const mockInvoke = mockCcChanInvoke();
+    const { currentMonitor } = await import("@tauri-apps/api/window");
+    vi.mocked(currentMonitor).mockResolvedValue(wanderMonitor as never);
+
+    render(<CCChanApp />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+
+    expect(moveCalls(mockInvoke)).toHaveLength(0);
+  });
+
+  it("wanders when wanderEnabled is on and stops after toggling off", async () => {
+    const mockInvoke = mockCcChanInvoke({ ...DEFAULT_CCCHAN_SETTINGS, wanderEnabled: true });
+    const { currentMonitor } = await import("@tauri-apps/api/window");
+    vi.mocked(currentMonitor).mockResolvedValue(wanderMonitor as never);
+    useCCChanStore.setState({
+      settings: { ...DEFAULT_CCCHAN_SETTINGS, wanderEnabled: true },
+    });
+
+    render(<CCChanApp />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(moveCalls(mockInvoke).length).toBeGreaterThan(0);
+
+    // 走动途中关闭开关：在途 step 应立即停止，不再发移动
+    act(() => {
+      useCCChanStore.getState().applySettings({
+        ...DEFAULT_CCCHAN_SETTINGS,
+        wanderEnabled: false,
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+    const countAfterDisable = moveCalls(mockInvoke).length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(moveCalls(mockInvoke)).toHaveLength(countAfterDisable);
   });
 });

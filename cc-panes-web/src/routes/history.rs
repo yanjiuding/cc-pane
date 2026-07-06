@@ -583,9 +583,7 @@ fn restore_snapshot_entry(
     let provider_selection = entry
         .provider_selection
         .as_deref()
-        .and_then(|value| {
-            serde_json::from_value(serde_json::Value::String(value.to_string())).ok()
-        })
+        .and_then(|value| serde_json::from_value(serde_json::Value::String(value.to_string())).ok())
         .unwrap_or_default();
 
     let request = cc_panes_core::utils::normalize_session_request_for_current_host(

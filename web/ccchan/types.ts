@@ -8,6 +8,8 @@ export interface CCChanSettings {
   windowVisible: boolean;
   windowX: number | null;
   windowY: number | null;
+  wanderEnabled: boolean;
+  petSize: number;
 }
 
 export interface PetMeta {

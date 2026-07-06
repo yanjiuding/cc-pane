@@ -480,7 +480,11 @@ async fn restore_workspace_snapshot_recreates_sessions_with_resume() {
         .find(|entry| entry.source_pty_session_id == "pty-session-b")
         .expect("wsl entry");
     assert!(wsl_entry.session_id.is_none());
-    assert!(wsl_entry.error.as_deref().unwrap_or_default().contains("wsl"));
+    assert!(wsl_entry
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("wsl"));
 
     // 不存在的快照 → 404
     let error = restore_workspace_snapshot(

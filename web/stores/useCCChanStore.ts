@@ -22,7 +22,20 @@ export const DEFAULT_CCCHAN_SETTINGS: CCChanSettings = {
   windowVisible: false,
   windowX: null,
   windowY: null,
+  // 随机漫游默认关闭：宠物待在原地，仍可拖拽。
+  wanderEnabled: false,
+  petSize: 120,
 };
+
+export const CCCHAN_PET_SIZE_MIN = 80;
+export const CCCHAN_PET_SIZE_MAX = 240;
+export const CCCHAN_PET_SIZE_DEFAULT = 120;
+
+function clampPetSize(value: unknown): number {
+  const size = Number(value);
+  if (!Number.isFinite(size)) return CCCHAN_PET_SIZE_DEFAULT;
+  return Math.min(CCCHAN_PET_SIZE_MAX, Math.max(CCCHAN_PET_SIZE_MIN, Math.round(size)));
+}
 
 export const FALLBACK_PET: PetMeta = {
   id: "homie",
@@ -48,6 +61,8 @@ interface CCChanStoreState {
   loaded: boolean;
   load: () => Promise<void>;
   saveSettings: (settings: CCChanSettings) => Promise<void>;
+  /** 只更新内存（供跨窗口 settings 同步事件用），不回写后端。 */
+  applySettings: (settings: Partial<CCChanSettings>) => void;
   setExpanded: (expanded: boolean) => void;
   setChatSessionId: (sessionId: string | null) => void;
   setWindowVisible: (visible: boolean) => void;
@@ -56,9 +71,16 @@ interface CCChanStoreState {
   switchPet: () => void;
 }
 
-function normalizeSettings(settings: Partial<CCChanSettings> | null | undefined): CCChanSettings {
-  return { ...DEFAULT_CCCHAN_SETTINGS, ...settings };
+export function normalizeCCChanSettings(
+  settings: Partial<CCChanSettings> | null | undefined,
+): CCChanSettings {
+  const merged = { ...DEFAULT_CCCHAN_SETTINGS, ...settings };
+  merged.petSize = clampPetSize(merged.petSize);
+  merged.wanderEnabled = merged.wanderEnabled === true;
+  return merged;
 }
+
+const normalizeSettings = normalizeCCChanSettings;
 
 function normalizePets(pets: PetMeta[] | null | undefined): PetMeta[] {
   return pets && pets.length > 0 ? pets : [FALLBACK_PET];
@@ -102,6 +124,10 @@ export const useCCChanStore = create<CCChanStoreState>((set, get) => ({
     const normalized = normalizeSettings(settings);
     await invokeIfTauri("save_ccchan_settings", { settings: normalized });
     set({ settings: normalized });
+  },
+
+  applySettings: (settings) => {
+    set({ settings: normalizeSettings(settings) });
   },
 
   setExpanded: (expanded) => set({ expanded }),

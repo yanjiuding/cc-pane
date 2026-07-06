@@ -27,6 +27,9 @@ interface ChatPanelProps {
   onMessagesChange: Dispatch<SetStateAction<ChatMessage[]>>;
   onSessionIdChange: (sessionId: string | null) => void;
   onClose: () => void;
+  /** 面板尺寸（随宠物 petSize 缩放，由 ccchanLayout 计算），默认历史值。 */
+  width?: number;
+  height?: number;
 }
 
 interface TerminalExitPayload {
@@ -317,6 +320,8 @@ export function ChatPanel({
   onMessagesChange,
   onSessionIdChange,
   onClose,
+  width = 432,
+  height = 508,
 }: ChatPanelProps) {
   const saveSettings = useCCChanStore((state) => state.saveSettings);
   const [input, setInput] = useState("");
@@ -830,8 +835,10 @@ export function ChatPanel({
 
   return (
     <section
-      className="flex h-[508px] w-[432px] flex-col overflow-hidden rounded-lg border shadow-2xl"
+      className="flex flex-col overflow-hidden rounded-lg border shadow-2xl"
       style={{
+        width,
+        height,
         background: "#ffffff",
         borderColor: "#38bdf8",
         color: "#0f172a",

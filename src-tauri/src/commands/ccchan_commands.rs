@@ -1,4 +1,4 @@
-use crate::ccchan_service::{clamp_position_to_visible, CCChanService, PetMeta};
+use crate::ccchan_service::{clamp_position_to_visible, CCChanService, CCChanWindowMode, PetMeta};
 use crate::models::settings::CCChanSettings;
 use crate::services::TerminalService;
 use crate::utils::{AppError, AppResult};
@@ -26,43 +26,48 @@ pub async fn hide_ccchan(app: AppHandle) -> AppResult<()> {
     service.set_window_visible(false)
 }
 
-#[tauri::command]
-pub async fn resize_ccchan_for_chat(window: WebviewWindow, expanded: bool) -> AppResult<()> {
-    debug!(expanded, "cmd::resize_ccchan_for_chat");
-    let (width, height) = if expanded {
-        (460.0, 680.0)
-    } else {
-        (120.0, 120.0)
-    };
+fn resize_ccchan_window(window: &WebviewWindow, mode: CCChanWindowMode) -> AppResult<()> {
+    let service = window
+        .app_handle()
+        .try_state::<Arc<CCChanService>>()
+        .ok_or_else(|| AppError::from("CCChanService is not registered"))?;
+    let (width, height) = service.window_size(mode);
     window
         .set_size(LogicalSize::new(width, height))
         .map_err(|error| AppError::from(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn resize_ccchan_for_chat(window: WebviewWindow, expanded: bool) -> AppResult<()> {
+    debug!(expanded, "cmd::resize_ccchan_for_chat");
+    let mode = if expanded {
+        CCChanWindowMode::Chat
+    } else {
+        CCChanWindowMode::Collapsed
+    };
+    resize_ccchan_window(&window, mode)
 }
 
 #[tauri::command]
 pub async fn resize_ccchan_for_menu(window: WebviewWindow, expanded: bool) -> AppResult<()> {
     debug!(expanded, "cmd::resize_ccchan_for_menu");
-    let (width, height) = if expanded {
-        (300.0, 280.0)
+    let mode = if expanded {
+        CCChanWindowMode::Menu
     } else {
-        (120.0, 120.0)
+        CCChanWindowMode::Collapsed
     };
-    window
-        .set_size(LogicalSize::new(width, height))
-        .map_err(|error| AppError::from(error.to_string()))
+    resize_ccchan_window(&window, mode)
 }
 
 #[tauri::command]
 pub async fn resize_ccchan_for_bubble(window: WebviewWindow, expanded: bool) -> AppResult<()> {
     debug!(expanded, "cmd::resize_ccchan_for_bubble");
-    let (width, height) = if expanded {
-        (300.0, 220.0)
+    let mode = if expanded {
+        CCChanWindowMode::Bubble
     } else {
-        (120.0, 120.0)
+        CCChanWindowMode::Collapsed
     };
-    window
-        .set_size(LogicalSize::new(width, height))
-        .map_err(|error| AppError::from(error.to_string()))
+    resize_ccchan_window(&window, mode)
 }
 
 #[tauri::command]
@@ -73,7 +78,12 @@ pub async fn move_ccchan_window(
     persist: Option<bool>,
 ) -> AppResult<()> {
     debug!(x, y, persist, "cmd::move_ccchan_window");
-    let (cx, cy) = clamp_position_to_visible(&window, x, y);
+    let pet_size = window
+        .app_handle()
+        .try_state::<Arc<CCChanService>>()
+        .map(|service| service.pet_size())
+        .unwrap_or(120.0);
+    let (cx, cy) = clamp_position_to_visible(&window, x, y, pet_size);
     window
         .set_position(LogicalPosition::new(cx, cy))
         .map_err(|error| AppError::from(error.to_string()))?;
@@ -181,4 +191,24 @@ pub fn save_ccchan_settings(
 ) -> AppResult<()> {
     debug!("cmd::save_ccchan_settings");
     service.save_settings(settings)
+}
+
+#[tauri::command]
+pub fn get_ccchan_pets_dir(service: State<'_, Arc<CCChanService>>) -> AppResult<String> {
+    debug!("cmd::get_ccchan_pets_dir");
+    Ok(service.user_pets_dir().to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn open_ccchan_pets_dir(
+    app: AppHandle,
+    service: State<'_, Arc<CCChanService>>,
+) -> AppResult<()> {
+    debug!("cmd::open_ccchan_pets_dir");
+    use tauri_plugin_opener::OpenerExt;
+    let dir = service.ensure_user_pets_dir_scaffold()?;
+    app.opener()
+        .open_path(dir.to_string_lossy().as_ref(), None::<&str>)
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }

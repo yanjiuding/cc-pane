@@ -15,20 +15,9 @@ import { ChatPanel, type ChatMessage } from "./ChatPanel";
 import { ContextMenu, type CCChanContextMenuPosition } from "./ContextMenu";
 import { SessionDots } from "./SessionDots";
 import { SpritePet } from "./SpritePet";
-import type { CCChanEvent, CCChanPetState } from "./types";
+import { getCCChanLayout } from "./ccchanLayout";
+import type { CCChanEvent, CCChanPetState, CCChanSettings } from "./types";
 
-const PET_SIZE = 120;
-const CHAT_EXPANDED_W = 460;
-const CHAT_EXPANDED_H = 680;
-const CHAT_PANEL_LEFT = 14;
-const CHAT_PANEL_TOP = 148;
-const MENU_W = 300;
-const MENU_H = 280;
-const MENU_PANEL_W = 164;
-const MENU_PANEL_H = 226;
-const MENU_PAD = 10;
-const BUBBLE_W = 300;
-const BUBBLE_H = 220;
 const BUBBLE_INITIAL_MS = 12_000;
 const BUBBLE_REPEAT_MIN_MS = 42_000;
 const BUBBLE_REPEAT_MAX_MS = 95_000;
@@ -132,6 +121,7 @@ export function CCChanApp() {
   const setWindowVisible = useCCChanStore((state) => state.setWindowVisible);
   const setPosition = useCCChanStore((state) => state.setPosition);
   const switchPet = useCCChanStore((state) => state.switchPet);
+  const applySettings = useCCChanStore((state) => state.applySettings);
   const initTerminalStatus = useTerminalStatusStore((state) => state.init);
   const cleanupTerminalStatus = useTerminalStatusStore((state) => state.cleanup);
   const statusMap = useTerminalStatusStore((state) => state.statusMap);
@@ -155,6 +145,9 @@ export function CCChanApp() {
     () => pets.find((pet) => pet.id === settings.defaultPetId) ?? pets[0],
     [pets, settings.defaultPetId],
   );
+
+  const layout = useMemo(() => getCCChanLayout(settings.petSize), [settings.petSize]);
+  const petSize = layout.petSize;
 
   const aggregateState = useMemo(() => {
     const statuses = Array.from(statusMap.values()).map((info) => info.status as TerminalStatusType);
@@ -244,11 +237,14 @@ export function CCChanApp() {
 
   useEffect(() => {
     if (expanded || menuPosition) return;
+    // 拖拽手势进行中不重设窗口尺寸，避免窗口在手上突然跳动；
+    // 新 petSize 会在下一次状态切换（气泡/菜单/chat）时生效。
+    if (petPointerRef.current) return;
     void invoke("resize_ccchan_for_bubble", { expanded: bubbleVisible }).catch(() => {});
-  }, [bubbleVisible, expanded, menuPosition]);
+  }, [bubbleVisible, expanded, menuPosition, petSize]);
 
   useEffect(() => {
-    if (eventState || expanded || menuPosition) {
+    if (!settings.wanderEnabled || eventState || expanded || menuPosition) {
       setEggState(null);
       return;
     }
@@ -295,8 +291,8 @@ export function CCChanApp() {
         let targetY = startY;
         let dist = 0;
         for (let attempt = 0; attempt < 8; attempt += 1) {
-          targetX = mx + WANDER_EDGE_PAD + Math.random() * Math.max(1, mw - WANDER_EDGE_PAD * 2 - PET_SIZE);
-          targetY = my + WANDER_EDGE_PAD + Math.random() * Math.max(1, mh - WANDER_EDGE_PAD * 2 - PET_SIZE);
+          targetX = mx + WANDER_EDGE_PAD + Math.random() * Math.max(1, mw - WANDER_EDGE_PAD * 2 - petSize);
+          targetY = my + WANDER_EDGE_PAD + Math.random() * Math.max(1, mh - WANDER_EDGE_PAD * 2 - petSize);
           dist = Math.hypot(targetX - startX, targetY - startY);
           if (dist >= WANDER_MIN_DISTANCE) break;
         }
@@ -334,11 +330,12 @@ export function CCChanApp() {
 
     nextTimer = setTimeout(wander, INITIAL_WANDER_AFTER_MS);
     return () => {
+      // cancelled 同时挡住在途的 stepOnce（开关中途关闭时立即停止移动）。
       cancelled = true;
       clearTimers();
       setEggState(null);
     };
-  }, [eventState, expanded, menuPosition]);
+  }, [eventState, expanded, menuPosition, petSize, settings.wanderEnabled]);
 
   useEffect(() => {
     if (expanded || menuPosition || eventState) return;
@@ -497,6 +494,30 @@ export function CCChanApp() {
       unlisten?.();
     };
   }, [showManualBubble]);
+
+  // 主窗口保存 ccchan settings 后经 emitTo("ccchan", ...) 推送到这里，
+  // 无需重启宠物窗口即可生效（漫游开关、尺寸、默认角色等）。
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+    try {
+      getCurrentWebview()
+        .listen<CCChanSettings>("ccchan:settings-updated", (event) => {
+          debugCCChan("settings.updated.received", { petSize: event.payload?.petSize });
+          applySettings(event.payload);
+        })
+        .then((fn) => {
+          unlisten = fn;
+        })
+        .catch((error) => {
+          console.warn("[ccchan] failed to listen ccchan:settings-updated:", error);
+        });
+    } catch (error) {
+      console.warn("[ccchan] failed to register settings-updated listener:", error);
+    }
+    return () => {
+      unlisten?.();
+    };
+  }, [applySettings]);
 
   async function closeChat() {
     debugCCChan("chat.close.begin", {});
@@ -745,25 +766,25 @@ export function CCChanApp() {
     const openedForMenu = !expanded;
     // Keep the menu away from the transparent ccchan window edge. Drawing it
     // beside the mascot avoids the hard WebView clipping line.
-    const preferredX = PET_SIZE + 8;
+    const preferredX = petSize + 8;
     const preferredY = 16;
     const x = Math.max(
-      MENU_PAD,
-      Math.min(preferredX, MENU_W - MENU_PANEL_W - MENU_PAD),
+      layout.menuPad,
+      Math.min(preferredX, layout.menuW - layout.menuPanelW - layout.menuPad),
     );
     const y = Math.max(
-      MENU_PAD,
-      Math.min(preferredY, MENU_H - MENU_PANEL_H - MENU_PAD),
+      layout.menuPad,
+      Math.min(preferredY, layout.menuH - layout.menuPanelH - layout.menuPad),
     );
     debugCCChan("menu.open.position", {
       openedForMenu,
-      immediateX: openedForMenu ? MENU_PAD : x,
-      immediateY: openedForMenu ? MENU_PAD : y,
+      immediateX: openedForMenu ? layout.menuPad : x,
+      immediateY: openedForMenu ? layout.menuPad : y,
       finalX: x,
       finalY: y,
     });
     setMenuOwnsResize(openedForMenu);
-    setMenuPosition(openedForMenu ? { x: MENU_PAD, y: MENU_PAD } : { x, y });
+    setMenuPosition(openedForMenu ? { x: layout.menuPad, y: layout.menuPad } : { x, y });
     if (openedForMenu) {
       void invoke("resize_ccchan_for_menu", { expanded: true })
         .then(() => {
@@ -821,8 +842,8 @@ export function CCChanApp() {
     <div
       className="ccchan-window relative select-none"
       style={{
-        width: expanded ? CHAT_EXPANDED_W : menuPosition ? MENU_W : bubbleVisible ? BUBBLE_W : PET_SIZE,
-        height: expanded ? CHAT_EXPANDED_H : menuPosition ? MENU_H : bubbleVisible ? BUBBLE_H : PET_SIZE,
+        width: expanded ? layout.chatW : menuPosition ? layout.menuW : bubbleVisible ? layout.bubbleW : petSize,
+        height: expanded ? layout.chatH : menuPosition ? layout.menuH : bubbleVisible ? layout.bubbleH : petSize,
         background: "transparent",
       }}
       onClick={() => {
@@ -835,8 +856,9 @@ export function CCChanApp() {
     >
       {bubbleVisible && bubble && (
         <div
-          className="pointer-events-none absolute left-3 top-2 z-20 w-[260px] rounded-lg border-2 px-3 py-2 text-[13px] font-semibold leading-[19px] shadow-xl"
+          className="pointer-events-none absolute left-3 top-2 z-20 rounded-lg border-2 px-3 py-2 text-[13px] font-semibold leading-[19px] shadow-xl"
           style={{
+            width: layout.bubbleTextW,
             background: "#ffffff",
             borderColor: "#38bdf8",
             color: "#0f172a",
@@ -857,10 +879,10 @@ export function CCChanApp() {
       <div
         className="absolute"
         style={{
-          width: PET_SIZE,
-          height: PET_SIZE,
-          left: bubbleVisible ? 10 : 0,
-          top: bubbleVisible ? 96 : 0,
+          width: petSize,
+          height: petSize,
+          left: bubbleVisible ? layout.bubblePetLeft : 0,
+          top: bubbleVisible ? layout.bubblePetTop : 0,
         }}
       >
         <div className="pointer-events-auto absolute left-1/2 top-1 z-10 -translate-x-1/2">
@@ -892,7 +914,7 @@ export function CCChanApp() {
         <SpritePet
           pet={selectedPet}
           state={petState}
-          size={PET_SIZE}
+          size={petSize}
           title="打开 cc酱 chat"
           onContextMenu={handleContextMenu}
           onClick={(event) => {
@@ -924,8 +946,8 @@ export function CCChanApp() {
       <div
         className="absolute transition-all duration-200"
         style={{
-          left: CHAT_PANEL_LEFT,
-          top: CHAT_PANEL_TOP,
+          left: layout.chatPanelLeft,
+          top: layout.chatPanelTop,
           opacity: expanded ? 1 : 0,
           transform: expanded ? "translateY(0)" : "translateY(-6px)",
           pointerEvents: expanded ? "auto" : "none",
@@ -939,6 +961,8 @@ export function CCChanApp() {
             onMessagesChange={setChatMessages}
             onSessionIdChange={setChatSessionId}
             onClose={() => void closeChat().catch(() => {})}
+            width={layout.chatPanelW}
+            height={layout.chatPanelH}
           />
         )}
       </div>
