@@ -45,6 +45,9 @@ export default function TerminalSection({ value, onChange }: TerminalSectionProp
           />
         </div>
       </div>
+      <p className="text-[12px] -mt-1" style={{ color: "var(--app-text-secondary)" }}>
+        {t("fontFamilyCjkHint")}
+      </p>
 
       <div className="flex flex-col gap-1">
         <Label>{t("terminalTheme")}</Label>

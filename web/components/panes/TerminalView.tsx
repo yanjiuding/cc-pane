@@ -61,6 +61,7 @@ import {
 } from "./terminalRestoreQueue";
 import { resolveTerminalRendererModeForSession } from "./terminalRenderer";
 import { getTerminalTheme, type TerminalThemePalette } from "./terminalTheme";
+import { normalizeTerminalFontFamily } from "./terminalFont";
 import "@xterm/xterm/css/xterm.css";
 
 /** Cache the Windows build number once per renderer process. */
@@ -85,7 +86,6 @@ const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(n
 const DEFAULT_TERMINAL_FONT_SIZE = 15;
 const MIN_TERMINAL_FONT_SIZE = 10;
 const MAX_TERMINAL_FONT_SIZE = 32;
-const DEFAULT_TERMINAL_FONT_FAMILY = '"Maple Mono NF CN", "Maple Mono", "Cascadia Code", "Cascadia Mono", "JetBrains Mono", Consolas, "Sarasa Mono SC", "Microsoft YaHei UI", "PingFang SC", monospace';
 const DEFAULT_TERMINAL_SCROLLBACK = 20_000;
 const WEBGL_HEARTBEAT_INTERVAL_MS = 30_000;
 const WEBGL_SLEEP_GAP_MS = 75_000;
@@ -232,11 +232,6 @@ function normalizeTerminalFontSize(value?: number | null): number {
   if (!Number.isFinite(value)) return DEFAULT_TERMINAL_FONT_SIZE;
   const rounded = Math.round(value as number);
   return Math.min(MAX_TERMINAL_FONT_SIZE, Math.max(MIN_TERMINAL_FONT_SIZE, rounded));
-}
-
-function normalizeTerminalFontFamily(value?: string | null): string {
-  const trimmed = value?.trim();
-  return trimmed || DEFAULT_TERMINAL_FONT_FAMILY;
 }
 
 function normalizeTerminalCursorStyle(value?: string | null): TerminalCursorStyle {
@@ -931,6 +926,7 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           cursorStyle,
           fastScrollSensitivity: 5,
           fontSize,
+          rescaleOverlappingGlyphs: true,
           smoothScrollDuration: 0,
           scrollback,
           fontFamily,
