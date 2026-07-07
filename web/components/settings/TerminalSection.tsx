@@ -160,7 +160,7 @@ export default function TerminalSection({ value, onChange }: TerminalSectionProp
         <div className="flex items-center gap-2">
           <input
             type="checkbox"
-            checked={value.daemonEnabled ?? false}
+            checked={value.daemonEnabled ?? true}
             onChange={(e) => update("daemonEnabled", e.target.checked)}
             className="w-4 h-4 cursor-pointer"
             style={{ accentColor: "var(--app-accent)" }}

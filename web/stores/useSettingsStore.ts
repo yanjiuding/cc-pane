@@ -136,7 +136,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       shell: null,
       disableConptySanitize: null,
       resumeIdBackfillEnabled: null,
-      daemonEnabled: false,
+      daemonEnabled: true,
     },
     shortcuts: {
       bindings: {

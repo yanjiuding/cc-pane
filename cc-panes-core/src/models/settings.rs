@@ -127,9 +127,9 @@ pub struct TerminalSettings {
     #[serde(default)]
     pub resume_id_backfill_enabled: Option<bool>,
     /// 终端会话共享：PTY 托管到 cc-panes-daemon 独立进程，桌面与 Web/移动端
-    /// 附着同一批活会话（"无缝接力"）。重启应用生效。
+    /// 附着同一批活会话（"无缝接力"）。重启应用生效。默认开启，让远程镜像开箱即用；
     /// 环境变量 CCPANES_TERMINAL_DAEMON 仍可覆盖强制开启（排障用）。
-    #[serde(default)]
+    #[serde(default = "default_daemon_enabled")]
     pub daemon_enabled: bool,
 }
 
@@ -156,6 +156,10 @@ fn default_terminal_theme_mode() -> String {
 
 fn default_terminal_renderer_mode() -> String {
     "auto".to_string()
+}
+
+fn default_daemon_enabled() -> bool {
+    true
 }
 
 /// 快捷键设置
@@ -680,7 +684,7 @@ impl Default for TerminalSettings {
             shell: None,
             disable_conpty_sanitize: None,
             resume_id_backfill_enabled: None,
-            daemon_enabled: false,
+            daemon_enabled: true,
         }
     }
 }
