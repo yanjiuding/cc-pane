@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.8 - 2026-07-08
+
+### Changed
+
+- **Terminal session sharing (daemon) is now enabled by default.** New installs and upgrades host PTYs in the standalone cc-panes-daemon out of the box, so desktop, web, and mobile immediately attach to the same live sessions — no manual toggle needed for the phone mirror to work. The Settings → Terminal switch and the `CCPANES_TERMINAL_DAEMON` override still apply, and if the daemon binary is unavailable the app falls back to in-process terminals. Takes effect after an app restart.
+
+### Fixed
+
+- No stray console window flashes on startup: the `cc-panes-web` and `cc-panes-daemon` child processes are now spawned with `CREATE_NO_WINDOW` on Windows, matching the other helper-process spawns.
+
 ## 0.10.7 - 2026-07-06
 
 ### Added
