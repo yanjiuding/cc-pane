@@ -6,7 +6,7 @@ import '../../state/terminal_controller.dart';
 import '../widgets/key_bar.dart';
 
 /// 终端页：xterm 渲染 + WS 输入 + 快捷键条。
-/// 默认不 resize 共享 PTY（避免破坏桌面端渲染），AppBar 提供手动「适配尺寸」。
+/// 进页面默认把共享 PTY 适配为手机屏幕尺寸，AppBar 提供手动「再适配」（旋转后用）。
 class TerminalScreen extends ConsumerWidget {
   const TerminalScreen({super.key, required this.sessionId, required this.title});
 

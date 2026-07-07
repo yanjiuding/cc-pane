@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:xterm/xterm.dart';
 
@@ -66,6 +66,7 @@ class TerminalSessionController extends ChangeNotifier {
     }
 
     _setPhase(TerminalPhase.connected);
+    _autoFit(); // 进页面默认把 PTY 调整为手机屏幕尺寸（等 TerminalView 布局完成）
     _sub = _socket!.events.listen(
       (event) {
         switch (event) {
@@ -108,13 +109,27 @@ class TerminalSessionController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 「跟随手机尺寸」显式触发（默认不自动 resize，避免破坏桌面端渲染）。
+  /// 「跟随手机尺寸」：把共享 PTY 调整为当前 TerminalView 的 cols/rows。
+  /// 进页面自动触发一次，AppBar 也可手动再触发（旋转/键盘弹出后重新适配）。
   void resizeToView() {
-    final view = terminal.viewWidth;
+    final cols = terminal.viewWidth;
     final rows = terminal.viewHeight;
-    if (view > 0 && rows > 0) {
-      _socket?.sendResize(view, rows);
+    if (cols > 0 && rows > 0) {
+      _socket?.sendResize(cols, rows);
     }
+  }
+
+  /// 连上后自动适配：TerminalView 首帧可能还没把 viewWidth/Height 布局出来，
+  /// 用 post-frame + 有限重试等到有效尺寸再下发 resize。
+  void _autoFit({int attempt = 0}) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_disposed || _phase != TerminalPhase.connected) return;
+      if (terminal.viewWidth > 0 && terminal.viewHeight > 0) {
+        resizeToView();
+      } else if (attempt < 10) {
+        _autoFit(attempt: attempt + 1);
+      }
+    });
   }
 
   void _setPhase(TerminalPhase next, {String? message}) {
