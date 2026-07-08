@@ -548,9 +548,60 @@ fn wsl_usage_detected(
     Ok(None)
 }
 
+/// 从上一轮写入的 `mcp-orchestrator.json` 读回 `(port, token)`，用于跨重启复用。
+/// 文件格式固定：`mcpServers.ccpanes.url = "http://127.0.0.1:{port}/mcp?token={token}"`
+/// + `headers.Authorization = "Bearer {token}"`（见 start() 的写入处）。
+fn read_persisted_endpoint(data_dir: &std::path::Path) -> Option<(u16, String)> {
+    let content = std::fs::read_to_string(data_dir.join("mcp-orchestrator.json")).ok()?;
+    parse_persisted_endpoint(&content)
+}
+
+/// 解析 mcp-orchestrator.json 内容为 `(port, token)`（与文件 IO 分离，便于单测）。
+fn parse_persisted_endpoint(content: &str) -> Option<(u16, String)> {
+    let json: serde_json::Value = serde_json::from_str(content).ok()?;
+    let url = json.pointer("/mcpServers/ccpanes/url")?.as_str()?;
+    let port = parse_orchestrator_port_from_url(url)?;
+    let token = json
+        .pointer("/mcpServers/ccpanes/headers/Authorization")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(str::to_string)?;
+    (!token.is_empty()).then_some((port, token))
+}
+
+/// 从 `http://<host>:<port>/mcp?...` 提取端口。host 恒为 127.0.0.1（start() 写死）。
+fn parse_orchestrator_port_from_url(url: &str) -> Option<u16> {
+    let authority = url.split("://").nth(1)?.split('/').next()?; // 127.0.0.1:{port}
+    authority.rsplit(':').next()?.parse::<u16>().ok()
+}
+
+/// 优先绑定上一轮端口（跨重启稳定），被占用则回退 `{bind_host}:0` 自动分配。
+async fn bind_reusing_port(
+    bind_host: &str,
+    preferred: Option<u16>,
+) -> Option<tokio::net::TcpListener> {
+    if let Some(port) = preferred.filter(|p| *p != 0) {
+        match tokio::net::TcpListener::bind(format!("{bind_host}:{port}")).await {
+            Ok(listener) => {
+                info!("[orchestrator] reused previous port {}", port);
+                return Some(listener);
+            }
+            Err(error) => warn!(
+                "[orchestrator] previous port {} unavailable ({}); falling back to dynamic :0",
+                port, error
+            ),
+        }
+    }
+    tokio::net::TcpListener::bind(format!("{bind_host}:0"))
+        .await
+        .ok()
+}
+
 pub struct OrchestratorService {
     port: Mutex<Option<u16>>,
     token: String,
+    /// 上一轮 mcp-orchestrator.json 里的端口；start() 优先复用它，占用则回退 :0。
+    preferred_port: Option<u16>,
     bind_decision: Mutex<Option<OrchestratorBindDecision>>,
     pending_queries: Arc<Mutex<HashMap<String, tokio::sync::oneshot::Sender<String>>>>,
     pending_worker_reports: Arc<Mutex<PendingReportMap>>,
@@ -559,12 +610,23 @@ pub struct OrchestratorService {
 }
 
 impl OrchestratorService {
-    #[allow(clippy::new_without_default)]
-    pub fn new() -> Self {
-        let token = generate_token();
+    /// 复用上一轮 mcp-orchestrator.json 的 token+端口（跨重启稳定），
+    /// 让重启/更新后仍在跑的 CLI 会话注入的 `CC_PANES_API_*` 不失效。
+    pub fn new(app_paths: &AppPaths) -> Self {
+        let (preferred_port, token) = match read_persisted_endpoint(app_paths.data_dir()) {
+            Some((port, token)) => {
+                info!(
+                    "[orchestrator] reusing persisted endpoint (port {}) from mcp-orchestrator.json",
+                    port
+                );
+                (Some(port), token)
+            }
+            None => (None, generate_token()),
+        };
         Self {
             port: Mutex::new(None),
             token,
+            preferred_port,
             bind_decision: Mutex::new(None),
             pending_queries: Arc::new(Mutex::new(HashMap::new())),
             pending_worker_reports: Arc::new(Mutex::new(HashMap::new())),
@@ -876,6 +938,7 @@ impl OrchestratorService {
 
         let port_mutex = Arc::new(Mutex::new(None::<u16>));
         let port_mutex_clone = port_mutex.clone();
+        let preferred_port = self.preferred_port;
 
         // 在独立线程中启动 tokio runtime + axum 服务器
         std::thread::spawn(move || {
@@ -898,17 +961,17 @@ impl OrchestratorService {
             rt.block_on(async move {
                 let app = build_router(state);
 
-                // 绑定 {bind_host}:0（自动分配端口）。auto/all 下绑 0.0.0.0 供 WSL 访问；
-                // loopback（或 auto 无 WSL 信号）只绑回环，缩小 LAN 暴露面。
+                // 优先复用上一轮端口（跨重启稳定：让重启/更新后仍在跑的 CLI 会话注入的
+                // CC_PANES_API_PORT 依旧有效），被占用则回退 {bind_host}:0 自动分配。
+                // auto/all 下绑 0.0.0.0 供 WSL 访问；loopback 只绑回环，缩小 LAN 暴露面。
                 // macOS Ventura+ 首次绑定非回环可能触发防火墙授权弹窗，这是正常行为
-                let listener = match tokio::net::TcpListener::bind(format!("{bind_host}:0")).await
-                {
-                    Ok(l) => l,
-                    Err(e) => {
+                let listener = match bind_reusing_port(&bind_host, preferred_port).await {
+                    Some(l) => l,
+                    None => {
                         error!(
-                            "[orchestrator] Failed to bind {}:0: {}. \
+                            "[orchestrator] Failed to bind {} (preferred {:?} and :0 both failed). \
                              On macOS, ensure the app is allowed in System Settings > Privacy & Security > Firewall.",
-                            bind_host, e
+                            bind_host, preferred_port
                         );
                         return;
                     }
@@ -7795,6 +7858,41 @@ fn local_orchestrator_endpoint_reachable(port: u16) -> bool {
 mod tests {
     use super::*;
     use crate::models::WorkspaceCliEnvironmentDefaults;
+
+    #[test]
+    fn parse_orchestrator_port_from_url_extracts_port() {
+        assert_eq!(
+            parse_orchestrator_port_from_url("http://127.0.0.1:61012/mcp?token=abc"),
+            Some(61012)
+        );
+        assert_eq!(
+            parse_orchestrator_port_from_url("http://127.0.0.1:8/mcp"),
+            Some(8)
+        );
+        assert_eq!(parse_orchestrator_port_from_url("http://127.0.0.1/mcp"), None);
+        assert_eq!(parse_orchestrator_port_from_url("not-a-url"), None);
+    }
+
+    #[test]
+    fn parse_persisted_endpoint_reuses_port_and_token() {
+        // 复用上一轮 manifest → 同端口 + 同 token（跨重启稳定）。
+        let content = r#"{"mcpServers":{"ccpanes":{"type":"http",
+            "url":"http://127.0.0.1:61012/mcp?token=deadbeef",
+            "headers":{"Authorization":"Bearer deadbeef"}}}}"#;
+        assert_eq!(
+            parse_persisted_endpoint(content),
+            Some((61012, "deadbeef".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_persisted_endpoint_rejects_malformed() {
+        assert_eq!(parse_persisted_endpoint("{}"), None);
+        assert_eq!(parse_persisted_endpoint("not json"), None);
+        // 缺 Authorization 头且 token 无法从 header 取 → None。
+        let no_auth = r#"{"mcpServers":{"ccpanes":{"url":"http://127.0.0.1:61012/mcp"}}}"#;
+        assert_eq!(parse_persisted_endpoint(no_auth), None);
+    }
 
     #[test]
     fn decide_bind_explicit_modes_ignore_wsl_signal() {

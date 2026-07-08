@@ -1257,7 +1257,7 @@ pub fn run() {
 
     let popup_data_store = commands::PopupDataStore::default();
     let layout_switcher_snapshot_store = commands::LayoutSwitcherSnapshotStore::default();
-    let orchestrator_service = Arc::new(OrchestratorService::new());
+    let orchestrator_service = Arc::new(OrchestratorService::new(app_paths.as_ref()));
     let start_locks = Arc::new(StartLocks::default());
     let web_access_lifecycle = Arc::new(WebAccessLifecycle::default());
     boot_mark!("all services created");

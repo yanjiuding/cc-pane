@@ -275,13 +275,13 @@ fn send_session_started(
         .map_err(|_| "CC_PANES_LAUNCH_ID is missing".to_string())?;
     let pty_session_id = std::env::var("CC_PANES_PTY_SESSION_ID")
         .map_err(|_| "CC_PANES_PTY_SESSION_ID is missing".to_string())?;
-    let api_base_url = std::env::var("CC_PANES_API_BASE_URL")
-        .or_else(|_| {
-            std::env::var("CC_PANES_API_PORT").map(|port| format!("http://127.0.0.1:{}", port))
-        })
-        .map_err(|_| "CC_PANES_API_BASE_URL is missing".to_string())?;
-    let api_token = std::env::var("CC_PANES_API_TOKEN")
-        .map_err(|_| "CC_PANES_API_TOKEN is missing".to_string())?;
+    // 优先 env；resume/重启后 env 缺失时回退读 mcp-orchestrator.json 拿当前端点。
+    let (api_base_url, api_token) = crate::common::orchestrator::resolve_api_endpoint().ok_or_else(
+        || {
+            "orchestrator endpoint unavailable: CC_PANES_API_* env and mcp-orchestrator.json both missing"
+                .to_string()
+        },
+    )?;
 
     let request = SessionStartedRequest {
         launch_id: &launch_id,
@@ -318,12 +318,7 @@ fn send_session_started(
 ///
 /// 任何失败（无 env / 调用错误 / 无数据）都返回 None，session_start 主路径不受影响。
 fn fetch_memory_recall_context(project_dir: &Path) -> Option<String> {
-    let api_base_url = std::env::var("CC_PANES_API_BASE_URL")
-        .or_else(|_| {
-            std::env::var("CC_PANES_API_PORT").map(|port| format!("http://127.0.0.1:{}", port))
-        })
-        .ok()?;
-    let api_token = std::env::var("CC_PANES_API_TOKEN").ok()?;
+    let (api_base_url, api_token) = crate::common::orchestrator::resolve_api_endpoint()?;
 
     let cwd_path = project_dir.to_string_lossy().to_string();
     let env_project_path = std::env::var("CC_PANES_PROJECT_PATH")
@@ -379,12 +374,7 @@ fn fetch_memory_recall_context(project_dir: &Path) -> Option<String> {
 /// 从 cc-pane 主进程取最近 1 条 plan 标签，拼成可注入到 system prompt 的 XML 块。
 /// 任何失败（无 env / 调用错误 / 无数据）都返回 None，session_start 主路径不受影响。
 fn fetch_recent_plan_block(project_dir: &Path) -> Option<String> {
-    let api_base_url = std::env::var("CC_PANES_API_BASE_URL")
-        .or_else(|_| {
-            std::env::var("CC_PANES_API_PORT").map(|port| format!("http://127.0.0.1:{}", port))
-        })
-        .ok()?;
-    let api_token = std::env::var("CC_PANES_API_TOKEN").ok()?;
+    let (api_base_url, api_token) = crate::common::orchestrator::resolve_api_endpoint()?;
 
     let mut url = format!(
         "{}/api/plan/recent?limit=1",

@@ -17,4 +17,5 @@
 
 pub mod env;
 pub mod http;
+pub mod orchestrator;
 pub mod stdin;
