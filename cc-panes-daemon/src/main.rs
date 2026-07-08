@@ -118,7 +118,19 @@ fn non_empty_path(value: Option<&str>) -> Option<&str> {
 }
 
 fn normalize_current_host_path(path: &str) -> PathBuf {
-    windows_path_to_wsl_path(path).unwrap_or_else(|| PathBuf::from(path))
+    normalize_host_path(path, running_under_wsl())
+}
+
+/// 只有真的在 WSL 里跑时才把 Windows 路径翻译成 `/mnt/c/...`。
+/// daemon 作为 `cc-panes-daemon.exe` 跑在原生 Windows 上时必须保持 `C:\...` 原样，
+/// 否则 `AppPaths.data_dir()` 变成 `/mnt/c/...`，后续 `join("wsl-launch")` 用 `\`
+/// 拼出混合分隔符路径，wslpath 翻译失败（WSL codex 启动 500）。
+fn normalize_host_path(path: &str, under_wsl: bool) -> PathBuf {
+    if under_wsl {
+        windows_path_to_wsl_path(path).unwrap_or_else(|| PathBuf::from(path))
+    } else {
+        PathBuf::from(path)
+    }
 }
 
 fn detect_windows_desktop_app_dir() -> Option<PathBuf> {
@@ -276,5 +288,37 @@ impl Default for Args {
             cwd: ".".to_string(),
             data_dir: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_windows_keeps_path_verbatim() {
+        // 原生 Windows daemon：不翻译，保持 C:\... 原样。
+        assert_eq!(
+            normalize_host_path(r"C:\Users\x\.cc-panes", false),
+            PathBuf::from(r"C:\Users\x\.cc-panes")
+        );
+    }
+
+    #[test]
+    fn under_wsl_translates_to_mnt() {
+        // WSL 内 daemon：Windows 路径翻译成 /mnt/c/...。
+        assert_eq!(
+            normalize_host_path(r"C:\Users\x\.cc-panes", true),
+            PathBuf::from("/mnt/c/Users/x/.cc-panes")
+        );
+    }
+
+    #[test]
+    fn under_wsl_non_windows_path_kept() {
+        // WSL 内已是 posix 路径：保持原样。
+        assert_eq!(
+            normalize_host_path("/home/x/.cc-panes", true),
+            PathBuf::from("/home/x/.cc-panes")
+        );
     }
 }
