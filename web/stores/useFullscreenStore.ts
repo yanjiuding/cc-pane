@@ -27,6 +27,10 @@ export const useFullscreenStore = create<FullscreenState>((set, get) => ({
   },
 
   exitFullscreen: async () => {
+    // 仅当处于 App 自己的 pane 全屏（双击标签触发）时才退出原生全屏。
+    // 否则用户是用 macOS 绿按钮/系统进的全屏（本 store 不追踪，isFullscreen=false），
+    // 切换/删除/创建布局时不应把它踢出全屏（见 usePanesStore 的 switchLayout 等）。
+    if (!get().isFullscreen) return;
     try {
       await invokeIfTauri("exit_fullscreen");
       set({ isFullscreen: false, fullscreenPaneId: null, fullscreenTabId: null });

@@ -71,6 +71,17 @@ describe("useFullscreenStore", () => {
       expect(state.fullscreenTabId).toBeNull();
     });
 
+    it("非全屏时应为 no-op，不调用原生 exit_fullscreen（避免踢出 macOS 绿按钮全屏）", async () => {
+      const exitSpy = vi.fn();
+      mockTauriInvoke({ exit_fullscreen: exitSpy });
+      // beforeEach 已把 isFullscreen 置为 false
+
+      await useFullscreenStore.getState().exitFullscreen();
+
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(useFullscreenStore.getState().isFullscreen).toBe(false);
+    });
+
     it("invoke 失败时不应崩溃", async () => {
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       useFullscreenStore.setState({ isFullscreen: true });
