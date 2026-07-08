@@ -1745,6 +1745,24 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
       terminalFontSize,
     ]);
 
+    // 启动期字体晚就绪兜底：waitForTerminalFont 有 1.5s 超时，超时后终端会用
+    // fallback 字体度量 cell 并 fit；主字体随后加载完成时没有任何触发点，
+    // cols/rows 误差会被放大成好几列空白。首次 loadingdone 时清图集并强制重排。
+    useEffect(() => {
+      const fonts = typeof document === "undefined" ? undefined : document.fonts;
+      if (!fonts?.addEventListener) return;
+
+      const handleLoadingDone = () => {
+        fonts.removeEventListener("loadingdone", handleLoadingDone);
+        if (!terminalInstanceRef.current) return;
+        rendererControllerRef.current?.clearTextureAtlas("fonts.loadingdone");
+        layoutSchedulerRef.current?.schedule("fonts.loadingdone", { force: true });
+      };
+      fonts.addEventListener("loadingdone", handleLoadingDone);
+      return () => fonts.removeEventListener("loadingdone", handleLoadingDone);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     useEffect(() => {
       if (!IS_WINDOWS) return;
 

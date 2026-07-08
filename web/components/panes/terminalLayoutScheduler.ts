@@ -68,6 +68,12 @@ function shouldFocusTerminal(): boolean {
   return active.tagName !== "INPUT" && active.tagName !== "TEXTAREA";
 }
 
+/** fit 后延迟校验容器与 cols/rows 是否仍一致（嵌套分屏可能有第二轮 reflow）。 */
+const VERIFY_REFIT_DELAY_MS = 120;
+const VERIFY_REFIT_REASON = "verify.refit";
+/** 后端 PTY resize 去抖窗口：拖拽期间 conpty 每次 resize 都整屏重绘，高频下发会留残行。 */
+const BACKEND_RESIZE_DEBOUNCE_MS = 250;
+
 export function createTerminalLayoutScheduler({
   getTerminal,
   getFitAddon,
@@ -81,6 +87,10 @@ export function createTerminalLayoutScheduler({
   let rafId: number | null = null;
   let nestedRafId: number | null = null;
   let timerId: ReturnType<typeof setTimeout> | null = null;
+  let verifyTimerId: ReturnType<typeof setTimeout> | null = null;
+  let backendTimerId: ReturnType<typeof setTimeout> | null = null;
+  let lastBackendResizeAt = 0;
+  let pendingBackendSize: { cols: number; rows: number } | null = null;
   let disposed = false;
   let pendingReason: string | null = null;
   let lastSize: { cols: number; rows: number } | null = null;
@@ -101,14 +111,13 @@ export function createTerminalLayoutScheduler({
     }
   };
 
+  // 只比较不推进基线：基线在 fit 成功后统一更新，避免"基线先走、fit 被跳过"
+  // 之后小幅修正被永久吞掉的卡死。
   const shouldSkipContainerDelta = (options: TerminalLayoutRequestOptions): boolean => {
     if (options.force || !options.containerSize || !options.minContainerDelta) return false;
-    const size = options.containerSize;
-    if (!lastContainerSize) {
-      lastContainerSize = size;
-      return false;
-    }
+    if (!lastContainerSize) return false;
 
+    const size = options.containerSize;
     const deltaWidth = Math.abs(size.width - lastContainerSize.width);
     const deltaHeight = Math.abs(size.height - lastContainerSize.height);
     if (
@@ -124,8 +133,35 @@ export function createTerminalLayoutScheduler({
       return true;
     }
 
-    lastContainerSize = size;
     return false;
+  };
+
+  const sendBackendResize = (cols: number, rows: number) => {
+    if (disposed || !getSessionId()) return;
+    lastBackendResizeAt = Date.now();
+    pendingBackendSize = null;
+    resizeBackend(cols, rows);
+  };
+
+  // leading+trailing 去抖：间隔够久立即发（普通 resize 无感），
+  // 拖拽等高频场景只发最终尺寸。
+  const scheduleBackendResize = (cols: number, rows: number) => {
+    const elapsed = Date.now() - lastBackendResizeAt;
+    if (backendTimerId === null && elapsed >= BACKEND_RESIZE_DEBOUNCE_MS) {
+      sendBackendResize(cols, rows);
+      return;
+    }
+
+    pendingBackendSize = { cols, rows };
+    if (backendTimerId !== null) return;
+    backendTimerId = setTimeout(() => {
+      backendTimerId = null;
+      const pending = pendingBackendSize;
+      if (pending) {
+        logger("layout.resize.trailing", pending);
+        sendBackendResize(pending.cols, pending.rows);
+      }
+    }, BACKEND_RESIZE_DEBOUNCE_MS);
   };
 
   const applyLayout = (
@@ -178,8 +214,12 @@ export function createTerminalLayoutScheduler({
     if (lastSize?.cols !== cols || lastSize?.rows !== rows) {
       lastSize = { cols, rows };
       if (getSessionId()) {
-        resizeBackend(cols, rows);
+        scheduleBackendResize(cols, rows);
       }
+    }
+
+    if (options.containerSize) {
+      lastContainerSize = options.containerSize;
     }
 
     pendingReason = null;
@@ -192,7 +232,43 @@ export function createTerminalLayoutScheduler({
       sessionId: getSessionId(),
     });
     options.onAfterLayout?.(term);
+    if (reason !== VERIFY_REFIT_REASON) {
+      scheduleVerifyRefit();
+    }
     return term;
+  };
+
+  // fit 是事件驱动的单次执行；嵌套分屏在 fit 后可能还有一轮 reflow，
+  // 之后 ResizeObserver 不再触发，终端会永久停在旧 cols/rows。
+  // 延迟一拍复核 proposeDimensions，与实际不一致就强制补一次 fit（每轮最多一次）。
+  const scheduleVerifyRefit = () => {
+    if (verifyTimerId !== null) {
+      clearTimeout(verifyTimerId);
+    }
+    verifyTimerId = setTimeout(() => {
+      verifyTimerId = null;
+      if (disposed) return;
+      const term = getTerminal();
+      const fitAddon = getFitAddon();
+      if (!term || !fitAddon || !isTerminalHostRenderable(getHost())) return;
+
+      let proposed: { cols: number; rows: number } | undefined;
+      try {
+        proposed = fitAddon.proposeDimensions();
+      } catch {
+        return;
+      }
+      if (!proposed || proposed.cols <= 0 || proposed.rows <= 0) return;
+      if (proposed.cols === term.cols && proposed.rows === term.rows) return;
+
+      logger("layout.verify.mismatch", {
+        cols: term.cols,
+        rows: term.rows,
+        proposedCols: proposed.cols,
+        proposedRows: proposed.rows,
+      });
+      applyLayout(VERIFY_REFIT_REASON, { force: true });
+    }, VERIFY_REFIT_DELAY_MS);
   };
 
   const schedule = (
@@ -233,6 +309,15 @@ export function createTerminalLayoutScheduler({
     dispose: () => {
       disposed = true;
       cancel();
+      if (verifyTimerId !== null) {
+        clearTimeout(verifyTimerId);
+        verifyTimerId = null;
+      }
+      if (backendTimerId !== null) {
+        clearTimeout(backendTimerId);
+        backendTimerId = null;
+      }
+      pendingBackendSize = null;
       pendingReason = null;
       lastContainerSize = null;
       lastSize = null;
