@@ -1,10 +1,18 @@
 # Changelog
 
+## 0.10.10 - 2026-07-08
+
+### Fixed
+
+- In-app updates could silently leave stale `cc-panes-web` / `cc-panes-daemon` binaries behind: the running child processes held file locks on `binaries\*.exe`, so the Windows installer could not replace them. The updater now stops the Web server and the terminal daemon before downloading and installing an update, releasing the locks so the new binaries actually land. (Stopping the daemon interrupts hosted sessions, but the update restarts the app anyway.)
+
 ## 0.10.9 - 2026-07-08
 
 ### Fixed
 
 - WSL Codex/Claude launches failed with `HTTP 500: Failed to translate WSL launch script path to WSL path` after 0.10.8 turned the terminal daemon on by default. The daemon was translating its `--data-dir` to a `/mnt/c/...` WSL path even when running as a native Windows process, producing mixed-separator paths that `wslpath` could not resolve. The daemon now only rewrites Windows paths to WSL form when it is actually running under WSL.
+- Corrupted/garbled CJK glyphs in the terminal: on Windows the `auto` renderer now defaults to the DOM renderer instead of WebGL, whose glyph atlas mangled Chinese text; terminal fit is self-checked and PTY resizes are debounced to avoid leftover rows.
+- Mobile terminal now bundles a CJK monospace font so Chinese aligns to the cell grid, and opening a session no longer force-resizes the shared desktop PTY — fit is opt-in from the toolbar and re-applied (debounced) on rotation / keyboard changes.
 
 ## 0.10.8 - 2026-07-08
 
