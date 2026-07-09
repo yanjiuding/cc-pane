@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.14 - 2026-07-10
+
+### Fixed
+
+- Daemon-mode WSL Codex sessions no longer fail with `os error 10060` (WinSock timeout) on every launch. The daemon client applied a flat 2s read timeout to all requests, while a WSL Codex create synchronously runs multiple cold `wsl.exe` invocations on the daemon side (WSL→Windows host probing, stale config migration). Timeouts are now tiered — create 60s, kill 15s (a `taskkill /T /F` under load also breached 2s), control-plane probes stay at 2s fail-fast. The create handler moved onto the blocking thread pool so a slow launch can't starve other daemon requests; host-probe results are cached per (distro, port) for 5 minutes (failures are never cached) and the WSL-side stale `ccpanes` config migration runs once per process per distro, so subsequent WSL launches skip the redundant `wsl.exe` cold starts entirely.
+- File-tree delete no longer surfaces a raw `Failed to move to trash: … Some operations were aborted` error when the Recycle Bin is unavailable (file in use, or the volume has none — WSL UNC paths, network drives). The backend returns a structured `TRASH_FAILED` error and the UI offers a confirmed permanent-delete fallback; deleting under `\\wsl.localhost\...` skips the doomed trash attempt and asks for permanent deletion up front.
+
 ## 0.10.13 - 2026-07-09
 
 ### Fixed
