@@ -14,6 +14,50 @@ use std::path::PathBuf;
 #[cfg(windows)]
 use tracing::{info, warn};
 
+/// 探活结果缓存 TTL：宿主网络拓扑短期内稳定，5 分钟内复用结果，
+/// 避免每次 create_session 都冷跑一次 wsl.exe（daemon 模式下这是 2s 超时的主要推手）。
+#[cfg(windows)]
+const WSL_HOST_PROBE_CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(300);
+#[cfg(windows)]
+static WSL_HOST_PROBE_CACHE: std::sync::OnceLock<WslHostProbeCache> = std::sync::OnceLock::new();
+
+/// WSL→Windows 宿主探活结果缓存（进程级）。key 带 port 是因为 orchestrator
+/// 端口随宿主 app 重启变化，而 daemon 进程存活期可能跨越宿主重启。
+/// 只缓存探活**成功**的结果；失败/回退不缓存，下次仍会重试。
+pub(super) struct WslHostProbeCache {
+    entries: std::sync::Mutex<HashMap<(String, u16), (String, std::time::Instant)>>,
+}
+
+impl WslHostProbeCache {
+    pub(super) fn new() -> Self {
+        Self {
+            entries: std::sync::Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub(super) fn get_or_probe(
+        &self,
+        distro: &str,
+        port: u16,
+        ttl: std::time::Duration,
+        probe: impl FnOnce() -> Option<String>,
+    ) -> Option<String> {
+        let key = (distro.to_string(), port);
+        if let Ok(entries) = self.entries.lock() {
+            if let Some((host, at)) = entries.get(&key) {
+                if at.elapsed() < ttl {
+                    return Some(host.clone());
+                }
+            }
+        }
+        let host = probe()?;
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.insert(key, (host.clone(), std::time::Instant::now()));
+        }
+        Some(host)
+    }
+}
+
 pub(super) const WSL_BASH_EVAL_FLAG: &str = "-lic";
 #[cfg(windows)]
 pub(super) const WSL_BASH_LOGIN_FLAG: &str = "-l";
@@ -611,7 +655,13 @@ impl TerminalService {
         //   3. `/etc/resolv.conf` 的 nameserver —— NAT 下通常也是宿主 IP
         // 必须从 WSL 侧探（而非 Windows 侧），才能真正区分 mirrored / NAT。
         // 探不到（无 bash/timeout 等）则回退 127.0.0.1，保持 mirrored 旧行为、NAT 不更坏。
-        match probe_reachable_wsl_windows_host(wsl_path, distro, port) {
+        // 成功结果按 (distro, port) 缓存 5 分钟，回退值不缓存。
+        let cached = WSL_HOST_PROBE_CACHE
+            .get_or_init(WslHostProbeCache::new)
+            .get_or_probe(distro, port, WSL_HOST_PROBE_CACHE_TTL, || {
+                probe_reachable_wsl_windows_host(wsl_path, distro, port)
+            });
+        match cached {
             Some(host) => {
                 info!(distro = %distro, port = %port, host = %host, "resolved reachable WSL→Windows host for MCP");
                 Ok(host)
@@ -1189,6 +1239,7 @@ impl TerminalService {
 mod tests {
     #[cfg(windows)]
     use super::wsl_host_probe_bash_arg;
+    use super::WslHostProbeCache;
     use super::{
         append_codex_resume_args, push_codex_developer_instructions_arg, push_codex_yolo_mode_arg,
         push_wsl_codex_mcp_isolation_prelude, render_wsl_launch_script, wsl_host_probe_script,
@@ -1213,6 +1264,75 @@ mod tests {
 
     fn remove_dir(path: &Path) {
         let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn probe_cache_hit_skips_second_probe() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cache = WslHostProbeCache::new();
+        let calls = AtomicUsize::new(0);
+        let ttl = std::time::Duration::from_secs(60);
+
+        let first = cache.get_or_probe("Ubuntu", 8080, ttl, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Some("172.20.0.1".to_string())
+        });
+        let second = cache.get_or_probe("Ubuntu", 8080, ttl, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Some("should-not-run".to_string())
+        });
+
+        assert_eq!(first.as_deref(), Some("172.20.0.1"));
+        assert_eq!(second.as_deref(), Some("172.20.0.1"));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn probe_cache_does_not_cache_failure() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cache = WslHostProbeCache::new();
+        let calls = AtomicUsize::new(0);
+        let ttl = std::time::Duration::from_secs(60);
+
+        let first = cache.get_or_probe("Ubuntu", 8080, ttl, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            None
+        });
+        let second = cache.get_or_probe("Ubuntu", 8080, ttl, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Some("172.20.0.1".to_string())
+        });
+
+        assert_eq!(first, None);
+        assert_eq!(second.as_deref(), Some("172.20.0.1"));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn probe_cache_expires_after_ttl_and_keys_by_distro_port() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let cache = WslHostProbeCache::new();
+        let calls = AtomicUsize::new(0);
+
+        // TTL 为零：写入即过期，下一次必须重探
+        let zero_ttl = std::time::Duration::ZERO;
+        cache.get_or_probe("Ubuntu", 8080, zero_ttl, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Some("a".to_string())
+        });
+        cache.get_or_probe("Ubuntu", 8080, zero_ttl, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Some("b".to_string())
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        // 不同 port 是不同 key
+        let ttl = std::time::Duration::from_secs(60);
+        cache.get_or_probe("Ubuntu", 9090, ttl, || {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Some("c".to_string())
+        });
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
     }
 
     #[test]

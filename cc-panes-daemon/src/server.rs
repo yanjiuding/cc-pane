@@ -119,6 +119,10 @@ impl DaemonConfig {
         self.inner.terminal_backend.as_ref()
     }
 
+    pub(crate) fn terminal_backend_arc(&self) -> Arc<dyn TerminalBackend> {
+        self.inner.terminal_backend.clone()
+    }
+
     fn ws_emitter(&self) -> Arc<WsEmitter> {
         self.inner.ws_emitter.clone()
     }
@@ -394,9 +398,18 @@ async fn create_session(
         ssh: req.core.ssh,
         wsl: req.core.wsl,
     });
-    let session_id = config
-        .terminal_backend()
-        .create_session(core_request)
+    // create_session 里 WSL 冷启动 + 探活 + spawn_pty 是同步阻塞操作，
+    // 挪到 blocking 线程池，避免慢请求占死 tokio worker。
+    let backend = config.terminal_backend_arc();
+    let session_id = tokio::task::spawn_blocking(move || backend.create_session(core_request))
+        .await
+        .map_err(|error| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "JOIN_ERROR",
+                error.to_string(),
+            )
+        })?
         .map_err(internal_error)?;
     config.touch_session(&session_id);
     Ok((

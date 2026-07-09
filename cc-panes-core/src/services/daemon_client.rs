@@ -13,7 +13,12 @@ use crate::services::SessionStatusInfo;
 use crate::utils::error::AppError;
 use crate::utils::AppResult;
 
+/// 控制面短超时：health/status/write/resize 等快操作
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
+/// create_session 长超时：daemon 侧同步执行 WSL 冷启动 + 宿主探活 + 配置迁移 + spawn_pty
+const CREATE_SESSION_TIMEOUT: Duration = Duration::from_secs(60);
+/// kill 超时：daemon 侧同步跑 taskkill /T /F 杀进程树，系统负载高时会超过 2s
+const KILL_SESSION_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -40,6 +45,8 @@ pub struct TerminalDaemonClient {
     addr: String,
     token: String,
     timeout: Duration,
+    create_timeout: Duration,
+    kill_timeout: Duration,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,11 +92,23 @@ impl TerminalDaemonClient {
             addr: addr.into(),
             token: token.into(),
             timeout: DEFAULT_TIMEOUT,
+            create_timeout: CREATE_SESSION_TIMEOUT,
+            kill_timeout: KILL_SESSION_TIMEOUT,
         }
     }
 
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    pub fn with_create_timeout(mut self, timeout: Duration) -> Self {
+        self.create_timeout = timeout;
+        self
+    }
+
+    pub fn with_kill_timeout(mut self, timeout: Duration) -> Self {
+        self.kill_timeout = timeout;
         self
     }
 
@@ -135,8 +154,17 @@ impl TerminalDaemonClient {
     }
 
     pub fn create_session(&self, request: CreateSessionRequest) -> AppResult<String> {
-        let response: CreateSessionResponse = self.post_json("/api/sessions", true, &request)?;
-        Ok(response.session_id)
+        let body =
+            serde_json::to_string(&request).map_err(|error| AppError::from(error.to_string()))?;
+        let response = self.request_with_timeout(
+            "POST",
+            "/api/sessions",
+            true,
+            Some(&body),
+            self.create_timeout,
+        )?;
+        let parsed: CreateSessionResponse = parse_json_response(&response)?;
+        Ok(parsed.session_id)
     }
 
     pub fn list_sessions(&self) -> AppResult<Vec<SessionStatusInfo>> {
@@ -182,7 +210,18 @@ impl TerminalDaemonClient {
     }
 
     pub fn kill_session(&self, session_id: &str) -> AppResult<()> {
-        self.request_empty("DELETE", &session_path(session_id, ""), true, None)
+        let response = self.request_with_timeout(
+            "DELETE",
+            &session_path(session_id, ""),
+            true,
+            None,
+            self.kill_timeout,
+        )?;
+        let (status, body) = split_http_response(&response)?;
+        if !(200..300).contains(&status) {
+            return Err(daemon_http_error(status, body));
+        }
+        Ok(())
     }
 
     pub fn find_session_id_by_launch_id(&self, launch_id: &str) -> AppResult<Option<String>> {
@@ -252,17 +291,6 @@ impl TerminalDaemonClient {
         parse_json_response(&response)
     }
 
-    fn post_json<T, B>(&self, path: &str, authorize: bool, body: &B) -> AppResult<T>
-    where
-        T: for<'de> Deserialize<'de>,
-        B: Serialize,
-    {
-        let body =
-            serde_json::to_string(body).map_err(|error| AppError::from(error.to_string()))?;
-        let response = self.request("POST", path, authorize, Some(&body))?;
-        parse_json_response(&response)
-    }
-
     fn post_empty<B>(&self, path: &str, authorize: bool, body: &B) -> AppResult<()>
     where
         B: Serialize,
@@ -294,13 +322,26 @@ impl TerminalDaemonClient {
         authorize: bool,
         body: Option<&str>,
     ) -> AppResult<String> {
+        self.request_with_timeout(method, path, authorize, body, self.timeout)
+    }
+
+    /// 发起请求，read 阶段使用指定超时（create/kill 等 daemon 侧慢操作需要放宽）。
+    /// connect / write 始终用短超时 `self.timeout`——连不上本机 daemon 就该 fail-fast。
+    fn request_with_timeout(
+        &self,
+        method: &str,
+        path: &str,
+        authorize: bool,
+        body: Option<&str>,
+        read_timeout: Duration,
+    ) -> AppResult<String> {
         let addr: SocketAddr = self
             .addr
             .parse()
             .map_err(|error| AppError::from(format!("invalid daemon addr: {error}")))?;
         let mut stream = TcpStream::connect_timeout(&addr, self.timeout).map_err(AppError::from)?;
         stream
-            .set_read_timeout(Some(self.timeout))
+            .set_read_timeout(Some(read_timeout))
             .map_err(AppError::from)?;
         stream
             .set_write_timeout(Some(self.timeout))
@@ -414,6 +455,14 @@ mod tests {
     }
 
     fn spawn_response_server(response: String) -> (SocketAddr, mpsc::Receiver<String>) {
+        spawn_response_server_with_delay(response, Duration::ZERO)
+    }
+
+    /// 读完请求后先 sleep 再写响应，用于模拟 daemon 侧慢操作。
+    fn spawn_response_server_with_delay(
+        response: String,
+        delay: Duration,
+    ) -> (SocketAddr, mpsc::Receiver<String>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
         let addr = listener.local_addr().expect("local addr");
         let (tx, rx) = mpsc::channel();
@@ -457,6 +506,9 @@ mod tests {
             }
             let request = String::from_utf8(request_bytes).expect("utf8 request");
             tx.send(request).ok();
+            if !delay.is_zero() {
+                thread::sleep(delay);
+            }
             stream
                 .write_all(response.as_bytes())
                 .expect("write response");
@@ -573,6 +625,47 @@ mod tests {
         assert!(request.contains("Content-Type: application/json"));
         assert!(request.contains(r#""projectPath":"/repo""#));
         assert!(request.contains(r#""initialPrompt":"inspect""#));
+    }
+
+    #[test]
+    fn create_session_survives_slow_daemon_response() {
+        let response = http_json_response("201 Created", r#"{"sessionId":"session-slow"}"#);
+        let (addr, _rx) = spawn_response_server_with_delay(response, Duration::from_millis(600));
+        // 短超时 200ms 但 create 走独立的 5s 长超时，慢响应不该被掐断
+        let client = TerminalDaemonClient::new(addr.to_string(), "secret")
+            .with_timeout(Duration::from_millis(200))
+            .with_create_timeout(Duration::from_secs(5));
+
+        let session_id = client
+            .create_session(test_create_request())
+            .expect("create session survives slow response");
+
+        assert_eq!(session_id, "session-slow");
+    }
+
+    #[test]
+    fn kill_survives_slow_daemon_response() {
+        let response = empty_response("204 No Content");
+        let (addr, _rx) = spawn_response_server_with_delay(response, Duration::from_millis(600));
+        let client = TerminalDaemonClient::new(addr.to_string(), "secret")
+            .with_timeout(Duration::from_millis(200))
+            .with_kill_timeout(Duration::from_secs(5));
+
+        client
+            .kill_session("session-1")
+            .expect("kill survives slow response");
+    }
+
+    #[test]
+    fn health_still_times_out_fast() {
+        let response = http_json_response("200 OK", r#"{"status":"ok"}"#);
+        let (addr, _rx) = spawn_response_server_with_delay(response, Duration::from_millis(600));
+        // health 走短超时：慢 daemon 必须 fail-fast，不能被 create 的长超时污染
+        let client = TerminalDaemonClient::new(addr.to_string(), "secret")
+            .with_timeout(Duration::from_millis(200))
+            .with_create_timeout(Duration::from_secs(5));
+
+        assert!(client.health().is_err());
     }
 
     #[test]

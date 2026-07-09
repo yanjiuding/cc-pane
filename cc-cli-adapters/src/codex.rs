@@ -281,6 +281,12 @@ impl CodexAdapter {
     /// Windows UNC 路径。best-effort，失败不阻断启动。
     #[cfg(windows)]
     pub fn migrate_stale_wsl_ccpanes_mcp_config(wsl_path: &Path, distro: &str) {
+        // 每进程每 distro 只跑一次：这是一次性迁移，每次 create_session 都冷跑一次
+        // wsl.exe（wslpath）+ UNC IO 会把 daemon 客户端的 read 超时吃穿。
+        // 成功失败都记为已跑——best-effort，daemon/app 重启自然重试。
+        if Self::wsl_migration_already_attempted(distro) {
+            return;
+        }
         let Some(win_path) = Self::resolve_wsl_codex_config_windows_path(wsl_path, distro) else {
             return;
         };
@@ -302,6 +308,20 @@ impl CodexAdapter {
 
     #[cfg(not(windows))]
     pub fn migrate_stale_wsl_ccpanes_mcp_config(_wsl_path: &Path, _distro: &str) {}
+
+    /// check-and-insert：返回该 distro 是否已尝试过迁移（首次调用返回 false 并登记）。
+    #[cfg(windows)]
+    fn wsl_migration_already_attempted(distro: &str) -> bool {
+        use std::collections::HashSet;
+        use std::sync::{Mutex, OnceLock};
+        static ATTEMPTED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+        let attempted = ATTEMPTED.get_or_init(|| Mutex::new(HashSet::new()));
+        match attempted.lock() {
+            Ok(mut set) => !set.insert(distro.to_string()),
+            // 锁中毒时宁可重跑迁移也不跳过
+            Err(_) => false,
+        }
+    }
 
     /// 在 WSL 内解析 codex config 路径（`$CODEX_HOME/config.toml`，否则 `$HOME/.codex/config.toml`），
     /// 存在则 `wslpath -w` 转成 Windows 可访问路径（UNC）。文件不存在 / 解析失败 → None。
@@ -980,6 +1000,20 @@ impl CliToolAdapter for CodexAdapter {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[cfg(windows)]
+    #[test]
+    fn wsl_migration_attempt_guard_is_once_per_distro() {
+        // 用测试独有的 distro 名，避免与同进程其他测试互相污染进程级静态
+        let d1 = format!("test-distro-{}", std::process::id());
+        let d2 = format!("{d1}-other");
+
+        assert!(!CodexAdapter::wsl_migration_already_attempted(&d1));
+        assert!(CodexAdapter::wsl_migration_already_attempted(&d1));
+        // 不同 distro 互不影响
+        assert!(!CodexAdapter::wsl_migration_already_attempted(&d2));
+        assert!(CodexAdapter::wsl_migration_already_attempted(&d2));
+    }
 
     fn test_context(executable_override: Option<&str>) -> CliAdapterContext {
         CliAdapterContext {
