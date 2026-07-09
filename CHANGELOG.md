@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.12 - 2026-07-09 (beta)
+
+### Fixed
+
+- `ccpanes` MCP now injects and connects across every launch path — native Windows Codex, native macOS Codex, and WSL Codex under both mirrored and NAT networking. Daemon-hosted sessions previously got no MCP injection at all (the orchestrator info only ever lived in the Tauri process); the terminal backend now lazily reads the live endpoint from `mcp-orchestrator.json` and validates it with an authenticated `/api/health` probe before injecting, so it never hands the real token to a stranger that recycled the port. Stale global `[mcp_servers.ccpanes]` entries in `~/.codex/config.toml` are migrated away and the redundant `bearer_token_env_var` is no longer written, fixing `MCP client for ccpanes failed to start: CC_PANES_API_TOKEN not set`. For WSL NAT (the WSL2 default), the reachable Windows host is now resolved by probing candidate addresses (loopback, default gateway, resolv.conf nameserver) from inside WSL instead of hardcoding `127.0.0.1`.
+- Daemon-mode `launch_task` no longer mis-parents child sessions or drops hook-driven status: the terminal backend protocol was extended with `find_session_id_by_launch_id` and `apply_hook_status` (plus daemon HTTP endpoints), so parent resolution and the fine-grained Thinking/ToolRunning/WaitingInput status write-back reach the daemon that actually owns the session.
+- Critical user config files are written atomically to avoid corruption: `~/.claude.json` legacy cleanup now backs up and writes via a temp-file + fsync + rename, `~/.codex/config.toml` migration no longer leaves the file missing if a Windows rename fails, and the settings writer fsyncs before rename so a power loss can't truncate it to an empty file that resets to defaults.
+- The session-start hook now probes the env-provided orchestrator endpoint for reachability (and rewrites loopback to the WSL host) before trusting it, so a resumed session's stale `CC_PANES_API_*` no longer beats the live `mcp-orchestrator.json`.
+- The daemon orphan-session reaper re-checks live viewer activity immediately before killing, so a session reopened mid-sweep is no longer reaped.
+
+### Changed
+
+- `launch_task` started sessions now open **beside** the calling session's pane by default (a focused side-by-side split) instead of as a background tab stacked in the caller's pane. A new `placement` parameter (`"beside"` default, `"tab"`/`"background"` for the old in-pane behavior) lets the caller opt back in explicitly. Launches without a caller pane (external / layout-name) keep the tab behavior.
+
 ## 0.10.11 - 2026-07-08
 
 ### Fixed

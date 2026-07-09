@@ -4,9 +4,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, State};
 use tracing::debug;
 
-use crate::services::{
-    SettingsService, TerminalDaemonClient, WebAccessLifecycle, WebAccessStatus,
-};
+use crate::services::{SettingsService, TerminalDaemonClient, WebAccessLifecycle, WebAccessStatus};
 use crate::utils::{AppPaths, AppResult};
 
 #[tauri::command]

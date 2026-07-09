@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::models::CreateSessionRequest;
 use crate::models::TerminalReplaySnapshot;
 use crate::services::terminal_service::SessionOutput;
+use crate::services::terminal_service::SessionStatus;
 use crate::services::SessionStatusInfo;
 use crate::utils::error::AppError;
 use crate::utils::AppResult;
@@ -64,6 +65,18 @@ struct SubmitSessionRequest<'a> {
 struct ResizeSessionRequest {
     cols: u16,
     rows: u16,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HookStatusRequest {
+    status: SessionStatus,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FindByLaunchResponse {
+    session_id: String,
 }
 
 impl TerminalDaemonClient {
@@ -170,6 +183,41 @@ impl TerminalDaemonClient {
 
     pub fn kill_session(&self, session_id: &str) -> AppResult<()> {
         self.request_empty("DELETE", &session_path(session_id, ""), true, None)
+    }
+
+    pub fn find_session_id_by_launch_id(&self, launch_id: &str) -> AppResult<Option<String>> {
+        if launch_id.trim().is_empty() {
+            return Ok(None);
+        }
+        let path = format!("/api/sessions-by-launch/{}", urlencoding::encode(launch_id));
+        let response = self.request("GET", &path, true, None)?;
+        let (status, body) = split_http_response(&response)?;
+        if status == 404 {
+            return Ok(None);
+        }
+        if !(200..300).contains(&status) {
+            return Err(daemon_http_error(status, body));
+        }
+        let parsed: FindByLaunchResponse =
+            serde_json::from_str(body).map_err(|error| AppError::from(error.to_string()))?;
+        Ok(Some(parsed.session_id))
+    }
+
+    pub fn apply_hook_status(&self, session_id: &str, status: SessionStatus) -> AppResult<()> {
+        let body = serde_json::to_string(&HookStatusRequest { status })
+            .map_err(|error| AppError::from(error.to_string()))?;
+        let response = self.request(
+            "POST",
+            &session_path(session_id, "/hook-status"),
+            true,
+            Some(&body),
+        )?;
+        let (status_code, body) = split_http_response(&response)?;
+        // 会话已退出（404）不算错误——状态回写本就是尽力而为。
+        if status_code == 404 || (200..300).contains(&status_code) {
+            return Ok(());
+        }
+        Err(daemon_http_error(status_code, body))
     }
 
     pub fn get_session_output(&self, session_id: &str, lines: usize) -> AppResult<SessionOutput> {
@@ -434,6 +482,7 @@ mod tests {
             skip_mcp: false,
             append_system_prompt: None,
             initial_prompt: Some("inspect".to_string()),
+            extra_env: None,
             ssh: None,
             wsl: None,
         }
@@ -612,6 +661,70 @@ mod tests {
             .expect("snapshot")
             .expect("some snapshot");
         assert_eq!(snapshot.buffer_mode, TerminalBufferMode::Normal);
+    }
+
+    #[test]
+    fn find_session_id_by_launch_id_parses_and_maps_404_to_none() {
+        // 命中：返回 sessionId。
+        let (addr, rx) =
+            spawn_response_server(http_json_response("200 OK", r#"{"sessionId":"sess-9"}"#));
+        let client = TerminalDaemonClient::new(addr.to_string(), "secret")
+            .with_timeout(Duration::from_secs(1));
+        let found = client
+            .find_session_id_by_launch_id("launch-9")
+            .expect("lookup");
+        assert_eq!(found, Some("sess-9".to_string()));
+        let request = rx.recv().expect("captured request");
+        assert!(request.starts_with("GET /api/sessions-by-launch/launch-9 HTTP/1.1"));
+        assert!(request.contains("Authorization: Bearer secret"));
+
+        // 未命中：404 → None，非错误。
+        let (addr, _) = spawn_response_server(http_json_response(
+            "404 Not Found",
+            r#"{"code":"NOT_FOUND"}"#,
+        ));
+        let client = TerminalDaemonClient::new(addr.to_string(), "secret")
+            .with_timeout(Duration::from_secs(1));
+        assert_eq!(
+            client
+                .find_session_id_by_launch_id("missing")
+                .expect("lookup"),
+            None
+        );
+
+        // 空 launch_id 直接 None，不发请求。
+        let client = TerminalDaemonClient::new("127.0.0.1:1", "secret");
+        assert_eq!(
+            client.find_session_id_by_launch_id("  ").expect("lookup"),
+            None
+        );
+    }
+
+    #[test]
+    fn apply_hook_status_posts_status_and_tolerates_404() {
+        let (addr, rx) = spawn_response_server(empty_response("204 No Content"));
+        let client = TerminalDaemonClient::new(addr.to_string(), "secret")
+            .with_timeout(Duration::from_secs(1));
+
+        client
+            .apply_hook_status("sess-1", SessionStatus::ToolRunning)
+            .expect("apply status");
+
+        let request = rx.recv().expect("captured request");
+        assert!(request.starts_with("POST /api/sessions/sess-1/hook-status HTTP/1.1"));
+        assert!(request.contains("Authorization: Bearer secret"));
+        assert!(request.contains(r#""status":"toolRunning""#));
+
+        // 会话已退出 → 404，仍视作成功（尽力而为）。
+        let (addr, _) = spawn_response_server(http_json_response(
+            "404 Not Found",
+            r#"{"code":"NOT_FOUND"}"#,
+        ));
+        let client = TerminalDaemonClient::new(addr.to_string(), "secret")
+            .with_timeout(Duration::from_secs(1));
+        client
+            .apply_hook_status("gone", SessionStatus::Idle)
+            .expect("404 tolerated");
     }
 
     #[test]

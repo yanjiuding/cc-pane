@@ -80,7 +80,7 @@ pub fn report_with_payload(event_name: &str, raw_stdin: &str) {
         }
     };
 
-    let endpoint = match ApiEndpoint::from_env() {
+    let endpoint = match ApiEndpoint::resolve() {
         Ok(e) => e,
         Err(err) => {
             eprintln!(

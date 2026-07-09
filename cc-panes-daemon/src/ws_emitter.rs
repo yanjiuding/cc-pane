@@ -28,6 +28,14 @@ impl WsEmitter {
         rx
     }
 
+    /// 是否仍有活跃（未断开）的 WS 订阅者——会话孤儿判定的信号之一。
+    pub fn has_active_subscriber(&self, session_id: &str) -> bool {
+        let subscribers = self.subscribers.read();
+        subscribers
+            .get(session_id)
+            .is_some_and(|senders| senders.iter().any(|sender| !sender.is_closed()))
+    }
+
     pub fn cleanup_session(&self, session_id: &str) {
         let mut subscribers = self.subscribers.write();
         if let Some(senders) = subscribers.get_mut(session_id) {

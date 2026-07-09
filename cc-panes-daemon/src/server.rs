@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -13,9 +14,9 @@ use cc_panes_core::models::{
     CliTool, CreateSessionRequest as CoreCreateSessionRequest, LaunchProviderSelection,
     SshConnectionInfo, TerminalReplaySnapshot, WslLaunchInfo,
 };
-use cc_panes_core::services::terminal_service::SessionOutput;
+use cc_panes_core::services::terminal_service::{SessionOutput, SessionStatus};
 use cc_panes_core::services::{SessionStatusInfo, TerminalBackend};
-use cc_panes_core::utils::normalize_session_request_for_current_host;
+use cc_panes_core::utils::{atomic_file, normalize_session_request_for_current_host};
 use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
@@ -76,6 +77,7 @@ impl DaemonConfig {
                 terminal_backend,
                 ws_emitter,
                 default_cwd,
+                last_activity: parking_lot::RwLock::new(HashMap::new()),
             }),
         }
     }
@@ -109,11 +111,11 @@ impl DaemonConfig {
         self.inner.shutdown_tx.subscribe()
     }
 
-    fn request_shutdown(&self) {
+    pub(crate) fn request_shutdown(&self) {
         let _ = self.inner.shutdown_tx.send(true);
     }
 
-    fn terminal_backend(&self) -> &dyn TerminalBackend {
+    pub(crate) fn terminal_backend(&self) -> &dyn TerminalBackend {
         self.inner.terminal_backend.as_ref()
     }
 
@@ -123,6 +125,28 @@ impl DaemonConfig {
 
     fn default_cwd(&self) -> &str {
         &self.inner.default_cwd
+    }
+
+    /// 刷新会话活跃时间——所有会话级 HTTP/WS 访问都算"仍被引用"
+    /// （app 侧 WS 失败会退化成 HTTP 轮询，不能只看 WS 订阅）。
+    pub(crate) fn touch_session(&self, session_id: &str) {
+        self.inner
+            .last_activity
+            .write()
+            .insert(session_id.to_string(), Instant::now());
+    }
+
+    pub(crate) fn remove_session_activity(&self, session_id: &str) {
+        self.inner.last_activity.write().remove(session_id);
+        self.inner.ws_emitter.cleanup_session(session_id);
+    }
+
+    pub(crate) fn session_activity_snapshot(&self) -> HashMap<String, Instant> {
+        self.inner.last_activity.read().clone()
+    }
+
+    pub(crate) fn has_active_subscriber(&self, session_id: &str) -> bool {
+        self.inner.ws_emitter.has_active_subscriber(session_id)
     }
 }
 
@@ -134,6 +158,9 @@ struct DaemonState {
     terminal_backend: Arc<dyn TerminalBackend>,
     ws_emitter: Arc<WsEmitter>,
     default_cwd: String,
+    /// 会话最后活跃时间（HTTP 访问 / WS 连接 / WS 入站输入均刷新），
+    /// 供 session_reaper 做孤儿过期判定。
+    last_activity: parking_lot::RwLock<HashMap<String, Instant>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -201,6 +228,8 @@ pub struct PartialCreateSessionRequest {
     #[serde(default, alias = "prompt")]
     pub initial_prompt: Option<String>,
     #[serde(default)]
+    pub extra_env: Option<HashMap<String, String>>,
+    #[serde(default)]
     pub ssh: Option<SshConnectionInfo>,
     #[serde(default)]
     pub wsl: Option<WslLaunchInfo>,
@@ -238,6 +267,18 @@ pub struct OutputQuery {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct HookStatusRequest {
+    pub status: SessionStatus,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindByLaunchResponse {
+    pub session_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WsQuery {
     pub token: Option<String>,
 }
@@ -250,6 +291,11 @@ pub fn router(config: DaemonConfig) -> Router {
         .route("/api/sessions", post(create_session))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{id}/status", get(get_session_status))
+        .route(
+            "/api/sessions-by-launch/{launch_id}",
+            get(find_session_by_launch),
+        )
+        .route("/api/sessions/{id}/hook-status", post(hook_status))
         .route("/api/sessions/{id}/output", get(get_session_output))
         .route("/api/sessions/{id}/snapshot", get(get_session_snapshot))
         .route("/api/sessions/{id}/write", post(write_session))
@@ -276,8 +322,13 @@ pub fn write_manifest(runtime_dir: &FsPath, config: &DaemonConfig) -> anyhow::Re
         started_at: config.inner.started_at,
     };
     let data = serde_json::to_vec_pretty(&manifest)?;
-    std::fs::write(&path, data)?;
+    atomic_file::write_atomic(&path, data)?;
     Ok(path)
+}
+
+pub fn read_manifest(runtime_dir: &FsPath) -> Option<DaemonManifest> {
+    let content = std::fs::read(runtime_dir.join(MANIFEST_FILE)).ok()?;
+    serde_json::from_slice(&content).ok()
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -339,6 +390,7 @@ async fn create_session(
         skip_mcp: req.core.skip_mcp,
         append_system_prompt: req.core.append_system_prompt,
         initial_prompt: req.core.initial_prompt,
+        extra_env: req.core.extra_env,
         ssh: req.core.ssh,
         wsl: req.core.wsl,
     });
@@ -346,6 +398,7 @@ async fn create_session(
         .terminal_backend()
         .create_session(core_request)
         .map_err(internal_error)?;
+    config.touch_session(&session_id);
     Ok((
         StatusCode::CREATED,
         Json(CreateSessionResponse { session_id }),
@@ -370,6 +423,7 @@ async fn get_session_status(
     Path(id): Path<String>,
 ) -> Result<Json<SessionStatusInfo>, (StatusCode, Json<serde_json::Value>)> {
     authorize(&headers, config.token())?;
+    config.touch_session(&id);
     let status = config
         .terminal_backend()
         .get_session_status(&id)
@@ -379,6 +433,35 @@ async fn get_session_status(
         .ok_or_else(|| not_found("Session not found"))
 }
 
+async fn find_session_by_launch(
+    State(config): State<DaemonConfig>,
+    headers: HeaderMap,
+    Path(launch_id): Path<String>,
+) -> Result<Json<FindByLaunchResponse>, (StatusCode, Json<serde_json::Value>)> {
+    authorize(&headers, config.token())?;
+    let session_id = config
+        .terminal_backend()
+        .find_session_id_by_launch_id(&launch_id)
+        .map_err(internal_error)?;
+    session_id
+        .map(|session_id| Json(FindByLaunchResponse { session_id }))
+        .ok_or_else(|| not_found("No session for launch id"))
+}
+
+async fn hook_status(
+    State(config): State<DaemonConfig>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<HookStatusRequest>,
+) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+    authorize(&headers, config.token())?;
+    config
+        .terminal_backend()
+        .apply_hook_status(&id, req.status)
+        .map_err(internal_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn resize_session(
     State(config): State<DaemonConfig>,
     headers: HeaderMap,
@@ -386,6 +469,7 @@ async fn resize_session(
     Json(req): Json<ResizeRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     authorize(&headers, config.token())?;
+    config.touch_session(&id);
     config
         .terminal_backend()
         .resize(&id, req.cols, req.rows)
@@ -405,6 +489,7 @@ async fn write_session(
         input = %summarize_terminal_input(&req.data),
         "terminal-input.trace daemon.write_session"
     );
+    config.touch_session(&id);
     config
         .terminal_backend()
         .write(&id, &req.data)
@@ -419,6 +504,7 @@ async fn submit_session(
     Json(req): Json<SubmitRequest>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     authorize(&headers, config.token())?;
+    config.touch_session(&id);
     config
         .terminal_backend()
         .submit_text_to_session(&id, &req.text)
@@ -433,6 +519,7 @@ async fn get_session_output(
     Query(query): Query<OutputQuery>,
 ) -> Result<Json<SessionOutput>, (StatusCode, Json<serde_json::Value>)> {
     authorize(&headers, config.token())?;
+    config.touch_session(&id);
     let output = config
         .terminal_backend()
         .get_session_output(&id, query.lines.unwrap_or(0))
@@ -446,6 +533,7 @@ async fn get_session_snapshot(
     Path(id): Path<String>,
 ) -> Result<Json<TerminalReplaySnapshot>, (StatusCode, Json<serde_json::Value>)> {
     authorize(&headers, config.token())?;
+    config.touch_session(&id);
     let snapshot = config
         .terminal_backend()
         .get_session_replay_snapshot(&id)
@@ -464,6 +552,7 @@ async fn kill_session(
         .terminal_backend()
         .kill(&id)
         .map_err(not_found_from_error)?;
+    config.remove_session_activity(&id);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -488,6 +577,7 @@ async fn ws_session(
 }
 
 async fn handle_ws(socket: WebSocket, session_id: String, config: DaemonConfig) {
+    config.touch_session(&session_id);
     let (mut ws_tx, mut ws_rx) = socket.split();
     let mut output_rx = config.ws_emitter().subscribe(&session_id);
     let send_session_id = session_id.clone();
@@ -509,6 +599,7 @@ async fn handle_ws(socket: WebSocket, session_id: String, config: DaemonConfig) 
                             .get("data")
                             .and_then(|value| value.as_str())
                             .unwrap_or("");
+                        config.touch_session(&session_id);
                         let _ = config.terminal_backend().write(&session_id, data);
                     }
                 }
@@ -615,6 +706,7 @@ mod tests {
         submits: Mutex<Vec<(String, String)>>,
         resizes: Mutex<Vec<(String, u16, u16)>>,
         kills: Mutex<Vec<String>>,
+        hook_statuses: Mutex<Vec<(String, SessionStatus)>>,
     }
 
     impl TerminalBackend for MockTerminalBackend {
@@ -692,6 +784,19 @@ mod tests {
                 data: "\u{1b}[2J".to_string(),
                 buffer_mode: TerminalBufferMode::Normal,
             }))
+        }
+
+        fn find_session_id_by_launch_id(&self, launch_id: &str) -> AppResult<Option<String>> {
+            // 约定：launch id "launch-1" 映射到 "session-1"，其余无。
+            Ok((launch_id == "launch-1").then(|| "session-1".to_string()))
+        }
+
+        fn apply_hook_status(&self, session_id: &str, status: SessionStatus) -> AppResult<()> {
+            self.hook_statuses
+                .lock()
+                .unwrap()
+                .push((session_id.to_string(), status));
+            Ok(())
         }
     }
 
@@ -814,6 +919,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn find_by_launch_and_hook_status_routes_delegate_to_backend() {
+        let backend = Arc::new(MockTerminalBackend::default());
+        let app = router(test_config("secret", "127.0.0.1:18091", backend.clone()));
+
+        // by-launch 命中 → 200 + sessionId。
+        let hit = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sessions-by-launch/launch-1")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(hit.status(), StatusCode::OK);
+        let bytes = to_bytes(hit.into_body(), usize::MAX).await.expect("body");
+        let parsed: FindByLaunchResponse = serde_json::from_slice(&bytes).expect("find response");
+        assert_eq!(parsed.session_id, "session-1");
+
+        // by-launch 未命中 → 404。
+        let miss = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sessions-by-launch/nope")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(miss.status(), StatusCode::NOT_FOUND);
+
+        // hook-status → 204 且被 backend 记录。
+        let applied = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions/session-1/hook-status")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"status":"toolRunning"}"#))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(applied.status(), StatusCode::NO_CONTENT);
+        let recorded = backend.hook_statuses.lock().unwrap();
+        assert_eq!(
+            recorded.as_slice(),
+            &[("session-1".to_string(), SessionStatus::ToolRunning)]
+        );
+    }
+
+    #[tokio::test]
     async fn terminal_routes_require_token_and_delegate_to_backend() {
         let backend = Arc::new(MockTerminalBackend::default());
         let app = router(test_config("secret", "127.0.0.1:18084", backend.clone()));
@@ -841,7 +1003,7 @@ mod tests {
                     .header(header::AUTHORIZATION, "Bearer secret")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        r#"{"projectPath":"/repo","cols":100,"rows":40,"prompt":"inspect"}"#,
+                        r#"{"projectPath":"/repo","cols":100,"rows":40,"prompt":"inspect","extraEnv":{"RUNNER_ENV":"1"}}"#,
                     ))
                     .expect("request"),
             )
@@ -854,6 +1016,14 @@ mod tests {
         let response: CreateSessionResponse =
             serde_json::from_slice(&bytes).expect("create response");
         assert_eq!(response.session_id, "session-1");
+        assert_eq!(
+            backend.created.lock().unwrap()[0]
+                .extra_env
+                .as_ref()
+                .and_then(|env| env.get("RUNNER_ENV"))
+                .map(String::as_str),
+            Some("1")
+        );
 
         let status = app
             .clone()

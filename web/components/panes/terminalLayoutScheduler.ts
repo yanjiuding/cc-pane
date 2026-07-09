@@ -71,6 +71,8 @@ function shouldFocusTerminal(): boolean {
 /** fit 后延迟校验容器与 cols/rows 是否仍一致（嵌套分屏可能有第二轮 reflow）。 */
 const VERIFY_REFIT_DELAY_MS = 120;
 const VERIFY_REFIT_REASON = "verify.refit";
+/** verify 未收敛时的有限重试上限，防止持续 reflow 下无限自链。 */
+const VERIFY_REFIT_MAX_ATTEMPTS = 3;
 /** 后端 PTY resize 去抖窗口：拖拽期间 conpty 每次 resize 都整屏重绘，高频下发会留残行。 */
 const BACKEND_RESIZE_DEBOUNCE_MS = 250;
 
@@ -95,6 +97,7 @@ export function createTerminalLayoutScheduler({
   let pendingReason: string | null = null;
   let lastSize: { cols: number; rows: number } | null = null;
   let lastContainerSize: TerminalContainerSize | null = null;
+  let verifyAttempts = 0;
 
   const cancel = () => {
     if (timerId !== null) {
@@ -218,9 +221,9 @@ export function createTerminalLayoutScheduler({
       }
     }
 
-    if (options.containerSize) {
-      lastContainerSize = options.containerSize;
-    }
+    // 无条件用实测 rect 推进基线：让 jitter 基线始终等于"上次实际 fit 的容器"，
+    // 避免 forced flush 后基线陈旧、后续小幅修正被 minContainerDelta 吞掉。
+    lastContainerSize = { width: rect.width, height: rect.height };
 
     pendingReason = null;
     logger("layout.applied", {
@@ -233,6 +236,10 @@ export function createTerminalLayoutScheduler({
     });
     options.onAfterLayout?.(term);
     if (reason !== VERIFY_REFIT_REASON) {
+      verifyAttempts = 0;
+      scheduleVerifyRefit();
+    } else if (verifyAttempts < VERIFY_REFIT_MAX_ATTEMPTS) {
+      // verify 补救后再复核一轮，未收敛可有限重试（多轮 reflow 场景）。
       scheduleVerifyRefit();
     }
     return term;
@@ -266,7 +273,9 @@ export function createTerminalLayoutScheduler({
         rows: term.rows,
         proposedCols: proposed.cols,
         proposedRows: proposed.rows,
+        attempt: verifyAttempts + 1,
       });
+      verifyAttempts += 1;
       applyLayout(VERIFY_REFIT_REASON, { force: true });
     }, VERIFY_REFIT_DELAY_MS);
   };

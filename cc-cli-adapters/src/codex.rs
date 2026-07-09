@@ -5,10 +5,12 @@ use crate::{
     CliToolCapabilities, CliToolInfo, NativeHookBinding, ProjectHookDefinition, ProjectHookStatus,
     ToolKind, ToolMatcher,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
+use toml_edit::{DocumentMut, Item};
 use tracing::info;
 
 const HOOK_BINARY_NAME: &str = "cc-panes-cli-hook";
@@ -115,15 +117,6 @@ impl CodexAdapter {
         ));
     }
 
-    fn push_mcp_bearer_env_override(args: &mut Vec<String>, name: &str, env_var: &str) {
-        args.push("-c".to_string());
-        args.push(format!(
-            "mcp_servers.{}.bearer_token_env_var={}",
-            Self::format_toml_key_segment_for_cli(name),
-            Self::format_toml_string_for_cli(env_var)
-        ));
-    }
-
     fn push_mcp_enabled_override(args: &mut Vec<String>, name: &str, enabled: bool) {
         args.push("-c".to_string());
         args.push(format!(
@@ -167,8 +160,11 @@ impl CodexAdapter {
                 url.push_str("&launchId=");
                 url.push_str(launch_id);
             }
+            // token 通过 url 的 ?token= 传（orchestrator 鉴权中间件认 query token）。
+            // 不再注入 bearer_token_env_var：Codex 的 dotted -c 只覆盖 .url，覆盖不掉
+            // 全局 config.toml 里旧的 .bearer_token_env_var，缺 CC_PANES_API_TOKEN 环境
+            // 变量时会启动失败（见 docs/18）。去掉对环境变量的依赖。
             Self::push_mcp_url_override(args, "ccpanes", &url);
-            Self::push_mcp_bearer_env_override(args, "ccpanes", "CC_PANES_API_TOKEN");
             Self::push_mcp_enabled_override(args, "ccpanes", true);
         }
 
@@ -210,6 +206,141 @@ impl CodexAdapter {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .or_else(|| dirs::home_dir().map(|home| home.join(".codex")))
+    }
+
+    fn migrate_stale_global_ccpanes_mcp_config() {
+        #[cfg(test)]
+        {
+            return;
+        }
+
+        #[cfg(not(test))]
+        {
+            let Some(home) = Self::real_codex_home() else {
+                return;
+            };
+            let path = home.join("config.toml");
+            match Self::migrate_stale_global_ccpanes_mcp_config_at(&path) {
+                Ok(true) => info!(
+                    config = %path.display(),
+                    "codex: removed stale global ccpanes MCP config"
+                ),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(
+                    config = %path.display(),
+                    error = %error,
+                    "codex: failed to migrate stale global ccpanes MCP config"
+                ),
+            }
+        }
+    }
+
+    fn migrate_stale_global_ccpanes_mcp_config_at(path: &Path) -> Result<bool> {
+        if !path.exists() {
+            return Ok(false);
+        }
+
+        let content = fs::read_to_string(path)
+            .with_context(|| format!("failed to read Codex config {}", path.display()))?;
+        let mut document = content
+            .parse::<DocumentMut>()
+            .with_context(|| format!("failed to parse Codex config {}", path.display()))?;
+
+        let should_remove = document
+            .get("mcp_servers")
+            .and_then(|servers| servers.get("ccpanes"))
+            .map(Self::is_stale_global_ccpanes_mcp_config)
+            .unwrap_or(false);
+
+        if !should_remove {
+            return Ok(false);
+        }
+
+        let backup_path = Self::sibling_path_with_suffix(path, ".bak");
+        fs::copy(path, &backup_path).with_context(|| {
+            format!(
+                "failed to write Codex config backup {}",
+                backup_path.display()
+            )
+        })?;
+
+        if let Some(servers) = document
+            .get_mut("mcp_servers")
+            .and_then(Item::as_table_like_mut)
+        {
+            servers.remove("ccpanes");
+        }
+
+        Self::write_file_via_temp_rename(path, &document.to_string())?;
+        Ok(true)
+    }
+
+    fn is_stale_global_ccpanes_mcp_config(server: &Item) -> bool {
+        let old_url_signature = server
+            .get("url")
+            .and_then(Item::as_str)
+            .map(Self::is_old_ccpanes_mcp_url)
+            .unwrap_or(false);
+        let old_bearer_env =
+            server.get("bearer_token_env_var").and_then(Item::as_str) == Some("CC_PANES_API_TOKEN");
+        old_url_signature || old_bearer_env
+    }
+
+    fn is_old_ccpanes_mcp_url(url: &str) -> bool {
+        let Some(after_scheme) = url
+            .strip_prefix("http://")
+            .or_else(|| url.strip_prefix("https://"))
+        else {
+            return false;
+        };
+
+        let authority_end = after_scheme
+            .find(['/', '?', '#'])
+            .unwrap_or(after_scheme.len());
+        let authority = after_scheme[..authority_end]
+            .rsplit('@')
+            .next()
+            .unwrap_or_default();
+        let host = if let Some(rest) = authority.strip_prefix('[') {
+            rest.split(']').next().unwrap_or_default()
+        } else {
+            authority.split(':').next().unwrap_or_default()
+        };
+        let host = host.to_ascii_lowercase();
+        let is_loopback = host == "localhost" || host == "127.0.0.1" || host == "::1";
+        if !is_loopback {
+            return false;
+        }
+
+        let path_and_after = &after_scheme[authority_end..];
+        let path = path_and_after.split(['?', '#']).next().unwrap_or_default();
+        if !path.starts_with("/mcp") {
+            return false;
+        }
+
+        let query = path_and_after
+            .split_once('?')
+            .map(|(_, query)| query.split('#').next().unwrap_or_default())
+            .unwrap_or_default();
+        query
+            .split('&')
+            .filter(|part| !part.is_empty())
+            .any(|part| part.split('=').next() == Some("token"))
+    }
+
+    fn sibling_path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
+        let mut file_name = path
+            .file_name()
+            .unwrap_or_else(|| OsStr::new("config.toml"))
+            .to_os_string();
+        file_name.push(suffix);
+        path.with_file_name(file_name)
+    }
+
+    fn write_file_via_temp_rename(path: &Path, content: &str) -> Result<()> {
+        // 复用共享的加固原子写（temp + fsync + 带重试的 rename），避免各处重复实现，
+        // 也修掉旧版 remove-then-rename 在第二步失败时目标文件消失的窗口。
+        crate::fs_atomic::write_atomic(path, content)
     }
 
     /// 旧隔离目录根：历史上 CC-Panes 把 Codex 关进 `~/.cache/cc-panes/codex-home/{sessionId}`，
@@ -696,6 +827,7 @@ impl CliToolAdapter for CodexAdapter {
         // MCP 隔离改由 per-launch `-c` override 完成（见下），无需复制/sanitize home。
         // 一次性把历史遗留的隔离会话救回真实 home（带 marker，幂等、best-effort）。
         Self::migrate_legacy_isolated_sessions();
+        Self::migrate_stale_global_ccpanes_mcp_config();
 
         // MCP 注入使用 Codex 的 per-launch -c override，避免写入用户全局 config.toml。
         if ctx.skip_mcp {
@@ -984,7 +1116,6 @@ mod tests {
         let mut args = Vec::new();
 
         CodexAdapter::push_mcp_url_override(&mut args, "context 7", "http://127.0.0.1:3100/mcp");
-        CodexAdapter::push_mcp_bearer_env_override(&mut args, "ccpanes", "CC_PANES_API_TOKEN");
         CodexAdapter::push_mcp_enabled_override(&mut args, "ccpanes", false);
 
         assert_eq!(
@@ -993,11 +1124,85 @@ mod tests {
                 "-c",
                 "mcp_servers.\"context 7\".url=\"http://127.0.0.1:3100/mcp\"",
                 "-c",
-                "mcp_servers.ccpanes.bearer_token_env_var=\"CC_PANES_API_TOKEN\"",
-                "-c",
                 "mcp_servers.ccpanes.enabled=false",
             ]
         );
+    }
+
+    #[test]
+    fn ccpanes_mcp_overrides_omit_bearer_env_var() {
+        let adapter = CodexAdapter::new();
+        let mut ctx = test_context(Some("/opt/codex"));
+        ctx.skip_mcp = false;
+        ctx.resume_id = None;
+        ctx.orchestrator_port = Some(37123);
+        ctx.orchestrator_token = Some("secret-token".to_string());
+        ctx.launch_id = Some("launch-1".to_string());
+
+        let mut args = Vec::new();
+        adapter.push_mcp_overrides(&mut args, &ctx);
+
+        assert!(args.iter().any(|arg| arg
+            == "mcp_servers.ccpanes.url=\"http://127.0.0.1:37123/mcp?token=secret-token&launchId=launch-1\""));
+        assert!(args
+            .iter()
+            .any(|arg| arg == "mcp_servers.ccpanes.enabled=true"));
+        assert!(!args.iter().any(|arg| arg.contains("bearer_token_env_var")));
+    }
+
+    #[test]
+    fn stale_global_ccpanes_config_is_removed_with_backup() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"# keep root comment
+model = "gpt-5"
+
+[mcp_servers.fetch]
+url = "http://127.0.0.1:3000/mcp"
+
+# stale CC-Panes entry
+[mcp_servers.ccpanes]
+bearer_token_env_var = "CC_PANES_API_TOKEN"
+url = "http://127.0.0.1:37123/mcp?token=redacted"
+"#,
+        )
+        .unwrap();
+
+        assert!(CodexAdapter::migrate_stale_global_ccpanes_mcp_config_at(&config_path).unwrap());
+
+        let migrated = fs::read_to_string(&config_path).unwrap();
+        assert!(migrated.contains("# keep root comment"));
+        assert!(migrated.contains("[mcp_servers.fetch]"));
+        assert!(!migrated.contains("[mcp_servers.ccpanes]"));
+        assert!(!migrated.contains("CC_PANES_API_TOKEN"));
+
+        let backup_path = CodexAdapter::sibling_path_with_suffix(&config_path, ".bak");
+        let backup = fs::read_to_string(backup_path).unwrap();
+        assert!(backup.contains("[mcp_servers.ccpanes]"));
+        assert!(backup.contains("CC_PANES_API_TOKEN"));
+    }
+
+    #[test]
+    fn non_matching_global_ccpanes_config_is_preserved() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        fs::write(
+            &config_path,
+            r#"[mcp_servers.ccpanes]
+url = "https://example.com/mcp"
+bearer_token_env_var = "USER_TOKEN"
+"#,
+        )
+        .unwrap();
+
+        assert!(!CodexAdapter::migrate_stale_global_ccpanes_mcp_config_at(&config_path).unwrap());
+
+        let migrated = fs::read_to_string(&config_path).unwrap();
+        assert!(migrated.contains("[mcp_servers.ccpanes]"));
+        assert!(migrated.contains("USER_TOKEN"));
+        assert!(!CodexAdapter::sibling_path_with_suffix(&config_path, ".bak").exists());
     }
 
     #[test]

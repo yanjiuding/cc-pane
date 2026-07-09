@@ -23,6 +23,7 @@ impl TerminalDaemonLifecycle {
     pub fn connect_or_start(
         app_paths: &AppPaths,
         resource_dir: Option<&Path>,
+        config_path: &Path,
     ) -> AppResult<TerminalDaemonClient> {
         let manifest_path = app_paths.runtime_dir().join(MANIFEST_FILE);
         if let Some(client) = try_connect_manifest(&manifest_path) {
@@ -30,7 +31,7 @@ impl TerminalDaemonLifecycle {
         }
 
         let daemon_binary = resolve_daemon_binary(resource_dir)?;
-        start_daemon_process(&daemon_binary, app_paths)?;
+        start_daemon_process(&daemon_binary, app_paths, config_path)?;
         wait_for_manifest(&manifest_path, Duration::from_secs(5))
     }
 }
@@ -57,7 +58,11 @@ fn try_connect_manifest(manifest_path: &Path) -> Option<TerminalDaemonClient> {
     Some(client)
 }
 
-fn start_daemon_process(daemon_binary: &Path, app_paths: &AppPaths) -> AppResult<()> {
+fn start_daemon_process(
+    daemon_binary: &Path,
+    app_paths: &AppPaths,
+    config_path: &Path,
+) -> AppResult<()> {
     std::fs::create_dir_all(app_paths.runtime_dir())?;
 
     let mut command = no_window_command(daemon_binary);
@@ -68,6 +73,10 @@ fn start_daemon_process(daemon_binary: &Path, app_paths: &AppPaths) -> AppResult
         .arg(app_paths.data_dir())
         .arg("--data-dir")
         .arg(app_paths.data_dir())
+        // app 的 config.toml 在 config dir（~/.cc-panes[-dev]/），自定义 data_dir 时
+        // 与 data_dir/config.toml 不是同一份；显式传给 daemon 保证设置热重读一致。
+        .arg("--config-path")
+        .arg(config_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());

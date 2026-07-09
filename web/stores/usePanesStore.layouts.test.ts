@@ -494,7 +494,11 @@ describe("usePanesStore layouts", () => {
 
     usePanesStore.getState().closeTabBySessionId("session-right");
     let tabs = panel(hiddenLayout().rootPane).tabs;
-    expect((tabs[0].terminalRootPane as TerminalPaneLeaf).sessionId).toBe("session-left");
+    // 不上提：保留单 child split 壳，幸存 leaf 留在壳内
+    const shell = tabs[0].terminalRootPane as TerminalPaneSplit;
+    expect(shell.type).toBe("split");
+    expect(shell.children).toHaveLength(1);
+    expect((shell.children[0] as TerminalPaneLeaf).sessionId).toBe("session-left");
     expect(tabs).toHaveLength(2);
 
     usePanesStore.getState().closeTabBySessionId("single-session");

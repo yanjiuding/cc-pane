@@ -1,10 +1,12 @@
 mod app_paths;
+pub mod atomic_file;
 pub mod claude_path;
 pub mod command;
 pub mod error;
 pub mod error_codes;
 pub mod git_command;
 pub mod launch_request;
+pub mod orchestrator_manifest;
 pub mod path_validator;
 
 pub use app_paths::{AppPaths, APP_DIR_NAME};

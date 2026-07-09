@@ -95,10 +95,11 @@ describe("usePanesStore", () => {
   });
 
   describe("closePane", () => {
-    it("关闭分屏中的一个面板后应折叠回存活面板", () => {
+    it("关闭分屏中的一个面板后应保留单 child split 壳（幸存面板不 remount）", () => {
       const { rootPane, splitRight } = usePanesStore.getState();
       const originalPanelId = rootPane.id;
       splitRight(rootPane.id);
+      const splitId = usePanesStore.getState().rootPane.id;
 
       const panels = usePanesStore.getState().allPanels();
       expect(panels).toHaveLength(2);
@@ -108,13 +109,18 @@ describe("usePanesStore", () => {
       usePanesStore.getState().closePane(activePaneId);
 
       const stateAfter = usePanesStore.getState();
-      expect(stateAfter.rootPane.type).toBe("panel");
-      expect(stateAfter.rootPane.id).toBe(originalPanelId);
+      // 不上提：split 壳保留（组件类型/key 不变），幸存 panel id 不变
+      expect(stateAfter.rootPane.type).toBe("split");
+      const shell = stateAfter.rootPane as SplitPane;
+      expect(shell.id).toBe(splitId);
+      expect(shell.children).toHaveLength(1);
+      expect(shell.children[0].id).toBe(originalPanelId);
+      expect(shell.sizes).toEqual([100]);
       // activePaneId 应指向存活面板
       expect(stateAfter.activePaneId).toBe(originalPanelId);
     });
 
-    it("关闭嵌套分屏中的一个面板后应清理退化 split 链", () => {
+    it("关闭嵌套分屏中的一个面板后应保留退化 split 壳并归一化 sizes", () => {
       const store = usePanesStore.getState();
       const firstPaneId = store.rootPane.id;
       store.splitRight(firstPaneId);
@@ -134,7 +140,30 @@ describe("usePanesStore", () => {
       expect(stateAfter.rootPane.type).toBe("split");
       const normalizedRoot = stateAfter.rootPane as SplitPane;
       expect(normalizedRoot.children).toHaveLength(2);
-      expect(normalizedRoot.children.every((child) => child.type === "panel")).toBe(true);
+      // 嵌套 split 退化为单 child 壳，幸存 panel 留在壳内
+      const survivedShell = normalizedRoot.children.find((child) => child.id === nestedSplit.id) as SplitPane;
+      expect(survivedShell.type).toBe("split");
+      expect(survivedShell.children).toHaveLength(1);
+      expect(survivedShell.children[0].id).toBe(secondPaneId);
+      expect(survivedShell.sizes).toEqual([100]);
+    });
+
+    it("单 child 壳上再次分屏应复用壳节点（含异方向）", () => {
+      const { rootPane, splitRight } = usePanesStore.getState();
+      const originalPanelId = rootPane.id;
+      splitRight(rootPane.id);
+      const splitId = usePanesStore.getState().rootPane.id;
+      usePanesStore.getState().closePane(usePanesStore.getState().activePaneId);
+
+      // 壳上异方向再分屏：改造壳而非再包一层
+      usePanesStore.getState().splitDown(originalPanelId);
+
+      const root = usePanesStore.getState().rootPane as SplitPane;
+      expect(root.id).toBe(splitId);
+      expect(root.direction).toBe("vertical");
+      expect(root.children).toHaveLength(2);
+      expect(root.children[0].id).toBe(originalPanelId);
+      expect(root.sizes).toEqual([50, 50]);
     });
 
     it("关闭根面板应重置为新空面板", () => {
@@ -313,7 +342,7 @@ describe("usePanesStore", () => {
       expect(updatedTab.sessionId).toBeNull();
     });
 
-    it("关闭活动子窗格后应保留另一个子窗格", () => {
+    it("关闭活动子窗格后应保留另一个子窗格（split 壳不上提）", () => {
       const paneId = usePanesStore.getState().rootPane.id;
       usePanesStore.getState().addTab(paneId, { projectId: "proj-1", projectPath: "/tmp/proj1" });
 
@@ -326,8 +355,38 @@ describe("usePanesStore", () => {
       usePanesStore.getState().closeTerminalPane(tab.id, closingTerminalPaneId);
 
       const updatedTab = ((usePanesStore.getState().rootPane as Panel).tabs[1]) as Tab;
-      expect(updatedTab.terminalRootPane?.type).toBe("leaf");
+      // 不上提：保留单 child split 壳，幸存 leaf 不 remount
+      expect(updatedTab.terminalRootPane?.type).toBe("split");
+      const shell = updatedTab.terminalRootPane as { children: Array<{ type: string; id: string }>; sizes: number[] };
+      expect(shell.children).toHaveLength(1);
+      expect(shell.children[0].type).toBe("leaf");
+      expect(shell.sizes).toEqual([100]);
       expect(updatedTab.activeTerminalPaneId).not.toBe(closingTerminalPaneId);
+      expect(updatedTab.activeTerminalPaneId).toBe(shell.children[0].id);
+    });
+
+    it("终端单 child 壳上再次分屏应复用壳节点（含异方向）", () => {
+      const paneId = usePanesStore.getState().rootPane.id;
+      usePanesStore.getState().addTab(paneId, { projectId: "proj-1", projectPath: "/tmp/proj1" });
+
+      let tab = ((usePanesStore.getState().rootPane as Panel).tabs[1]) as Tab;
+      usePanesStore.getState().splitTerminalPane(tab.id, tab.activeTerminalPaneId!, "right");
+      tab = ((usePanesStore.getState().rootPane as Panel).tabs[1]) as Tab;
+      usePanesStore.getState().closeTerminalPane(tab.id, tab.activeTerminalPaneId!);
+
+      tab = ((usePanesStore.getState().rootPane as Panel).tabs[1]) as Tab;
+      const shellId = tab.terminalRootPane!.id;
+      const survivorId = tab.activeTerminalPaneId!;
+
+      usePanesStore.getState().splitTerminalPane(tab.id, survivorId, "down");
+
+      const updatedTab = ((usePanesStore.getState().rootPane as Panel).tabs[1]) as Tab;
+      const shell = updatedTab.terminalRootPane as { id: string; direction: string; children: Array<{ id: string }>; sizes: number[] };
+      expect(shell.id).toBe(shellId);
+      expect(shell.direction).toBe("vertical");
+      expect(shell.children).toHaveLength(2);
+      expect(shell.children[0].id).toBe(survivorId);
+      expect(shell.sizes).toEqual([50, 50]);
     });
 
     it("更新指定子窗格会话时应同步到活动标签镜像字段", () => {
@@ -343,6 +402,42 @@ describe("usePanesStore", () => {
 
       const updatedTab = ((usePanesStore.getState().rootPane as Panel).tabs[1]) as Tab;
       expect(updatedTab.sessionId).toBe("session-subpane");
+    });
+  });
+
+  describe("applyLayoutSnapshotPayload", () => {
+    it("导入快照时应压平运行期留下的单 child split 壳链", () => {
+      const panel = createPanel();
+      const shellChain: SplitPane = {
+        type: "split",
+        id: "split-outer",
+        direction: "horizontal",
+        children: [{
+          type: "split",
+          id: "split-inner",
+          direction: "vertical",
+          children: [panel],
+          sizes: [100],
+        }],
+        sizes: [100],
+      };
+
+      const applied = usePanesStore.getState().applyLayoutSnapshotPayload({
+        schemaVersion: 1,
+        layouts: [{
+          id: "layout-imported",
+          name: "布局 1",
+          kind: "normal",
+          rootPane: shellChain,
+          activePaneId: panel.id,
+        }],
+        currentLayoutId: "layout-imported",
+      });
+
+      expect(applied).toBe(true);
+      const state = usePanesStore.getState();
+      expect(state.rootPane.type).toBe("panel");
+      expect(state.rootPane.id).toBe(panel.id);
     });
   });
 

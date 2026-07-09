@@ -131,7 +131,15 @@ pub struct TerminalSettings {
     /// 环境变量 CCPANES_TERMINAL_DAEMON 仍可覆盖强制开启（排障用）。
     #[serde(default = "default_daemon_enabled")]
     pub daemon_enabled: bool,
+    /// daemon 孤儿会话过期时间（分钟）：会话无人查看（无 WS 订阅且无 HTTP 访问）
+    /// 超过该时长后由 daemon 按先进先出回收。0 = 永不过期。改动无需重启 daemon，
+    /// 下一轮 sweep（约 60s）生效。
+    #[serde(default = "default_daemon_orphan_ttl_minutes")]
+    pub daemon_orphan_ttl_minutes: u32,
 }
+
+/// 孤儿会话 TTL 上限：7 天
+pub const MAX_DAEMON_ORPHAN_TTL_MINUTES: u32 = 7 * 24 * 60;
 
 impl TerminalSettings {
     pub fn merge_missing_defaults(&mut self) {
@@ -147,6 +155,9 @@ impl TerminalSettings {
         if !matches!(self.renderer_mode.as_str(), "auto" | "webgl" | "dom") {
             self.renderer_mode = default_terminal_renderer_mode();
         }
+        if self.daemon_orphan_ttl_minutes > MAX_DAEMON_ORPHAN_TTL_MINUTES {
+            self.daemon_orphan_ttl_minutes = MAX_DAEMON_ORPHAN_TTL_MINUTES;
+        }
     }
 }
 
@@ -160,6 +171,10 @@ fn default_terminal_renderer_mode() -> String {
 
 fn default_daemon_enabled() -> bool {
     true
+}
+
+fn default_daemon_orphan_ttl_minutes() -> u32 {
+    0
 }
 
 /// 快捷键设置
@@ -685,6 +700,7 @@ impl Default for TerminalSettings {
             disable_conpty_sanitize: None,
             resume_id_backfill_enabled: None,
             daemon_enabled: true,
+            daemon_orphan_ttl_minutes: default_daemon_orphan_ttl_minutes(),
         }
     }
 }
@@ -856,6 +872,41 @@ impl ProxySettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn terminal_settings_without_orphan_ttl_defaults_to_disabled() {
+        // 老 config.toml 无该键时不报错，回落到保守默认：禁用自动回收。
+        let toml_str = r#"
+            fontSize = 15
+            fontFamily = "monospace"
+            cursorStyle = "block"
+            cursorBlink = false
+            scrollback = 20000
+        "#;
+        let settings: TerminalSettings = toml::from_str(toml_str).expect("parse legacy config");
+        assert_eq!(settings.daemon_orphan_ttl_minutes, 0);
+    }
+
+    #[test]
+    fn merge_missing_defaults_clamps_orphan_ttl_to_seven_days() {
+        let mut settings = TerminalSettings {
+            daemon_orphan_ttl_minutes: MAX_DAEMON_ORPHAN_TTL_MINUTES + 1,
+            ..TerminalSettings::default()
+        };
+        settings.merge_missing_defaults();
+        assert_eq!(
+            settings.daemon_orphan_ttl_minutes,
+            MAX_DAEMON_ORPHAN_TTL_MINUTES
+        );
+
+        // 0（永不过期）是合法值，不被 clamp
+        let mut zero = TerminalSettings {
+            daemon_orphan_ttl_minutes: 0,
+            ..TerminalSettings::default()
+        };
+        zero.merge_missing_defaults();
+        assert_eq!(zero.daemon_orphan_ttl_minutes, 0);
+    }
 
     #[test]
     fn shortcut_defaults_include_pane_focus_bindings() {

@@ -23,8 +23,8 @@ use crate::models::{
 use crate::services::{
     ExternalSkillRegistry, LaunchHistoryService, LaunchProfileService, MemoryService,
     NotificationRequest, NotificationService, ProjectService, ProviderService, SettingsService,
-    SharedMcpService, SkillService, SpecService, SshMachineService, TerminalService, TodoService,
-    WorkspaceService,
+    SharedMcpService, SkillService, SpecService, SshMachineService, TerminalBackendState,
+    TerminalService, TodoService, WorkspaceService,
 };
 use crate::utils::{validate_command, validate_mcp_name, validate_path, AppPaths};
 use anyhow::Result;
@@ -45,11 +45,13 @@ use cc_panes_core::models::shared_mcp::{
     BridgeMode, SharedMcpConfig, SharedMcpServerConfig, SharedMcpServerStatus,
 };
 use cc_panes_core::models::{
-    PortReservation, RunnerInstance, RunnerInstanceStatus, RunnerProfile, RunnerStartResult,
-    RunnerStartStatus,
+    CreateSessionRequest as CoreCreateSessionRequest, PortReservation, RunnerInstance,
+    RunnerInstanceStatus, RunnerProfile, RunnerStartResult, RunnerStartStatus,
 };
 use cc_panes_core::services::mcp_config_service::McpServerConfig;
 use cc_panes_core::services::terminal_service::{SessionStatus, SessionStatusInfo};
+use cc_panes_core::services::TerminalBackend;
+use cc_panes_core::utils::orchestrator_manifest;
 use rmcp::{
     handler::server::router::tool::ToolRouter,
     handler::server::wrapper::Parameters,
@@ -93,6 +95,8 @@ pub struct LaunchTaskRequest {
     /// CLI 工具类型：`"claude"` | `"codex"` | `"opencode"`，默认 `"claude"`。
     /// 其余已注册工具（gemini/kimi/glm/cursor）请通过直接终端启动。
     pub cli_tool: Option<String>,
+    /// 新会话落位方式：`"beside"`（默认，调用者 pane 旁边分屏）| `"tab"`（调用者 pane 标签页）。
+    pub placement: Option<String>,
 }
 
 /// 启动任务响应
@@ -161,6 +165,9 @@ pub struct OrchestratorLaunchEvent {
     pub notice: Option<String>,
     pub wsl: Option<WslLaunchInfo>,
     pub ssh: Option<SshConnectionInfo>,
+    /// 新会话落位方式：`"beside"`（默认，调用者 pane 旁边分屏）| `"tab"`（调用者 pane 标签页）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<String>,
     /// 调用方（caller）所在 PTY 会话 id。
     /// 仅当本次 launch_task 由某个已知 Claude 实例发起、且能解析出其 launchId
     /// 时才会被设置；前端据此在已有 tab 中找到父 tab，给新建 tab 设置
@@ -360,7 +367,8 @@ impl StartLocks {
 #[derive(Clone)]
 pub struct AppState {
     pub token: String,
-    pub terminal_service: Arc<TerminalService>,
+    pub local_terminal_service: Arc<TerminalService>,
+    pub terminal_backend: Arc<TerminalBackendState>,
     pub provider_service: Arc<ProviderService>,
     pub launch_profile_service: Arc<LaunchProfileService>,
     pub shared_mcp_service: Arc<SharedMcpService>,
@@ -394,6 +402,29 @@ pub struct AppState {
     /// leader busy 时排队的 worker report（key = leader 的 PTY session_id），
     /// leader 状态跃迁回 Idle/WaitingInput 时由状态机 listener 补投
     pub pending_worker_reports: Arc<Mutex<PendingReportMap>>,
+}
+
+async fn backend_call_for_state<T, F>(
+    terminal_backend: Arc<TerminalBackendState>,
+    operation: F,
+) -> std::result::Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(Arc<dyn TerminalBackend>) -> cc_panes_core::utils::AppResult<T> + Send + 'static,
+{
+    let backend = terminal_backend.backend();
+    tokio::task::spawn_blocking(move || operation(backend))
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())
+}
+
+async fn backend_call<T, F>(state: &AppState, operation: F) -> std::result::Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce(Arc<dyn TerminalBackend>) -> cc_panes_core::utils::AppResult<T> + Send + 'static,
+{
+    backend_call_for_state(state.terminal_backend.clone(), operation).await
 }
 
 // ============ OrchestratorService ============
@@ -548,33 +579,6 @@ fn wsl_usage_detected(
     Ok(None)
 }
 
-/// 从上一轮写入的 `mcp-orchestrator.json` 读回 `(port, token)`，用于跨重启复用。
-/// 文件格式固定：`mcpServers.ccpanes.url = "http://127.0.0.1:{port}/mcp?token={token}"`
-/// + `headers.Authorization = "Bearer {token}"`（见 start() 的写入处）。
-fn read_persisted_endpoint(data_dir: &std::path::Path) -> Option<(u16, String)> {
-    let content = std::fs::read_to_string(data_dir.join("mcp-orchestrator.json")).ok()?;
-    parse_persisted_endpoint(&content)
-}
-
-/// 解析 mcp-orchestrator.json 内容为 `(port, token)`（与文件 IO 分离，便于单测）。
-fn parse_persisted_endpoint(content: &str) -> Option<(u16, String)> {
-    let json: serde_json::Value = serde_json::from_str(content).ok()?;
-    let url = json.pointer("/mcpServers/ccpanes/url")?.as_str()?;
-    let port = parse_orchestrator_port_from_url(url)?;
-    let token = json
-        .pointer("/mcpServers/ccpanes/headers/Authorization")
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(str::to_string)?;
-    (!token.is_empty()).then_some((port, token))
-}
-
-/// 从 `http://<host>:<port>/mcp?...` 提取端口。host 恒为 127.0.0.1（start() 写死）。
-fn parse_orchestrator_port_from_url(url: &str) -> Option<u16> {
-    let authority = url.split("://").nth(1)?.split('/').next()?; // 127.0.0.1:{port}
-    authority.rsplit(':').next()?.parse::<u16>().ok()
-}
-
 /// 优先绑定上一轮端口（跨重启稳定），被占用则回退 `{bind_host}:0` 自动分配。
 async fn bind_reusing_port(
     bind_host: &str,
@@ -613,7 +617,9 @@ impl OrchestratorService {
     /// 复用上一轮 mcp-orchestrator.json 的 token+端口（跨重启稳定），
     /// 让重启/更新后仍在跑的 CLI 会话注入的 `CC_PANES_API_*` 不失效。
     pub fn new(app_paths: &AppPaths) -> Self {
-        let (preferred_port, token) = match read_persisted_endpoint(app_paths.data_dir()) {
+        let (preferred_port, token) = match orchestrator_manifest::read_endpoint(
+            app_paths.data_dir(),
+        ) {
             Some((port, token)) => {
                 info!(
                     "[orchestrator] reusing persisted endpoint (port {}) from mcp-orchestrator.json",
@@ -668,7 +674,8 @@ impl OrchestratorService {
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         &self,
-        terminal_service: Arc<TerminalService>,
+        local_terminal_service: Arc<TerminalService>,
+        terminal_backend: Arc<TerminalBackendState>,
         provider_service: Arc<ProviderService>,
         launch_profile_service: Arc<LaunchProfileService>,
         shared_mcp_service: Arc<SharedMcpService>,
@@ -706,7 +713,8 @@ impl OrchestratorService {
         let bind_host = bind.host;
         let state = AppState {
             token: self.token.clone(),
-            terminal_service,
+            local_terminal_service,
+            terminal_backend,
             provider_service,
             launch_profile_service,
             shared_mcp_service,
@@ -748,7 +756,9 @@ impl OrchestratorService {
             let app_handle_for_listener = state.app_handle.clone();
             let notif_svc = state.notification_service.clone();
             let settings_svc = state.settings_service.clone();
-            let term_svc = state.terminal_service.clone();
+            // 走 backend：daemon 模式下会话在 daemon 进程，状态回写必须打到 daemon，
+            // 否则前端桥接轮询 get_session_status 看不到 hook 细分状态（Thinking/ToolRunning…）。
+            let backend_for_status = state.terminal_backend.backend();
             let runner_svc_listener = state.runner_service.clone();
             let state_machine_for_timer = state.session_state_machine.clone();
             state.session_state_machine.subscribe(Arc::new(
@@ -756,7 +766,8 @@ impl OrchestratorService {
                     use cc_panes_core::services::terminal_service::SessionStatus;
 
                     // 第一步：写回 TerminalSession.status + emit TERMINAL_STATUS
-                    term_svc.apply_hook_status(&transition.pty_session_id, transition.to);
+                    let _ = backend_for_status
+                        .apply_hook_status(&transition.pty_session_id, transition.to);
 
                     // 第二步：按状态决定通知 / 启动 timer
                     match &transition.to {
@@ -1213,6 +1224,13 @@ struct McpLaunchTaskParams {
     /// 其余已注册工具（gemini/kimi/glm/cursor）请通过直接终端启动。
     #[serde(rename = "cliTool")]
     cli_tool: Option<String>,
+    /// 新会话落位方式（可选，默认 `"beside"`）：
+    /// - `"beside"`：在**调用者**（发起本次 launch_task 的会话）所在 pane **旁边分屏**打开并聚焦（默认，推荐——用户能立刻看到新会话）。
+    /// - `"tab"`：作为**标签页**加入调用者所在 pane，不额外分屏。仅当用户**明确要求**“在后台/同一窗格里以标签打开”时才用。
+    ///
+    /// 仅在未显式指定 `paneId` 时生效；指定了 `paneId` 则按 `paneId` 落位。
+    #[serde(rename = "placement")]
+    placement: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -2912,7 +2930,7 @@ impl McpToolHandler {
 
     fn supported_cli_launcher_ids(&self) -> Vec<String> {
         self.state
-            .terminal_service
+            .local_terminal_service
             .cli_registry()
             .list_tools()
             .into_iter()
@@ -2923,7 +2941,7 @@ impl McpToolHandler {
     fn list_cli_launcher_overrides_impl(&self) -> serde_json::Value {
         let supported_tools = self
             .state
-            .terminal_service
+            .local_terminal_service
             .cli_registry()
             .list_tools()
             .into_iter()
@@ -3108,26 +3126,32 @@ impl McpToolHandler {
         // 把 child_launch_id 传进去，TerminalService 会写入 CC_PANES_LAUNCH_ID
         // 环境变量并把它附在 ccpanes MCP URL 的 `?launchId=` 上，让子 Claude
         // 之后再调 launch_task 时能被识别为本会话的 caller。
-        let session_id = match self.state.terminal_service.create_session(
-            Some(&child_launch_id),
-            &params.project_path,
-            120,
-            30,
-            ws_name.as_deref(),
-            params.provider_id.as_deref(),
+        let create_request = CoreCreateSessionRequest {
+            launch_id: Some(child_launch_id.clone()),
+            project_path: params.project_path.clone(),
+            cols: 120,
+            rows: 30,
+            workspace_name: ws_name.clone(),
+            provider_id: params.provider_id.clone(),
             provider_selection,
-            None,
-            ws_path.as_deref(),
-            None,
+            launch_profile_id: None,
+            workspace_path: ws_path.clone(),
+            workspace_snapshot_id: None,
+            launch_claude: cli_tool != CliTool::None,
             cli_tool,
-            params.resume_id.as_deref(),
-            false,
-            None,
-            initial_prompt,
-            None,
-            runtime.ssh.as_ref(),
-            runtime.wsl.as_ref(),
-        ) {
+            resume_id: params.resume_id.clone(),
+            skip_mcp: false,
+            append_system_prompt: None,
+            initial_prompt: initial_prompt.map(str::to_string),
+            extra_env: None,
+            ssh: runtime.ssh.clone(),
+            wsl: runtime.wsl.clone(),
+        };
+        let session_id = match backend_call(&self.state, move |backend| {
+            backend.create_session(create_request)
+        })
+        .await
+        {
             Ok(sid) => sid,
             Err(e) => {
                 error!(err = %e, "mcp::launch_task failed to create session");
@@ -3232,10 +3256,15 @@ impl McpToolHandler {
         // caller_launch_id 由 URL query 注入；外部 Claude Code 或 REST 直连时为
         // None，结果落到顶层。
         let parent_session_id = caller_launch_id.and_then(|caller_launch_id| {
+            // daemon 模式下会话建在 daemon 进程，必须走 backend 反查；失败再退回
+            // launch_history DB（跨进程持久，但异步 backfill 可能尚未落库）。
             if let Some(session_id) = self
                 .state
-                .terminal_service
+                .terminal_backend
+                .backend()
                 .find_session_id_by_launch_id(&caller_launch_id)
+                .ok()
+                .flatten()
             {
                 return Some(session_id);
             }
@@ -3280,6 +3309,7 @@ impl McpToolHandler {
             notice: runtime.notice.clone(),
             wsl: runtime.wsl.clone(),
             ssh: runtime.ssh.clone(),
+            placement: params.placement.clone(),
             parent_session_id,
         };
         let _ = self
@@ -3755,10 +3785,15 @@ impl McpToolHandler {
         Parameters(params): Parameters<McpGetTaskStatusParams>,
     ) -> String {
         debug!(task_id = %params.task_id, "mcp::get_task_status");
+        let statuses = backend_call(&self.state, |backend| backend.get_all_status())
+            .await
+            .ok();
         let mut tasks = self.state.tasks.lock().unwrap_or_else(|e| e.into_inner());
         match tasks.get_mut(&params.task_id) {
             Some(status) => {
-                refresh_task_status(status, &self.state.terminal_service);
+                if let Some(statuses) = statuses.as_deref() {
+                    refresh_task_status(status, statuses);
+                }
                 serde_json::json!({
                     "taskId": status.task_id,
                     "sessionId": status.session_id,
@@ -4214,22 +4249,17 @@ impl McpToolHandler {
         Parameters(params): Parameters<McpWriteToSessionParams>,
     ) -> String {
         info!(session_id = %params.session_id, text_len = params.text.len(), "mcp::write_to_session");
-        let svc = self.state.terminal_service.clone();
         let sid = params.session_id.clone();
         let txt = params.text;
-        match tokio::task::spawn_blocking(move || svc.write(&sid, &txt)).await {
-            Ok(Ok(())) => serde_json::json!({
+        match backend_call(&self.state, move |backend| backend.write(&sid, &txt)).await {
+            Ok(()) => serde_json::json!({
                 "success": true,
                 "sessionId": params.session_id,
             })
             .to_string(),
-            Ok(Err(e)) => {
+            Err(e) => {
                 error!(session_id = %params.session_id, err = %e, "mcp::write_to_session failed");
                 format!("错误: 写入会话 '{}' 失败: {}", params.session_id, e)
-            }
-            Err(e) => {
-                error!(session_id = %params.session_id, err = %e, "mcp::write_to_session spawn_blocking failed");
-                format!("错误: 写入任务失败: {}", e)
             }
         }
     }
@@ -4253,7 +4283,7 @@ impl McpToolHandler {
         let effective_text =
             externalize_long_prompt(&fallback_dir, &uuid::Uuid::new_v4().to_string(), clean_text);
         match submit_text_to_session(
-            &self.state.terminal_service,
+            self.state.terminal_backend.backend(),
             &params.session_id,
             &effective_text,
         )
@@ -4278,16 +4308,15 @@ impl McpToolHandler {
         Parameters(params): Parameters<McpGetSessionStatusParams>,
     ) -> String {
         debug!(session_id = %params.session_id, "mcp::get_session_status");
-        match self.state.terminal_service.get_all_status() {
-            Ok(statuses) => match statuses.iter().find(|s| s.session_id == params.session_id) {
-                Some(status) => serde_json::json!({
-                    "sessionId": status.session_id,
-                    "status": status.status,
-                    "lastOutputAt": status.last_output_at,
-                })
-                .to_string(),
-                None => format!("错误: 会话 '{}' 不存在", params.session_id),
-            },
+        let sid = params.session_id.clone();
+        match backend_call(&self.state, move |backend| backend.get_session_status(&sid)).await {
+            Ok(Some(status)) => serde_json::json!({
+                "sessionId": status.session_id,
+                "status": status.status,
+                "lastOutputAt": status.last_output_at,
+            })
+            .to_string(),
+            Ok(None) => format!("错误: 会话 '{}' 不存在", params.session_id),
             Err(e) => format!("错误: 获取会话状态失败: {}", e),
         }
     }
@@ -4296,7 +4325,7 @@ impl McpToolHandler {
     #[tool]
     async fn list_sessions(&self) -> String {
         debug!("mcp::list_sessions");
-        match self.state.terminal_service.get_all_status() {
+        match backend_call(&self.state, |backend| backend.get_all_status()).await {
             Ok(statuses) => {
                 let sessions: Vec<serde_json::Value> = statuses
                     .iter()
@@ -4318,7 +4347,8 @@ impl McpToolHandler {
     #[tool]
     async fn kill_session(&self, Parameters(params): Parameters<McpKillSessionParams>) -> String {
         info!(session_id = %params.session_id, "mcp::kill_session");
-        match self.state.terminal_service.kill(&params.session_id) {
+        let sid = params.session_id.clone();
+        match backend_call(&self.state, move |backend| backend.kill(&sid)).await {
             Ok(()) => serde_json::json!({
                 "success": true,
                 "sessionId": params.session_id,
@@ -4372,10 +4402,11 @@ impl McpToolHandler {
     ) -> String {
         let lines_param = params.lines.unwrap_or(0);
         debug!(session_id = %params.session_id, lines = lines_param, "mcp::get_session_output");
-        match self
-            .state
-            .terminal_service
-            .get_session_output(&params.session_id, lines_param)
+        let sid = params.session_id.clone();
+        match backend_call(&self.state, move |backend| {
+            backend.get_session_output(&sid, lines_param)
+        })
+        .await
         {
             Ok(output) => {
                 let content = output.lines.join("\n");
@@ -5140,33 +5171,35 @@ trait RunnerTerminal {
     fn kill_session(&self, session_id: &str) -> std::result::Result<(), String>;
 }
 
-impl RunnerTerminal for Arc<TerminalService> {
+impl RunnerTerminal for TerminalBackendState {
     fn create_shell_session(
         &self,
         profile: &RunnerProfile,
         runtime: &ResolvedLaunchRuntime,
     ) -> std::result::Result<String, String> {
-        self.create_session(
-            None,
-            &profile.cwd,
-            120,
-            30,
-            profile.workspace_name.as_deref(),
-            None,
-            LaunchProviderSelection::None,
-            None,
-            None,
-            None,
-            CliTool::None,
-            None,
-            true,
-            None,
-            None,
-            Some(&profile.env),
-            runtime.ssh.as_ref(),
-            runtime.wsl.as_ref(),
-        )
-        .map_err(|e| e.to_string())
+        self.backend()
+            .create_session(CoreCreateSessionRequest {
+                launch_id: None,
+                project_path: profile.cwd.clone(),
+                cols: 120,
+                rows: 30,
+                workspace_name: profile.workspace_name.clone(),
+                provider_id: None,
+                provider_selection: LaunchProviderSelection::None,
+                launch_profile_id: None,
+                workspace_path: None,
+                workspace_snapshot_id: None,
+                launch_claude: false,
+                cli_tool: CliTool::None,
+                resume_id: None,
+                skip_mcp: true,
+                append_system_prompt: None,
+                initial_prompt: None,
+                extra_env: Some(profile.env.clone()),
+                ssh: runtime.ssh.clone(),
+                wsl: runtime.wsl.clone(),
+            })
+            .map_err(|e| e.to_string())
     }
 
     fn submit_text_to_session<'a>(
@@ -5175,18 +5208,18 @@ impl RunnerTerminal for Arc<TerminalService> {
         text: &'a str,
     ) -> Pin<Box<dyn Future<Output = std::result::Result<(), String>> + Send + 'a>> {
         Box::pin(async move {
-            submit_text_to_session(self, session_id, text)
+            submit_text_to_session(self.backend(), session_id, text)
                 .await
                 .map_err(|e| e.to_string())
         })
     }
 
     fn get_all_status(&self) -> std::result::Result<Vec<SessionStatusInfo>, String> {
-        TerminalService::get_all_status(self).map_err(|e| e.to_string())
+        self.backend().get_all_status().map_err(|e| e.to_string())
     }
 
     fn kill_session(&self, session_id: &str) -> std::result::Result<(), String> {
-        self.kill(session_id).map_err(|e| e.to_string())
+        self.backend().kill(session_id).map_err(|e| e.to_string())
     }
 }
 
@@ -5211,7 +5244,7 @@ async fn start_runner_coordinator(
     start_runner_coordinator_with_terminal(
         profile,
         app_state.runner_service.as_ref(),
-        &app_state.terminal_service,
+        app_state.terminal_backend.as_ref(),
         &runtime,
         start_locks,
     )
@@ -5328,7 +5361,7 @@ async fn wait_for_session_root_pid<T: RunnerTerminal + ?Sized>(
 async fn collect_plan_live_sessions(
     state: &AppState,
 ) -> Vec<crate::models::task_binding::PlanLiveSession> {
-    let mut live_sessions = match state.terminal_service.get_all_status() {
+    let mut live_sessions = match backend_call(state, |backend| backend.get_all_status()).await {
         Ok(statuses) => statuses
             .into_iter()
             .map(|status| {
@@ -6027,26 +6060,32 @@ async fn handle_launch_task(
         }
     };
 
-    let session_id = match state.terminal_service.create_session(
-        None,
-        &req.project_path,
-        120,
-        30,
-        workspace_name.as_deref(),
-        req.provider_id.as_deref(),
+    let create_request = CoreCreateSessionRequest {
+        launch_id: None,
+        project_path: req.project_path.clone(),
+        cols: 120,
+        rows: 30,
+        workspace_name: workspace_name.clone(),
+        provider_id: req.provider_id.clone(),
         provider_selection,
-        None,
-        workspace_path.as_deref(),
-        None,
+        launch_profile_id: None,
+        workspace_path: workspace_path.clone(),
+        workspace_snapshot_id: None,
+        launch_claude: cli_tool != CliTool::None,
         cli_tool,
-        req.resume_id.as_deref(),
-        false,
-        None,
-        initial_prompt,
-        None,
-        runtime.ssh.as_ref(),
-        runtime.wsl.as_ref(),
-    ) {
+        resume_id: req.resume_id.clone(),
+        skip_mcp: false,
+        append_system_prompt: None,
+        initial_prompt: initial_prompt.map(str::to_string),
+        extra_env: None,
+        ssh: runtime.ssh.clone(),
+        wsl: runtime.wsl.clone(),
+    };
+    let session_id = match backend_call(&state, move |backend| {
+        backend.create_session(create_request)
+    })
+    .await
+    {
         Ok(sid) => {
             info!(session_id = %sid, "REST::launch_task session created");
             sid
@@ -6102,6 +6141,7 @@ async fn handle_launch_task(
         notice: runtime.notice.clone(),
         wsl: runtime.wsl.clone(),
         ssh: runtime.ssh.clone(),
+        placement: req.placement.clone(),
         // REST `/api/launch-task` 没有 caller launchId 上下文（直接由 GUI/外部
         // 客户端发起），父信息留空 → 顶层编号。
         parent_session_id: None,
@@ -6198,10 +6238,15 @@ async fn handle_task_status(
         );
     }
 
+    let statuses = backend_call(&state, |backend| backend.get_all_status())
+        .await
+        .ok();
     let mut tasks = state.tasks.lock().unwrap_or_else(|e| e.into_inner());
     match tasks.get_mut(&task_id) {
         Some(status) => {
-            refresh_task_status(status, &state.terminal_service);
+            if let Some(statuses) = statuses.as_deref() {
+                refresh_task_status(status, statuses);
+            }
             (StatusCode::OK, Json(serde_json::json!(status)))
         }
         None => (
@@ -6424,7 +6469,7 @@ async fn handle_list_sessions(
         );
     }
 
-    match state.terminal_service.get_all_status() {
+    match backend_call(&state, |backend| backend.get_all_status()).await {
         Ok(statuses) => {
             let sessions: Vec<serde_json::Value> = statuses
                 .iter()
@@ -6468,23 +6513,22 @@ async fn handle_session_status(
         );
     }
 
-    match state.terminal_service.get_all_status() {
-        Ok(statuses) => match statuses.iter().find(|s| s.session_id == session_id) {
-            Some(status) => (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "sessionId": status.session_id,
-                    "status": status.status,
-                    "lastOutputAt": status.last_output_at,
-                })),
-            ),
-            None => (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!(ApiError {
-                    error: format!("Session '{}' not found", session_id)
-                })),
-            ),
-        },
+    let sid = session_id.clone();
+    match backend_call(&state, move |backend| backend.get_session_status(&sid)).await {
+        Ok(Some(status)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "sessionId": status.session_id,
+                "status": status.status,
+                "lastOutputAt": status.last_output_at,
+            })),
+        ),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!(ApiError {
+                error: format!("Session '{}' not found", session_id)
+            })),
+        ),
         Err(e) => {
             error!(session_id = %session_id, err = %e, "REST::session_status failed");
             (
@@ -6522,25 +6566,15 @@ async fn handle_write_to_session(
         );
     }
 
-    let svc = state.terminal_service.clone();
     let sid = req.session_id.clone();
     let txt = req.text;
-    match tokio::task::spawn_blocking(move || svc.write(&sid, &txt)).await {
-        Ok(Ok(())) => (
+    match backend_call(&state, move |backend| backend.write(&sid, &txt)).await {
+        Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({ "success": true, "sessionId": req.session_id })),
         ),
-        Ok(Err(e)) => {
-            error!(session_id = %req.session_id, err = %e, "REST::write_to_session failed");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!(ApiError {
-                    error: format!("Failed to write to session: {}", e)
-                })),
-            )
-        }
         Err(e) => {
-            error!(session_id = %req.session_id, err = %e, "REST::write_to_session spawn_blocking failed");
+            error!(session_id = %req.session_id, err = %e, "REST::write_to_session failed");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!(ApiError {
@@ -6583,7 +6617,13 @@ async fn handle_submit_to_session(
     let effective_text =
         externalize_long_prompt(&fallback_dir, &uuid::Uuid::new_v4().to_string(), clean_text);
 
-    match submit_text_to_session(&state.terminal_service, &req.session_id, &effective_text).await {
+    match submit_text_to_session(
+        state.terminal_backend.backend(),
+        &req.session_id,
+        &effective_text,
+    )
+    .await
+    {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({ "success": true, "sessionId": req.session_id })),
@@ -6625,7 +6665,8 @@ async fn handle_kill_session(
         );
     }
 
-    match state.terminal_service.kill(&req.session_id) {
+    let sid = req.session_id.clone();
+    match backend_call(&state, move |backend| backend.kill(&sid)).await {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({ "success": true, "sessionId": req.session_id })),
@@ -7335,11 +7376,7 @@ fn task_status_from_session_status(
     }
 }
 
-fn refresh_task_status(task: &mut TaskStatus, terminal_service: &TerminalService) {
-    let Ok(statuses) = terminal_service.get_all_status() else {
-        return;
-    };
-
+fn refresh_task_status(task: &mut TaskStatus, statuses: &[SessionStatusInfo]) {
     match statuses
         .iter()
         .find(|status| status.session_id == task.session_id)
@@ -7411,20 +7448,15 @@ fn externalize_long_prompt(project_path: &str, id: &str, prompt: String) -> Stri
 /// 提交给 leader PTY 的是拼接乱码。整段放进 spawn_blocking（含内部 sleep）避免
 /// 阻塞 tokio worker。
 async fn submit_text_to_session(
-    terminal_svc: &Arc<TerminalService>,
+    backend: Arc<dyn TerminalBackend>,
     session_id: &str,
     text: &str,
 ) -> std::result::Result<(), anyhow::Error> {
-    let svc = terminal_svc.clone();
     let sid = session_id.to_string();
     let txt = text.to_string();
-    // 完全限定：`impl RunnerTerminal for Arc<TerminalService>` 也有个同名 async
-    // 方法会遮蔽 deref 到 TerminalService 的 inherent 同步版（且互相递归）。
-    tokio::task::spawn_blocking(move || {
-        TerminalService::submit_text_to_session(svc.as_ref(), &sid, &txt)
-    })
-    .await?
-    .map_err(|e| anyhow::anyhow!(e.to_string()))
+    tokio::task::spawn_blocking(move || backend.submit_text_to_session(&sid, &txt))
+        .await?
+        .map_err(|e| anyhow::anyhow!(e.to_string()))
 }
 
 #[derive(Debug, Serialize)]
@@ -7583,11 +7615,27 @@ async fn flush_pending_reports(state: AppState, leader_session_id: String) {
 
 /// busy/initializing 入队 + 竞态双重检查：入队后 leader 可能已恰好跃迁回空闲
 /// （边沿已过、无人再触发 flush），重读一次状态，空闲则立即补投。
+fn read_session_status_from_truth_then_backend(
+    state: &AppState,
+    session_id: &str,
+) -> std::result::Result<Option<SessionStatus>, String> {
+    if let Some(snapshot) = state.session_state_machine.snapshot(session_id) {
+        return Ok(Some(snapshot.status));
+    }
+
+    state
+        .terminal_backend
+        .backend()
+        .get_session_status(session_id)
+        .map(|status| status.map(|status| status.status))
+        .map_err(|error| error.to_string())
+}
+
 fn enqueue_and_recheck(
     state: &AppState,
     leader_session_id: &str,
     worker: &TaskBinding,
-    reason: &str,
+    reason: &'static str,
 ) -> LeaderReportResult {
     let queue_len = {
         let mut map = state
@@ -7609,16 +7657,9 @@ fn enqueue_and_recheck(
         "worker report queued for redelivery"
     );
 
-    let now_idle = state
-        .terminal_service
-        .get_all_status()
+    let now_idle = read_session_status_from_truth_then_backend(state, leader_session_id)
         .ok()
-        .and_then(|statuses| {
-            statuses
-                .into_iter()
-                .find(|status| status.session_id == leader_session_id)
-                .map(|status| status.status)
-        })
+        .flatten()
         .is_some_and(|status| matches!(status, SessionStatus::Idle | SessionStatus::WaitingInput));
     if now_idle {
         let flush_state = state.clone();
@@ -7711,22 +7752,20 @@ async fn send_worker_report_to_leader(state: AppState, worker: TaskBinding) -> L
         return LeaderReportResult::skipped("leader session missing");
     };
 
-    let leader_status = match state.terminal_service.get_all_status() {
-        Ok(statuses) => statuses
-            .into_iter()
-            .find(|status| status.session_id == leader_session_id)
-            .map(|status| status.status),
-        Err(e) => {
-            warn!(
-                worker_id = %worker.id,
-                leader_id = %leader.id,
-                session_id = %leader_session_id,
-                err = %e,
-                "worker report skipped: failed to read leader session status"
-            );
-            return LeaderReportResult::skipped(format!("failed to read leader status: {}", e));
-        }
-    };
+    let leader_status =
+        match read_session_status_from_truth_then_backend(&state, &leader_session_id) {
+            Ok(status) => status,
+            Err(e) => {
+                warn!(
+                    worker_id = %worker.id,
+                    leader_id = %leader.id,
+                    session_id = %leader_session_id,
+                    err = %e,
+                    "worker report skipped: failed to read leader session status"
+                );
+                return LeaderReportResult::skipped(format!("failed to read leader status: {}", e));
+            }
+        };
 
     let Some(leader_status) = leader_status else {
         warn!(
@@ -7815,7 +7854,8 @@ async fn send_worker_report_to_leader(state: AppState, worker: TaskBinding) -> L
         worker.id, worker.status, summary
     );
 
-    match submit_text_to_session(&state.terminal_service, &leader_session_id, &line).await {
+    match submit_text_to_session(state.terminal_backend.backend(), &leader_session_id, &line).await
+    {
         Ok(()) => {
             info!(
                 worker_id = %worker.id,
@@ -7858,41 +7898,6 @@ fn local_orchestrator_endpoint_reachable(port: u16) -> bool {
 mod tests {
     use super::*;
     use crate::models::WorkspaceCliEnvironmentDefaults;
-
-    #[test]
-    fn parse_orchestrator_port_from_url_extracts_port() {
-        assert_eq!(
-            parse_orchestrator_port_from_url("http://127.0.0.1:61012/mcp?token=abc"),
-            Some(61012)
-        );
-        assert_eq!(
-            parse_orchestrator_port_from_url("http://127.0.0.1:8/mcp"),
-            Some(8)
-        );
-        assert_eq!(parse_orchestrator_port_from_url("http://127.0.0.1/mcp"), None);
-        assert_eq!(parse_orchestrator_port_from_url("not-a-url"), None);
-    }
-
-    #[test]
-    fn parse_persisted_endpoint_reuses_port_and_token() {
-        // 复用上一轮 manifest → 同端口 + 同 token（跨重启稳定）。
-        let content = r#"{"mcpServers":{"ccpanes":{"type":"http",
-            "url":"http://127.0.0.1:61012/mcp?token=deadbeef",
-            "headers":{"Authorization":"Bearer deadbeef"}}}}"#;
-        assert_eq!(
-            parse_persisted_endpoint(content),
-            Some((61012, "deadbeef".to_string()))
-        );
-    }
-
-    #[test]
-    fn parse_persisted_endpoint_rejects_malformed() {
-        assert_eq!(parse_persisted_endpoint("{}"), None);
-        assert_eq!(parse_persisted_endpoint("not json"), None);
-        // 缺 Authorization 头且 token 无法从 header 取 → None。
-        let no_auth = r#"{"mcpServers":{"ccpanes":{"url":"http://127.0.0.1:61012/mcp"}}}"#;
-        assert_eq!(parse_persisted_endpoint(no_auth), None);
-    }
 
     #[test]
     fn decide_bind_explicit_modes_ignore_wsl_signal() {

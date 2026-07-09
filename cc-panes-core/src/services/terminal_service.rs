@@ -11,7 +11,7 @@ use crate::services::{
     SshCredentialService, WorkspaceService,
 };
 use crate::utils::error::{AppError, AppResult};
-use crate::utils::AppPaths;
+use crate::utils::{orchestrator_manifest, AppPaths};
 use anyhow::{anyhow, Result};
 use cc_cli_adapters::{CliAdapterContext, CliProvider, CliToolRegistry};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -696,9 +696,51 @@ pub struct OrchestratorInfo {
     pub token: String,
 }
 
+/// 探测 loopback 端口上是否为**我们自己的** orchestrator。
+///
+/// 仅做裸 TCP connect 不够：orchestrator 端口是 OS 随机分配的，宿主退出后可能被
+/// 无关本地进程回收；裸 connect 会误判可达，进而把真实 token 注入陌生进程。
+/// 这里改为对 `/api/health` 发一个最小 HTTP 请求，校验返回体是本 orchestrator 独有的
+/// `{"status":"ok"}`——陌生监听者不会实现该路由与该载荷，从而杜绝 token 外泄。
 fn local_orchestrator_endpoint_reachable(port: u16) -> bool {
+    use std::io::{Read, Write};
+
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok()
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(250))
+    else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(400)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(400)));
+
+    let request =
+        "GET /api/health HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n".as_bytes();
+    if stream.write_all(request).is_err() {
+        return false;
+    }
+
+    let mut response = Vec::with_capacity(256);
+    let mut buf = [0_u8; 256];
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                response.extend_from_slice(&buf[..n]);
+                if response.len() > 4096 {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    let text = String::from_utf8_lossy(&response);
+    let status_ok = text
+        .lines()
+        .next()
+        .map(|line| line.contains("200"))
+        .unwrap_or(false);
+    status_ok && text.contains("\"status\"") && text.contains("\"ok\"")
 }
 
 struct DeadBufferEntry {
@@ -2954,23 +2996,45 @@ impl TerminalService {
     }
 
     fn healthy_orchestrator_info(&self) -> Option<OrchestratorInfo> {
-        let info = self.orchestrator_info.lock().ok().and_then(|g| g.clone())?;
-        if local_orchestrator_endpoint_reachable(info.port) {
-            return Some(info);
+        let manifest_info = orchestrator_manifest::read_endpoint(self.app_paths.data_dir())
+            .map(|(port, token)| OrchestratorInfo { port, token });
+        let cached_info = self.orchestrator_info.lock().ok().and_then(|g| g.clone());
+        let mut candidates = Vec::with_capacity(2);
+        if let Some(info) = manifest_info {
+            candidates.push(("manifest", info));
         }
-
-        warn!(
-            port = info.port,
-            "orchestrator endpoint is not reachable; skipping ccpanes MCP injection"
-        );
-        if let Ok(mut guard) = self.orchestrator_info.lock() {
-            if guard
-                .as_ref()
-                .is_some_and(|current| current.port == info.port)
-            {
-                *guard = None;
+        if let Some(info) = cached_info {
+            let duplicate = candidates
+                .iter()
+                .any(|(_, existing)| existing.port == info.port && existing.token == info.token);
+            if !duplicate {
+                candidates.push(("cache", info));
             }
         }
+
+        for (source, info) in candidates {
+            if local_orchestrator_endpoint_reachable(info.port) {
+                if let Ok(mut guard) = self.orchestrator_info.lock() {
+                    *guard = Some(info.clone());
+                }
+                info!(
+                    source,
+                    port = info.port,
+                    "orchestrator endpoint is reachable; using ccpanes MCP injection"
+                );
+                return Some(info);
+            }
+            warn!(
+                source,
+                port = info.port,
+                "orchestrator endpoint is not reachable; trying next ccpanes MCP candidate"
+            );
+        }
+
+        if let Ok(mut guard) = self.orchestrator_info.lock() {
+            *guard = None;
+        }
+        warn!("no reachable orchestrator endpoint; skipping ccpanes MCP injection");
         None
     }
 
@@ -3245,6 +3309,7 @@ mod tests {
     use super::*;
     use crate::models::shared_mcp::{BridgeMode, SharedMcpServerConfig};
     use crate::services::{ProjectCliHooksService, ProviderService, SettingsService};
+    use crate::utils::orchestrator_manifest::ORCHESTRATOR_MANIFEST_FILE;
     use crate::utils::AppPaths;
     use std::io;
 
@@ -3334,6 +3399,16 @@ mod tests {
         (service, temp_dir)
     }
 
+    fn write_orchestrator_manifest(data_dir: &std::path::Path, port: u16, token: &str) {
+        std::fs::write(
+            data_dir.join(ORCHESTRATOR_MANIFEST_FILE),
+            format!(
+                r#"{{"mcpServers":{{"ccpanes":{{"type":"http","url":"http://127.0.0.1:{port}/mcp?token={token}","headers":{{"Authorization":"Bearer {token}"}}}}}}}}"#
+            ),
+        )
+        .expect("write orchestrator manifest");
+    }
+
     #[test]
     fn healthy_orchestrator_info_drops_unreachable_port() {
         let (service, _temp_dir) = terminal_service_for_test();
@@ -3351,11 +3426,33 @@ mod tests {
             .is_none());
     }
 
+    /// 起一个只回 `/api/health` → `{"status":"ok"}` 的极简 HTTP 监听器，
+    /// 供 reachability 探针把它识别为「我们自己的 orchestrator」。线程随进程存活。
+    fn spawn_health_listener() -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind health port");
+        let port = listener.local_addr().expect("listener addr").port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                let mut buf = [0_u8; 512];
+                let _ = stream.read(&mut buf);
+                let body = "{\"status\":\"ok\"}";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+        port
+    }
+
     #[test]
     fn healthy_orchestrator_info_keeps_reachable_port() {
         let (service, _temp_dir) = terminal_service_for_test();
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test port");
-        let port = listener.local_addr().expect("listener addr").port();
+        let port = spawn_health_listener();
 
         service.set_orchestrator_info(port, "token".to_string());
 
@@ -3364,6 +3461,60 @@ mod tests {
             .expect("reachable orchestrator info");
         assert_eq!(info.port, port);
         assert_eq!(info.token, "token");
+    }
+
+    #[test]
+    fn healthy_orchestrator_info_falls_back_to_manifest() {
+        let (service, temp_dir) = terminal_service_for_test();
+        let port = spawn_health_listener();
+        write_orchestrator_manifest(temp_dir.path(), port, "manifest-token");
+
+        let info = service
+            .healthy_orchestrator_info()
+            .expect("manifest orchestrator info");
+        assert_eq!(info.port, port);
+        assert_eq!(info.token, "manifest-token");
+        assert_eq!(
+            service
+                .orchestrator_info
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .as_ref()
+                .map(|info| info.token.as_str()),
+            Some("manifest-token")
+        );
+    }
+
+    #[test]
+    fn healthy_orchestrator_info_prefers_fresh_manifest_over_stale_cache() {
+        let (service, temp_dir) = terminal_service_for_test();
+        let stale_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind stale port");
+        let stale_port = stale_listener.local_addr().expect("listener addr").port();
+        drop(stale_listener);
+        service.set_orchestrator_info(stale_port, "stale-token".to_string());
+
+        let port = spawn_health_listener();
+        write_orchestrator_manifest(temp_dir.path(), port, "manifest-token");
+
+        let info = service
+            .healthy_orchestrator_info()
+            .expect("manifest orchestrator info");
+        assert_eq!(info.port, port);
+        assert_eq!(info.token, "manifest-token");
+    }
+
+    #[test]
+    fn healthy_orchestrator_info_manifest_wins_same_port_token_rotation() {
+        let (service, temp_dir) = terminal_service_for_test();
+        let port = spawn_health_listener();
+        service.set_orchestrator_info(port, "old-token".to_string());
+        write_orchestrator_manifest(temp_dir.path(), port, "new-token");
+
+        let info = service
+            .healthy_orchestrator_info()
+            .expect("manifest orchestrator info");
+        assert_eq!(info.port, port);
+        assert_eq!(info.token, "new-token");
     }
 
     fn install_recording_session(

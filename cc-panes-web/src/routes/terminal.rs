@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -78,6 +80,8 @@ pub struct PartialCreateSessionRequest {
     #[serde(default, alias = "prompt")]
     pub initial_prompt: Option<String>,
     #[serde(default)]
+    pub extra_env: Option<HashMap<String, String>>,
+    #[serde(default)]
     pub ssh: Option<SshConnectionInfo>,
     #[serde(default)]
     pub wsl: Option<cc_panes_core::models::WslLaunchInfo>,
@@ -148,6 +152,7 @@ pub async fn create_session(
         skip_mcp: req.core.skip_mcp,
         append_system_prompt: req.core.append_system_prompt,
         initial_prompt: req.core.initial_prompt,
+        extra_env: req.core.extra_env,
         ssh: req.core.ssh,
         wsl: req.core.wsl,
     });

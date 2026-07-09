@@ -17,7 +17,8 @@ function createValue(overrides: Partial<TerminalSettings> = {}): TerminalSetting
     shell: null,
     disableConptySanitize: null,
     resumeIdBackfillEnabled: null,
-      daemonEnabled: false,
+    daemonEnabled: false,
+    daemonOrphanTtlMinutes: 0,
     ...overrides,
   };
 }

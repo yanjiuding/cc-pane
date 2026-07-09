@@ -31,6 +31,18 @@ impl ApiEndpoint {
         })
     }
 
+    /// Resolve from env first, then fallback to the current orchestrator manifest.
+    pub fn resolve() -> Result<Self, String> {
+        crate::common::orchestrator::resolve_api_endpoint()
+            .map(|(base_url, token)| Self {
+                base_url: base_url.trim_end_matches('/').to_string(),
+                token,
+            })
+            .ok_or_else(|| {
+                "orchestrator endpoint unavailable: CC_PANES_API_* env and mcp-orchestrator.json both missing or unreachable".to_string()
+            })
+    }
+
     /// 拼出完整 URL。`path` 以 `/` 开头。
     pub fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)

@@ -5,7 +5,7 @@ use crate::{
     CliToolCapabilities, CliToolInfo, NativeHookBinding, ProjectHookDefinition, ProjectHookStatus,
     ToolKind, ToolMatcher,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -212,6 +212,7 @@ impl ClaudeAdapter {
         });
 
         let mut mcp_servers = serde_json::Map::new();
+        Self::cleanup_legacy_global_mcp_servers();
 
         // 合并用户全局 MCP 配置（低优先级）
         // 跳过已在 shared_mcp_urls 中的 server（它们将以 HTTP 模式注入）
@@ -221,7 +222,10 @@ impl ClaudeAdapter {
             let mut merged = 0;
             let mut skipped = 0;
             for (name, config) in user_servers {
-                if ctx.shared_mcp_urls.contains_key(&name) {
+                if Self::should_skip_user_global_mcp_server(&name, &config) {
+                    skipped += 1;
+                    info!("[claude] Skipping legacy or managed MCP '{}'", name);
+                } else if ctx.shared_mcp_urls.contains_key(&name) {
                     skipped += 1;
                     info!("[claude] Skipping stdio '{}' (shared HTTP available)", name);
                 } else {
@@ -276,10 +280,89 @@ impl ClaudeAdapter {
 
     /// 读取 ~/.claude.json 的 mcpServers
     fn read_user_global_mcp_servers() -> Option<serde_json::Value> {
-        let home = dirs::home_dir()?;
-        let content = std::fs::read_to_string(home.join(".claude.json")).ok()?;
+        let path = Self::global_claude_config_path()?;
+        Self::read_user_global_mcp_servers_at(&path)
+    }
+
+    fn global_claude_config_path() -> Option<PathBuf> {
+        dirs::home_dir().map(|home| home.join(".claude.json"))
+    }
+
+    fn read_user_global_mcp_servers_at(path: &Path) -> Option<serde_json::Value> {
+        let content = std::fs::read_to_string(path).ok()?;
         let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
         parsed.get("mcpServers").cloned()
+    }
+
+    fn cleanup_legacy_global_mcp_servers() {
+        let Some(path) = Self::global_claude_config_path() else {
+            return;
+        };
+        match Self::cleanup_legacy_global_mcp_servers_at(&path) {
+            Ok(true) => info!(
+                config = %path.display(),
+                "claude: removed legacy global ccpanes MCP entries"
+            ),
+            Ok(false) => {}
+            Err(error) => warn!(
+                config = %path.display(),
+                error = %error,
+                "claude: failed to clean legacy global ccpanes MCP entries"
+            ),
+        }
+    }
+
+    fn cleanup_legacy_global_mcp_servers_at(path: &Path) -> Result<bool> {
+        if !path.exists() {
+            return Ok(false);
+        }
+        let content = fs::read_to_string(path)?;
+        let mut parsed: serde_json::Value = serde_json::from_str(&content)?;
+        let Some(servers) = parsed
+            .get_mut("mcpServers")
+            .and_then(|value| value.as_object_mut())
+        else {
+            return Ok(false);
+        };
+        let original_len = servers.len();
+        servers.retain(|name, config| !Self::is_legacy_global_ccpanes_mcp_server(name, config));
+        if servers.len() == original_len {
+            return Ok(false);
+        }
+        // ~/.claude.json 存有 Claude Code 全部全局状态（项目列表 / oauth / 历史）。
+        // 改写前先备份，再走 temp+fsync+rename 原子写，杜绝崩溃/断电截断丢数据。
+        let backup_path = {
+            let mut name = path
+                .file_name()
+                .map(|name| name.to_os_string())
+                .unwrap_or_else(|| std::ffi::OsString::from(".claude.json"));
+            name.push(".ccpanes.bak");
+            path.with_file_name(name)
+        };
+        fs::copy(path, &backup_path).with_context(|| {
+            format!(
+                "failed to back up Claude config to {}",
+                backup_path.display()
+            )
+        })?;
+        crate::fs_atomic::write_atomic(path, serde_json::to_string_pretty(&parsed)?)?;
+        Ok(true)
+    }
+
+    fn should_skip_user_global_mcp_server(name: &str, config: &serde_json::Value) -> bool {
+        name == "ccpanes" || Self::is_legacy_global_ccpanes_mcp_server(name, config)
+    }
+
+    fn is_legacy_global_ccpanes_mcp_server(name: &str, config: &serde_json::Value) -> bool {
+        name == "ccpanes-fixed" || Self::mcp_command_references_ccpanes_proxy(config)
+    }
+
+    fn mcp_command_references_ccpanes_proxy(config: &serde_json::Value) -> bool {
+        config
+            .get("command")
+            .and_then(|command| command.as_str())
+            .map(|command| command.contains("ccpanes-proxy"))
+            .unwrap_or(false)
     }
 
     fn get_settings_path(project_path: &Path) -> PathBuf {
@@ -1149,6 +1232,64 @@ mod tests {
         ClaudeAdapter::push_yolo_mode_arg(&mut args);
 
         assert_eq!(args, vec!["--dangerously-skip-permissions".to_string()]);
+    }
+
+    #[test]
+    fn cleanup_legacy_global_mcp_servers_removes_only_legacy_entries() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join(".claude.json");
+        fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mcpServers": {
+                    "ccpanes": {
+                        "type": "http",
+                        "url": "http://127.0.0.1:37123/mcp?token=redacted"
+                    },
+                    "ccpanes-fixed": {
+                        "command": "node",
+                        "args": ["ccpanes-proxy.mjs"]
+                    },
+                    "old-proxy": {
+                        "command": "/tmp/ccpanes-proxy.mjs"
+                    },
+                    "fetch": {
+                        "command": "fetch-mcp"
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(ClaudeAdapter::cleanup_legacy_global_mcp_servers_at(&config_path).unwrap());
+
+        let servers = ClaudeAdapter::read_user_global_mcp_servers_at(&config_path).unwrap();
+        let servers = servers.as_object().unwrap();
+        assert!(servers.contains_key("ccpanes"));
+        assert!(servers.contains_key("fetch"));
+        assert!(!servers.contains_key("ccpanes-fixed"));
+        assert!(!servers.contains_key("old-proxy"));
+    }
+
+    #[test]
+    fn user_global_mcp_filter_skips_managed_and_legacy_ccpanes_entries() {
+        assert!(ClaudeAdapter::should_skip_user_global_mcp_server(
+            "ccpanes",
+            &serde_json::json!({"type": "http"})
+        ));
+        assert!(ClaudeAdapter::should_skip_user_global_mcp_server(
+            "ccpanes-fixed",
+            &serde_json::json!({"command": "node"})
+        ));
+        assert!(ClaudeAdapter::should_skip_user_global_mcp_server(
+            "custom",
+            &serde_json::json!({"command": "/tmp/ccpanes-proxy.mjs"})
+        ));
+        assert!(!ClaudeAdapter::should_skip_user_global_mcp_server(
+            "fetch",
+            &serde_json::json!({"command": "fetch-mcp"})
+        ));
     }
 
     // ============ cc-pane 抽象事件映射测试 ============

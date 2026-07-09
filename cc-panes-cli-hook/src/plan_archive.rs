@@ -4,6 +4,8 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
+use crate::common::http::{post_json, ApiEndpoint};
+
 /// Hook input from Claude Code (subset of fields we care about).
 #[derive(Debug, Deserialize)]
 struct HookInput {
@@ -418,13 +420,7 @@ fn post_plan_tag(
     project_path: Option<&str>,
     tag: &PlanTag,
 ) -> Result<(), String> {
-    let api_base_url = std::env::var("CC_PANES_API_BASE_URL")
-        .or_else(|_| {
-            std::env::var("CC_PANES_API_PORT").map(|port| format!("http://127.0.0.1:{}", port))
-        })
-        .map_err(|_| "CC_PANES_API_BASE_URL is missing".to_string())?;
-    let api_token = std::env::var("CC_PANES_API_TOKEN")
-        .map_err(|_| "CC_PANES_API_TOKEN is missing".to_string())?;
+    let endpoint = ApiEndpoint::resolve()?;
 
     let project_path_owned = project_path
         .map(|s| s.to_string())
@@ -448,21 +444,9 @@ fn post_plan_tag(
         "tag": tag,
     });
 
-    let url = format!("{}/api/plan/tag", api_base_url.trim_end_matches('/'));
-    let agent = ureq::Agent::config_builder()
-        .timeout_global(Some(std::time::Duration::from_millis(750)))
-        .build()
-        .new_agent();
-
-    let payload = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
-    if let Err(e) = agent
-        .post(&url)
-        .header("Authorization", &format!("Bearer {}", api_token))
-        .header("Content-Type", "application/json")
-        .send(payload.as_slice())
-    {
+    if let Err(e) = post_json(&endpoint, "/api/plan/tag", &body) {
         eprintln!("[ccpanes] plan-tag POST failed (non-fatal): {}", e);
-        return Err(e.to_string());
+        return Err(e);
     }
     Ok(())
 }

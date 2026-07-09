@@ -9,6 +9,7 @@
 mod claude;
 mod codex;
 mod cursor;
+mod fs_atomic;
 mod gemini;
 mod glm;
 mod kimi;

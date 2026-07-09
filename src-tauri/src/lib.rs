@@ -1396,9 +1396,14 @@ pub fn run() {
                 if backend_state.kind() != TerminalBackendKind::Daemon {
                     let paths = app.state::<Arc<AppPaths>>();
                     let resource_dir = app.path().resource_dir().ok();
+                    let config_path = app
+                        .state::<Arc<SettingsService>>()
+                        .config_path()
+                        .to_path_buf();
                     match TerminalDaemonLifecycle::connect_or_start(
                         paths.inner().as_ref(),
                         resource_dir.as_deref(),
+                        &config_path,
                     ) {
                         Ok(client) => {
                             backend_state.try_enable_daemon(client);
@@ -1605,6 +1610,7 @@ pub fn run() {
             {
                 let orch_svc = app.state::<Arc<OrchestratorService>>();
                 let term_svc = app.state::<Arc<TerminalService>>();
+                let terminal_backend_state = app.state::<Arc<TerminalBackendState>>();
                 let prov_svc = app.state::<Arc<ProviderService>>();
                 let launch_profile_svc = app.state::<Arc<LaunchProfileService>>();
                 let shared_mcp_svc = app.state::<Arc<SharedMcpService>>();
@@ -1628,6 +1634,7 @@ pub fn run() {
                 let paths = app.state::<Arc<AppPaths>>();
                 if let Err(e) = orch_svc.start(
                     term_svc.inner().clone(),
+                    terminal_backend_state.inner().clone(),
                     prov_svc.inner().clone(),
                     launch_profile_svc.inner().clone(),
                     shared_mcp_svc.inner().clone(),

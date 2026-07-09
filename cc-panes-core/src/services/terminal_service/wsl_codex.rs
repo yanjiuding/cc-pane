@@ -51,6 +51,53 @@ pub(super) fn build_wsl_mcp_url(windows_host: &str, port: &str, token: &str) -> 
     format!("http://{}:{}/mcp?token={}", windows_host, port, token)
 }
 
+/// WSL 内跑的探活脚本：收集候选宿主地址，逐个对 orchestrator `/api/health` 发最小 HTTP
+/// 请求，命中本 orchestrator 独有的 `{"status":"ok"}` 就 echo 该 host 并退出。
+/// `$1` = 端口。全程带 `timeout 1` 逐候选兜底，缺 bash/timeout 则整体失败（调用方回退）。
+fn wsl_host_probe_script() -> &'static str {
+    r#"port="$1"
+gw=$(ip route show default 2>/dev/null | awk '/default/ {print $3; exit}')
+ns=$(awk '/^nameserver/ {print $2}' /etc/resolv.conf 2>/dev/null)
+for h in 127.0.0.1 $gw $ns; do
+  [ -n "$h" ] || continue
+  resp=$(timeout 1 bash -c "exec 3<>/dev/tcp/$h/$port && printf 'GET /api/health HTTP/1.0\r\nConnection: close\r\n\r\n' >&3 && head -c 256 <&3" 2>/dev/null)
+  case "$resp" in *'"status"'*) printf '%s' "$h"; exit 0;; esac
+done
+exit 1
+"#
+}
+
+/// 把探活脚本 base64 编码后包进一条 `bash -c` 参数，彻底避开 wsl.exe→bash 的引号地狱。
+/// 结果形如 `echo <base64> | base64 -d | bash -s <port>`，只含字母数字/`+//=`/管道/空格。
+#[cfg(windows)]
+fn wsl_host_probe_bash_arg(port: u16) -> String {
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(wsl_host_probe_script());
+    format!("echo {encoded} | base64 -d | bash -s {port}")
+}
+
+#[cfg(windows)]
+fn probe_reachable_wsl_windows_host(
+    wsl_path: &std::path::Path,
+    distro: &str,
+    port: u16,
+) -> Option<String> {
+    let arg = wsl_host_probe_bash_arg(port);
+    let output = crate::utils::no_window_command(wsl_path)
+        .args(["-d", distro, "bash", "-c", &arg])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let host = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if host.is_empty() {
+        None
+    } else {
+        Some(host)
+    }
+}
+
 #[cfg(windows)]
 fn rewrite_local_mcp_url_for_wsl(url: &str, windows_host: &str) -> String {
     for prefix in ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"] {
@@ -554,11 +601,30 @@ impl TerminalService {
     #[cfg(windows)]
     pub(super) fn resolve_reachable_wsl_windows_host(
         &self,
-        _wsl_path: &std::path::Path,
-        _distro: &str,
-        _port: u16,
+        wsl_path: &std::path::Path,
+        distro: &str,
+        port: u16,
     ) -> Result<String> {
-        Ok("127.0.0.1".to_string())
+        // 从 **WSL 内部** 探活候选宿主地址，选第一个能连到 orchestrator `/api/health` 的：
+        //   1. 127.0.0.1 —— mirrored 网络下 WSL 回环直达宿主
+        //   2. 默认网关（`ip route show default`）—— NAT 下即 Windows 宿主的 vEthernet(WSL) IP
+        //   3. `/etc/resolv.conf` 的 nameserver —— NAT 下通常也是宿主 IP
+        // 必须从 WSL 侧探（而非 Windows 侧），才能真正区分 mirrored / NAT。
+        // 探不到（无 bash/timeout 等）则回退 127.0.0.1，保持 mirrored 旧行为、NAT 不更坏。
+        match probe_reachable_wsl_windows_host(wsl_path, distro, port) {
+            Some(host) => {
+                info!(distro = %distro, port = %port, host = %host, "resolved reachable WSL→Windows host for MCP");
+                Ok(host)
+            }
+            None => {
+                warn!(
+                    distro = %distro,
+                    port = %port,
+                    "could not probe a reachable WSL→Windows host; falling back to 127.0.0.1 (works only under mirrored networking)"
+                );
+                Ok("127.0.0.1".to_string())
+            }
+        }
     }
 
     #[cfg(not(windows))]
@@ -985,11 +1051,6 @@ impl TerminalService {
                     format_toml_value_for_cli(&toml::Value::String(mcp_url))
                 ));
                 codex_args.push("-c".to_string());
-                codex_args.push(format!(
-                    "mcp_servers.ccpanes.bearer_token_env_var={}",
-                    format_toml_value_for_cli(&toml::Value::String("CC_PANES_API_TOKEN".into()))
-                ));
-                codex_args.push("-c".to_string());
                 codex_args.push("mcp_servers.ccpanes.enabled=true".to_string());
                 for (name, url) in shared_mcp_urls {
                     let mcp_url = rewrite_local_mcp_url_for_wsl(url, windows_host);
@@ -1126,9 +1187,11 @@ impl TerminalService {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::wsl_host_probe_bash_arg;
     use super::{
         append_codex_resume_args, push_codex_developer_instructions_arg, push_codex_yolo_mode_arg,
-        push_wsl_codex_mcp_isolation_prelude, render_wsl_launch_script,
+        push_wsl_codex_mcp_isolation_prelude, render_wsl_launch_script, wsl_host_probe_script,
     };
     #[cfg(windows)]
     use super::{
@@ -1150,6 +1213,41 @@ mod tests {
 
     fn remove_dir(path: &Path) {
         let _ = fs::remove_dir_all(path);
+    }
+
+    #[test]
+    fn wsl_host_probe_script_covers_loopback_gateway_and_nameserver() {
+        let script = wsl_host_probe_script();
+        // 候选顺序：回环（mirrored）→ 默认网关（NAT）→ resolv.conf nameserver。
+        assert!(script.contains("127.0.0.1"));
+        assert!(script.contains("ip route show default"));
+        assert!(script.contains("/etc/resolv.conf"));
+        // 校验的是本 orchestrator 独有的 /api/health 载荷，非裸 TCP。
+        assert!(script.contains("/api/health"));
+        assert!(script.contains(r#""status""#));
+        // 逐候选带 1s 超时兜底，避免黑洞候选阻塞。
+        assert!(script.contains("timeout 1"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wsl_host_probe_bash_arg_base64_round_trips_to_script() {
+        use base64::Engine as _;
+        let arg = wsl_host_probe_bash_arg(61012);
+        assert!(arg.ends_with("| base64 -d | bash -s 61012"));
+        let encoded = arg
+            .strip_prefix("echo ")
+            .and_then(|rest| rest.split_once(' ').map(|(b64, _)| b64))
+            .expect("base64 blob");
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("valid base64");
+        assert_eq!(
+            String::from_utf8(decoded).expect("utf8"),
+            wsl_host_probe_script()
+        );
+        // 命令参数只含 base64 安全字符 + 管道/空格，无引号 → 不受 wsl.exe 引号解析影响。
+        assert!(!arg.contains('\'') && !arg.contains('"'));
     }
 
     #[test]

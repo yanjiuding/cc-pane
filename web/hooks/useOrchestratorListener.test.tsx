@@ -5,7 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { useOrchestratorListener } from "./useOrchestratorListener";
 import { useActivityBarStore, usePanesStore } from "@/stores";
-import { createPanel } from "@/stores/paneTreeHelpers";
+import { createPanel, collectPanels } from "@/stores/paneTreeHelpers";
 import { mockTauriInvoke, resetTauriInvoke } from "@/test/utils/mockTauriInvoke";
 
 type WebviewListener = (event: { payload: Record<string, unknown> }) => void | Promise<void>;
@@ -91,6 +91,82 @@ describe("useOrchestratorListener layout placement", () => {
     const projectedLayout = state.listLayouts().find((item) => item.id === layout?.id);
     expect(projectedLayout?.rootPane).toBe(state.rootPane);
     expect(useActivityBarStore.getState().appViewMode).toBe("panes");
+  });
+
+  it("launch-task 有调用者会话时默认在其 pane 旁边分屏打开(并排,不是后台标签)", async () => {
+    const panes = usePanesStore.getState();
+    panes.addTab(panes.rootPane.id, {
+      projectId: "project-a",
+      projectPath: "/tmp/project-a",
+      sessionId: "caller-1",
+      cliTool: "claude",
+    });
+
+    const listeners = mockWebviewListeners();
+    renderHook(() => useOrchestratorListener());
+    await waitFor(() => expect(listeners.has("orchestrator-launch-task")).toBe(true));
+
+    await act(async () => {
+      await listeners.get("orchestrator-launch-task")?.({
+        payload: {
+          taskId: "task-2",
+          sessionId: "child-1",
+          projectPath: "/tmp/project-a",
+          projectId: "project-a",
+          cliTool: "codex",
+          parentSessionId: "caller-1",
+        },
+      });
+    });
+
+    const state = usePanesStore.getState();
+    // 调用者 pane 旁边分屏 → rootPane 变 split，调用者与新会话各占一个窗格。
+    expect(state.rootPane.type).toBe("split");
+    const panels = collectPanels(state.rootPane);
+    const callerPanel = panels.find((p) => p.tabs.some((t) => t.sessionId === "caller-1"));
+    const childPanel = panels.find((p) => p.tabs.some((t) => t.sessionId === "child-1"));
+    expect(callerPanel).toBeTruthy();
+    expect(childPanel).toBeTruthy();
+    // 分属不同窗格（并排），且焦点在新会话所在窗格。
+    expect(callerPanel!.id).not.toBe(childPanel!.id);
+    expect(state.activePaneId).toBe(childPanel!.id);
+  });
+
+  it("launch-task placement=tab 时塞进调用者 pane 的标签页(不分屏)", async () => {
+    const panes = usePanesStore.getState();
+    panes.addTab(panes.rootPane.id, {
+      projectId: "project-a",
+      projectPath: "/tmp/project-a",
+      sessionId: "caller-1",
+      cliTool: "claude",
+    });
+
+    const listeners = mockWebviewListeners();
+    renderHook(() => useOrchestratorListener());
+    await waitFor(() => expect(listeners.has("orchestrator-launch-task")).toBe(true));
+
+    await act(async () => {
+      await listeners.get("orchestrator-launch-task")?.({
+        payload: {
+          taskId: "task-3",
+          sessionId: "child-2",
+          projectPath: "/tmp/project-a",
+          projectId: "project-a",
+          cliTool: "codex",
+          parentSessionId: "caller-1",
+          placement: "tab",
+        },
+      });
+    });
+
+    const state = usePanesStore.getState();
+    // 显式 tab → 不分屏，新会话与调用者同 pane。
+    expect(state.rootPane.type).toBe("panel");
+    if (state.rootPane.type === "panel") {
+      const sids = state.rootPane.tabs.map((t) => t.sessionId);
+      expect(sids).toContain("caller-1");
+      expect(sids).toContain("child-2");
+    }
   });
 
   it("launch-task 缺少 projectPath 时不创建布局和 tab", async () => {

@@ -550,6 +550,7 @@ function ensureLayoutState(
 
   for (const layout of layouts) {
     if (isStarredLayout(layout)) continue;
+    layout.rootPane = flattenPaneTreeForImport(layout.rootPane);
     cleanRehydratedPanes(layout.rootPane);
     const active = findPane(layout.rootPane, layout.activePaneId);
     if (active?.type !== "panel") {
@@ -629,19 +630,11 @@ function closeTerminalLeafInTab(tab: Tab, terminalPaneId: string): boolean {
   parent.children.splice(parentResult.index, 1);
   parent.sizes.splice(parentResult.index, 1);
 
-  if (parent.children.length === 1) {
-    const gpResult = findTerminalPaneParent(tab.terminalRootPane, parent.id);
-    if (!gpResult || gpResult.parent === null) {
-      tab.terminalRootPane = parent.children[0];
-    } else {
-      gpResult.parent.children[gpResult.index] = parent.children[0];
-    }
-  } else {
-    const total = parent.sizes.reduce((sum, size) => sum + size, 0);
-    parent.sizes = total > 0
-      ? parent.sizes.map((size) => (size / total) * 100)
-      : parent.sizes.map(() => 100 / parent.sizes.length);
-  }
+  // 单 child 时保留 split 壳（不上提），避免幸存终端 remount；见 normalizePaneTree。
+  const total = parent.sizes.reduce((sum, size) => sum + size, 0);
+  parent.sizes = total > 0
+    ? parent.sizes.map((size) => (size / total) * 100)
+    : parent.children.map(() => 100 / parent.children.length);
 
   const nextLeaves = collectTerminalLeaves(tab.terminalRootPane);
   tab.activeTerminalPaneId = nextLeaves[Math.min(parentResult.index, nextLeaves.length - 1)]?.id;
@@ -693,8 +686,12 @@ function normalizePaneTree(root: PaneNode): PaneNode {
     return createPanel();
   }
 
-  if (root.children.length === 1) {
-    return root.children[0];
+  // 单 child 时保留 split 壳而不上提：上提会让 PaneContainer 组件类型 /
+  // 祖父 SplitView 的 key 变化，React 整棵卸载重挂，幸存终端 xterm 被销毁重建。
+  // 壳链只在快照/持久化加载入口由 flattenPaneTreeForImport 压平。
+  if (root.sizes.length !== root.children.length) {
+    root.sizes = root.children.map(() => 100 / root.children.length);
+    return root;
   }
 
   const total = root.sizes.reduce((sum, size) => sum + size, 0);
@@ -703,6 +700,30 @@ function normalizePaneTree(root: PaneNode): PaneNode {
     : root.children.map(() => 100 / root.children.length);
 
   return root;
+}
+
+// 仅用于快照/持久化加载：压平运行期积累的单 child split 壳链。
+// 运行期不得调用（会触发上述 remount）；导出侧（partialize /
+// exportLayoutSnapshotPayload）持有活树引用，也不得原地压平。
+function flattenPaneTreeForImport(node: PaneNode): PaneNode {
+  if (node.type === "panel") {
+    for (const tab of node.tabs) {
+      if (tab.contentType === "terminal" && tab.terminalRootPane) {
+        tab.terminalRootPane = flattenTerminalPaneTreeForImport(tab.terminalRootPane);
+      }
+    }
+    return node;
+  }
+  node.children = node.children.map((child) => flattenPaneTreeForImport(child));
+  if (node.children.length === 1) return node.children[0];
+  return node;
+}
+
+function flattenTerminalPaneTreeForImport(node: TerminalPaneNode): TerminalPaneNode {
+  if (node.type === "leaf") return node;
+  node.children = node.children.map((child) => flattenTerminalPaneTreeForImport(child));
+  if (node.children.length === 1) return node.children[0];
+  return node;
 }
 
 const PANES_DEBUG = import.meta.env.DEV;
@@ -797,6 +818,8 @@ interface PanesState {
     toIndex?: number
   ) => void;
   splitAndMoveTab: (paneId: string, tabId: string, direction: SplitDirection) => void;
+  /** 在 paneId 旁边分屏，并把新会话直接开在新窗格里并聚焦（launch_task 默认落位用）。 */
+  openSessionBesidePane: (paneId: string, direction: SplitDirection, opts: CreateTabOptions) => void;
   closeTabsToLeft: (paneId: string, tabId: string) => void;
   closeTabsToRight: (paneId: string, tabId: string) => void;
   closeOtherTabs: (paneId: string, tabId: string) => void;
@@ -1066,7 +1089,13 @@ export const usePanesStore = create<PanesState>()(
           const parent = parentResult.parent;
           const index = parentResult.index;
 
-          if (parent.direction === splitDirection) {
+          if (parent.children.length === 1) {
+            // 单 child 壳：直接改造壳（换方向 + 插入新 pane），不再包一层新 split，
+            // 否则父 SplitView 中 key 变化会 remount 幸存终端。
+            parent.direction = splitDirection;
+            parent.children.push(newPane);
+            parent.sizes = [50, 50];
+          } else if (parent.direction === splitDirection) {
             parent.children.splice(index + 1, 0, newPane);
             const newSize = 100 / parent.children.length;
             parent.sizes = parent.children.map(() => newSize);
@@ -1089,6 +1118,85 @@ export const usePanesStore = create<PanesState>()(
 
     splitRight: (paneId) => get().split(paneId, "right"),
     splitDown: (paneId) => get().split(paneId, "down"),
+
+    openSessionBesidePane: (paneId, direction, opts) => {
+      const directionMap: Record<SplitDirection, "horizontal" | "vertical"> = {
+        right: "horizontal",
+        down: "vertical",
+      };
+      const splitDirection = directionMap[direction];
+
+      set((state) => {
+        if (!activateFirstNormalLayout(state)) return;
+
+        const targetPane = findPane(state.rootPane, paneId);
+        const parentResult = findParent(state.rootPane, paneId);
+
+        // 无法在该 pane 旁分屏（未找到 / 不是 panel / 找不到父）→ 退化为在该 pane
+        // （或首个 panel）加标签，保证会话总能落地。
+        if (!targetPane || targetPane.type !== "panel" || !parentResult) {
+          const fallback =
+            targetPane?.type === "panel" ? targetPane : collectPanels(state.rootPane)[0];
+          if (!fallback) return;
+          const tab = createTab(opts);
+          fallback.tabs.push(tab);
+          fallback.activeTabId = tab.id;
+          state.activePaneId = fallback.id;
+          return;
+        }
+
+        // 目标 pane 本就是空的（如新建布局的空窗格）→ 直接把会话开在里面，
+        // 不必分裂出一个多余的空窗格。
+        if (targetPane.tabs.length === 0) {
+          const tab = createTab(opts);
+          targetPane.tabs.push(tab);
+          targetPane.activeTabId = tab.id;
+          state.activePaneId = targetPane.id;
+          return;
+        }
+
+        // 新窗格：建好就把新会话作为其唯一（激活）标签，避免先空屏再落会话。
+        const newPane = createPanel();
+        const newTab = createTab(opts);
+        newPane.tabs.push(newTab);
+        newPane.activeTabId = newTab.id;
+
+        // 插入 newPane 到 targetPane 旁边（复刻 split 的插入逻辑）。
+        if (parentResult.parent === null) {
+          state.rootPane = {
+            type: "split",
+            id: generateId("split"),
+            direction: splitDirection,
+            children: [targetPane, newPane],
+            sizes: [50, 50],
+          };
+        } else {
+          const parent = parentResult.parent;
+          const index = parentResult.index;
+          if (parent.children.length === 1) {
+            parent.direction = splitDirection;
+            parent.children.push(newPane);
+            parent.sizes = [50, 50];
+          } else if (parent.direction === splitDirection) {
+            parent.children.splice(index + 1, 0, newPane);
+            const newSize = 100 / parent.children.length;
+            parent.sizes = parent.children.map(() => newSize);
+          } else {
+            const newSplit: SplitPane = {
+              type: "split",
+              id: generateId("split"),
+              direction: splitDirection,
+              children: [targetPane, newPane],
+              sizes: [50, 50],
+            };
+            parent.children[index] = newSplit;
+          }
+        }
+
+        state.activePaneId = newPane.id;
+      });
+      notifyTerminalLayoutChanged("pane.split");
+    },
 
     closePane: (paneId) => {
       // 保存可恢复标签
@@ -1176,8 +1284,10 @@ export const usePanesStore = create<PanesState>()(
     addTab: (paneId, opts) => {
       set((state) => {
         if (!activateFirstNormalLayout(state)) return;
-        const pane = findPane(state.rootPane, paneId) ?? findPane(state.rootPane, state.activePaneId);
-        if (pane?.type !== "panel") return;
+        const found = findPane(state.rootPane, paneId) ?? findPane(state.rootPane, state.activePaneId);
+        // 传入 split id（如壳状态下的 rootPane.id）时兜底到第一个 panel。
+        const pane = found?.type === "panel" ? found : collectPanels(state.rootPane)[0];
+        if (!pane) return;
 
         const newTab = createTab(opts);
         pane.tabs.push(newTab);
@@ -1701,6 +1811,11 @@ export const usePanesStore = create<PanesState>()(
             children: [target, newLeaf],
             sizes: [50, 50],
           };
+        } else if (parentResult.parent.children.length === 1) {
+          // 单 child 壳复用，理由同 split()。
+          parentResult.parent.direction = splitDirection;
+          parentResult.parent.children.push(newLeaf);
+          parentResult.parent.sizes = [50, 50];
         } else if (parentResult.parent.direction === splitDirection) {
           parentResult.parent.children.splice(parentResult.index + 1, 0, newLeaf);
           const newSize = 100 / parentResult.parent.children.length;
@@ -1742,17 +1857,11 @@ export const usePanesStore = create<PanesState>()(
         parent.children.splice(parentResult.index, 1);
         parent.sizes.splice(parentResult.index, 1);
 
-        if (parent.children.length === 1) {
-          const gpResult = findTerminalPaneParent(tab.terminalRootPane, parent.id);
-          if (!gpResult || gpResult.parent === null) {
-            tab.terminalRootPane = parent.children[0];
-          } else {
-            gpResult.parent.children[gpResult.index] = parent.children[0];
-          }
-        } else {
-          const total = parent.sizes.reduce((sum, size) => sum + size, 0);
-          parent.sizes = parent.sizes.map((size) => (size / total) * 100);
-        }
+        // 单 child 时保留 split 壳（不上提），避免幸存终端 remount；见 normalizePaneTree。
+        const total = parent.sizes.reduce((sum, size) => sum + size, 0);
+        parent.sizes = total > 0
+          ? parent.sizes.map((size) => (size / total) * 100)
+          : parent.children.map(() => 100 / parent.children.length);
 
         const nextLeaves = collectTerminalLeaves(tab.terminalRootPane);
         tab.activeTerminalPaneId = nextLeaves[Math.min(parentResult.index, nextLeaves.length - 1)]?.id;
@@ -1888,8 +1997,12 @@ export const usePanesStore = create<PanesState>()(
       const active = get().activePane();
       if (active) {
         get().openProjectInPane(active.id, opts);
-      } else if (get().rootPane.type === "panel") {
-        get().openProjectInPane(get().rootPane.id, opts);
+      } else {
+        // 壳状态下 rootPane 可能是单 child split，兜底到第一个 panel。
+        const firstPanel = collectPanels(get().rootPane)[0];
+        if (firstPanel) {
+          get().openProjectInPane(firstPanel.id, opts);
+        }
       }
     },
 

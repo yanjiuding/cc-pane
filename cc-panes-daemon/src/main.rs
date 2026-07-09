@@ -1,4 +1,6 @@
+mod self_check;
 mod server;
+mod session_reaper;
 mod ws_emitter;
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -47,6 +49,13 @@ struct Args {
     /// Data directory for cc-panes config/db.
     #[arg(long)]
     data_dir: Option<String>,
+
+    /// Explicit path to config.toml. The app's config lives in its config dir
+    /// (~/.cc-panes[-dev]/), which may differ from --data-dir when the user
+    /// customizes the data directory; passing it explicitly keeps daemon-side
+    /// settings reload (session TTL etc.) reading the same file the app writes.
+    #[arg(long)]
+    config_path: Option<PathBuf>,
 }
 
 struct DaemonPathResolution {
@@ -208,9 +217,25 @@ async fn main() -> anyhow::Result<()> {
     let cwd_str = cwd.to_string_lossy().to_string();
 
     let daemon_paths = resolve_daemon_paths(args.data_dir.as_deref());
+    // --config-path（app 显式传入，保证与 app 写的是同一份文件）优先，
+    // 否则回退到 data_dir 推导；settings_service 同时供 backend 与 reaper 使用。
+    let settings_service = Arc::new(
+        match args
+            .config_path
+            .as_ref()
+            .or(daemon_paths.config_path.as_ref())
+        {
+            Some(path) => SettingsService::new_with_config_path(path.clone()),
+            None => SettingsService::new(),
+        },
+    );
     let ws_emitter = Arc::new(WsEmitter::new());
-    let terminal_backend =
-        create_terminal_backend(args.data_dir.as_deref(), daemon_paths, ws_emitter.clone());
+    let terminal_backend = create_terminal_backend(
+        args.data_dir.as_deref(),
+        daemon_paths,
+        ws_emitter.clone(),
+        settings_service.clone(),
+    );
     let config = DaemonConfig::new(
         token,
         local_addr,
@@ -223,7 +248,11 @@ async fn main() -> anyhow::Result<()> {
     if let Some(runtime_dir) = args.runtime_dir {
         let manifest = write_manifest(&runtime_dir, &config)?;
         info!(path = %manifest.display(), "daemon manifest written");
+        // 周期自检：被新 daemon 取代即优雅退出，manifest 丢失则自愈重写。
+        self_check::spawn_manifest_self_check(runtime_dir, config.clone());
     }
+    // 孤儿会话回收：无人查看超过 TTL（设置可调，0=禁用）的会话按 FIFO 回收。
+    session_reaper::spawn_session_reaper(config.clone(), settings_service);
 
     info!(addr = %local_addr, cwd = cwd_str, "CC-Panes daemon listening");
     axum::serve(listener, server::router(config))
@@ -236,11 +265,8 @@ fn create_terminal_backend(
     explicit_data_dir: Option<&str>,
     daemon_paths: DaemonPathResolution,
     ws_emitter: Arc<WsEmitter>,
+    settings_service: Arc<SettingsService>,
 ) -> Arc<dyn TerminalBackend> {
-    let settings_service = Arc::new(match &daemon_paths.config_path {
-        Some(path) => SettingsService::new_with_config_path(path.clone()),
-        None => SettingsService::new(),
-    });
     let settings_data_dir = settings_service.get_settings().general.data_dir;
     let data_dir = resolve_data_dir(explicit_data_dir, settings_data_dir, &daemon_paths);
     let app_paths = Arc::new(AppPaths::new(data_dir));
@@ -287,6 +313,7 @@ impl Default for Args {
             runtime_dir: None,
             cwd: ".".to_string(),
             data_dir: None,
+            config_path: None,
         }
     }
 }

@@ -40,7 +40,8 @@ impl SettingsService {
         Ok(settings)
     }
 
-    /// 保存配置到文件
+    /// 保存配置到文件（同目录临时文件 + rename 原子替换，
+    /// 避免 daemon 等其他进程 reload 时读到半写文件）
     fn save_to_file(&self, settings: &AppSettings) -> Result<()> {
         // 确保目录存在
         if let Some(parent) = self.config_path.parent() {
@@ -48,8 +49,25 @@ impl SettingsService {
         }
         let content =
             toml::to_string_pretty(settings).with_context(|| "Failed to serialize settings")?;
-        std::fs::write(&self.config_path, content).with_context(|| "Failed to write config")?;
+        crate::utils::atomic_file::write_atomic(&self.config_path, content)
+            .with_context(|| "Failed to replace config")?;
         Ok(())
+    }
+
+    /// 从磁盘重读配置（供 daemon 等长驻进程感知其他进程写入的变更）。
+    /// 读取/解析失败时保留内存中的旧设置并返回 Err——调用方据此跳过依赖
+    /// 新配置的动作，绝不能回落到默认值。
+    pub fn reload_from_disk(&self) -> Result<()> {
+        let mut settings = Self::load_from_file(&self.config_path)?;
+        settings.merge_missing_defaults();
+        let mut current = self.settings.lock().unwrap_or_else(|e| e.into_inner());
+        *current = settings;
+        Ok(())
+    }
+
+    /// 配置文件路径（daemon 传参/存在性检查用）
+    pub fn config_path(&self) -> &std::path::Path {
+        &self.config_path
     }
 
     /// 获取当前设置
@@ -162,6 +180,46 @@ scrollback = 5000
         let settings = service.get_settings();
         assert_ne!(settings.terminal.font_size, 1);
         assert_eq!(settings.terminal.scrollback, 5_000);
+    }
+
+    #[test]
+    fn reload_from_disk_picks_up_external_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_config_path(&dir);
+        let service = SettingsService::new_with_config_path(path.clone());
+        assert_eq!(service.get_settings().general.language, "zh-CN");
+
+        // 模拟另一进程（app）写入新配置
+        std::fs::write(
+            &path,
+            r#"
+[general]
+autoStart = false
+language = "en-US"
+"#,
+        )
+        .unwrap();
+
+        service.reload_from_disk().expect("reload");
+        assert_eq!(service.get_settings().general.language, "en-US");
+    }
+
+    #[test]
+    fn reload_from_disk_keeps_old_settings_on_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = temp_config_path(&dir);
+        std::fs::write(
+            &path,
+            "[general]\nautoStart = false\nlanguage = \"en-US\"\n",
+        )
+        .unwrap();
+        let service = SettingsService::new_with_config_path(path.clone());
+        assert_eq!(service.get_settings().general.language, "en-US");
+
+        // 半写/损坏的文件：reload 必须失败且保留旧内存设置，不回落默认
+        std::fs::write(&path, "this is [ not valid toml").unwrap();
+        assert!(service.reload_from_disk().is_err());
+        assert_eq!(service.get_settings().general.language, "en-US");
     }
 
     #[test]

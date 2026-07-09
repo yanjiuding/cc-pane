@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::models::{CreateSessionRequest, TerminalReplaySnapshot};
 use crate::services::daemon_client::TerminalDaemonClient;
 use crate::services::terminal_service::SessionOutput;
+use crate::services::terminal_service::SessionStatus;
 use crate::services::terminal_service::TerminalService;
 use crate::services::SessionStatusInfo;
 use crate::utils::error::AppError;
@@ -26,6 +27,18 @@ pub trait TerminalBackend: Send + Sync {
         &self,
         session_id: &str,
     ) -> AppResult<Option<TerminalReplaySnapshot>>;
+    /// 按 launch_id 反查会话 id（launch_task 推导 parent_session_id 用）。
+    /// daemon 模式下会话建在 daemon 进程，必须走 backend 而非 app 本地 service。
+    /// 默认返回 `None`（不支持反查的后端，如测试 mock）；真实后端覆盖之。
+    fn find_session_id_by_launch_id(&self, _launch_id: &str) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+    /// 把 hook 状态机决定的新 status 写回会话（更新 status Mutex + emit）。
+    /// daemon 模式下会话在 daemon，写回必须打到 daemon，否则前端桥接轮询看不到细分状态。
+    /// 默认 no-op；真实后端覆盖之。
+    fn apply_hook_status(&self, _session_id: &str, _status: SessionStatus) -> AppResult<()> {
+        Ok(())
+    }
     fn event_stream_url(&self, _session_id: &str) -> Option<String> {
         None
     }
@@ -72,7 +85,7 @@ impl TerminalBackend for TerminalService {
             request.skip_mcp,
             request.append_system_prompt.as_deref(),
             request.initial_prompt.as_deref(),
-            None,
+            request.extra_env.as_ref(),
             request.ssh.as_ref(),
             request.wsl.as_ref(),
         )
@@ -112,6 +125,17 @@ impl TerminalBackend for TerminalService {
         session_id: &str,
     ) -> AppResult<Option<TerminalReplaySnapshot>> {
         TerminalService::get_session_replay_snapshot(self, session_id).map_err(AppError::from)
+    }
+
+    fn find_session_id_by_launch_id(&self, launch_id: &str) -> AppResult<Option<String>> {
+        Ok(TerminalService::find_session_id_by_launch_id(
+            self, launch_id,
+        ))
+    }
+
+    fn apply_hook_status(&self, session_id: &str, status: SessionStatus) -> AppResult<()> {
+        TerminalService::apply_hook_status(self, session_id, status);
+        Ok(())
     }
 }
 
@@ -165,6 +189,21 @@ impl TerminalBackend for InProcessTerminalBackend {
             session_id,
         )
     }
+
+    fn find_session_id_by_launch_id(&self, launch_id: &str) -> AppResult<Option<String>> {
+        <TerminalService as TerminalBackend>::find_session_id_by_launch_id(
+            self.service.as_ref(),
+            launch_id,
+        )
+    }
+
+    fn apply_hook_status(&self, session_id: &str, status: SessionStatus) -> AppResult<()> {
+        <TerminalService as TerminalBackend>::apply_hook_status(
+            self.service.as_ref(),
+            session_id,
+            status,
+        )
+    }
 }
 
 impl TerminalBackend for DaemonTerminalBackend {
@@ -205,6 +244,14 @@ impl TerminalBackend for DaemonTerminalBackend {
         session_id: &str,
     ) -> AppResult<Option<TerminalReplaySnapshot>> {
         self.client.get_session_replay_snapshot(session_id)
+    }
+
+    fn find_session_id_by_launch_id(&self, launch_id: &str) -> AppResult<Option<String>> {
+        self.client.find_session_id_by_launch_id(launch_id)
+    }
+
+    fn apply_hook_status(&self, session_id: &str, status: SessionStatus) -> AppResult<()> {
+        self.client.apply_hook_status(session_id, status)
     }
 
     fn event_stream_url(&self, session_id: &str) -> Option<String> {
@@ -285,6 +332,10 @@ mod tests {
             skip_mcp: false,
             append_system_prompt: None,
             initial_prompt: None,
+            extra_env: Some(std::collections::HashMap::from([(
+                "RUNNER_ENV".to_string(),
+                "1".to_string(),
+            )])),
             ssh: None,
             wsl: None,
         }
@@ -301,6 +352,7 @@ mod tests {
         assert_eq!(session_id, "s1");
         let request = rx.recv().expect("captured request");
         assert!(request.starts_with("POST /api/sessions HTTP/1.1"));
+        assert!(request.contains(r#""extraEnv":{"RUNNER_ENV":"1"}"#));
 
         let (addr, rx) = spawn_response_server(
             "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n".to_string(),

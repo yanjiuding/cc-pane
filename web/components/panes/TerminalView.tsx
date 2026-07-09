@@ -617,8 +617,10 @@ const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
           event instanceof CustomEvent && typeof event.detail?.reason === "string"
             ? event.detail.reason
             : "layout";
-        debugLog("layout-change.refit.flush", { reason });
-        layoutSchedulerRef.current?.flush(`layout-change.${reason}`, { force: true });
+        // schedule 内部双 RAF 执行，保证 fit 落在 React commit 之后
+        // （store 事件的 RAF 派发可能早于非批处理路径的 commit），连发事件自动合并。
+        debugLog("layout-change.refit.schedule", { reason });
+        layoutSchedulerRef.current?.schedule(`layout-change.${reason}`, { force: true });
       };
 
       window.addEventListener(TERMINAL_LAYOUT_CHANGED_EVENT, handleLayoutChanged);

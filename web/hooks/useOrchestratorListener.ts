@@ -47,6 +47,11 @@ interface OrchestratorLaunchPayload {
   wsl?: WslLaunchInfo;
   ssh?: SshConnectionInfo;
   /**
+   * 新会话落位方式（后端 launch_task 的 placement 参数）：
+   * `"beside"`（默认，调用者 pane 旁边分屏）| `"tab"` / `"background"`（调用者 pane 标签页）。
+   */
+  placement?: string;
+  /**
    * Caller's pty_session_id when this launch was triggered by another
    * cc-panes-managed Claude via MCP `launch_task`. Used by the frontend to
    * resolve a `parentTabId` for hierarchical numbering (#N.M).
@@ -145,27 +150,8 @@ export function useOrchestratorListener() {
             }
           }
 
-          // paneId 优先级：显式 paneId（MCP 调用方传入） > 父所在 panel > active pane。
-          // 父优先于 active 是为了让 launch_task 拉起的子 tab 始终落在父所在的 panel，
-          // 这样无论父在不在 active pane，前缀都能渲染成 #N.M。
-          let paneId: string;
-          if (targetPaneId) {
-            const targetPaneLocation = latestPanesStore.findPaneAcrossLayouts(targetPaneId);
-            if (targetPaneLocation && targetPaneLocation.layoutId !== latestPanesStore.currentLayoutId) {
-              latestPanesStore.switchLayout(targetPaneLocation.layoutId);
-              latestPanesStore = usePanesStore.getState();
-              activePane = latestPanesStore.activePane();
-            }
-            paneId = targetPaneLocation?.pane.type === "panel"
-              ? targetPaneLocation.pane.id
-              : (parentPaneId ?? activePane?.id ?? latestPanesStore.rootPane.id);
-          } else {
-            paneId = parentPaneId ?? activePane?.id ?? latestPanesStore.rootPane.id;
-          }
-
           const resolvedCliTool = (rawCliTool || "claude") as CliTool;
-
-          latestPanesStore.addTab(paneId, {
+          const tabOpts = {
             projectId,
             projectPath,
             sessionId,           // 后端已创建的 PTY session，避免前端重复创建
@@ -179,7 +165,33 @@ export function useOrchestratorListener() {
             ssh,
             customTitle: title,
             parentTabId,
-          });
+          };
+
+          // 落位策略：
+          //   1. 显式 paneId（MCP 调用方传入具体 pane）→ 作为该 pane 的标签落位。
+          //   2. 有调用者 pane（parentPaneId）且未显式要求 tab → 在**调用者 pane 旁边分屏并聚焦**，
+          //      让 launch 起的新会话拿到自己的窗格、跟调用者并排可见（默认，修「后台标签」问题）。
+          //   3. placement === "tab"/"background"，或无调用者（外部/layoutName 启动）→ 落到
+          //      基准 pane 的标签页（旧行为）。基准 pane：父 panel 优先于 active，保证层级编号 #N.M。
+          const placement = event.payload.placement;
+          const wantsTab = placement === "tab" || placement === "background";
+          if (targetPaneId) {
+            const targetPaneLocation = latestPanesStore.findPaneAcrossLayouts(targetPaneId);
+            if (targetPaneLocation && targetPaneLocation.layoutId !== latestPanesStore.currentLayoutId) {
+              latestPanesStore.switchLayout(targetPaneLocation.layoutId);
+              latestPanesStore = usePanesStore.getState();
+              activePane = latestPanesStore.activePane();
+            }
+            const paneId = targetPaneLocation?.pane.type === "panel"
+              ? targetPaneLocation.pane.id
+              : (parentPaneId ?? activePane?.id ?? latestPanesStore.rootPane.id);
+            latestPanesStore.addTab(paneId, tabOpts);
+          } else if (parentPaneId && !wantsTab) {
+            latestPanesStore.openSessionBesidePane(parentPaneId, "right", tabOpts);
+          } else {
+            const basePaneId = parentPaneId ?? activePane?.id ?? latestPanesStore.rootPane.id;
+            latestPanesStore.addTab(basePaneId, tabOpts);
+          }
           const notice = event.payload.notice?.trim();
           if (notice) {
             toast.info(notice);

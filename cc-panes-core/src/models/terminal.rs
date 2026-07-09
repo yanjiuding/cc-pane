@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::models::launch_profile::LaunchProviderSelection;
@@ -70,6 +72,8 @@ pub struct CreateSessionRequest {
     pub append_system_prompt: Option<String>,
     #[serde(default, alias = "prompt", skip_serializing_if = "Option::is_none")]
     pub initial_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_env: Option<HashMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<crate::models::workspace::SshConnectionInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

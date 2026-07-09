@@ -171,6 +171,28 @@ export default function TerminalSection({ value, onChange }: TerminalSectionProp
           {t("terminalDaemonHint")}
         </p>
       </div>
+
+      <div className="flex flex-col gap-1">
+        <div className="flex flex-col gap-1 w-40">
+          <Label>{t("daemonOrphanTtl")}</Label>
+          <Input
+            type="number"
+            min={0}
+            max={10080}
+            step={1}
+            value={value.daemonOrphanTtlMinutes ?? 0}
+            onChange={(e) => update("daemonOrphanTtlMinutes", Number(e.target.value))}
+            onBlur={(e) => {
+              const next = Math.min(10080, Math.max(0, Math.round(Number(e.target.value) || 0)));
+              if (next !== value.daemonOrphanTtlMinutes) update("daemonOrphanTtlMinutes", next);
+            }}
+            disabled={!(value.daemonEnabled ?? true)}
+          />
+        </div>
+        <p className="text-[11px]" style={{ color: "var(--app-text-tertiary)" }}>
+          {t("daemonOrphanTtlHint")}
+        </p>
+      </div>
     </div>
   );
 }
