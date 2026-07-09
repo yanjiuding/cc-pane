@@ -152,3 +152,49 @@ jobs:
           prerelease: false
           includeUpdaterJson: true
           args: ${{ matrix.args }}
+
+  mobile-apk:
+    name: Build Mobile APK
+    runs-on: ubuntu-24.04
+    needs: validate-version
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract tag version
+        id: tag
+        run: echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build APK
+        working-directory: cc-panes-mobile
+        run: |
+          flutter pub get
+          flutter build apk --release
+
+      - name: Upload APK to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          APK_NAME="cc-panes-mobile_${{ steps.tag.outputs.version }}.apk"
+          cp cc-panes-mobile/build/app/outputs/flutter-apk/app-release.apk "$APK_NAME"
+          # tauri-action 的 build job 负责创建 release；这里等它就绪后上传（最多等 10 分钟）
+          for i in $(seq 1 60); do
+            if gh release view "v${{ steps.tag.outputs.version }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 10
+          done
+          gh release upload "v${{ steps.tag.outputs.version }}" "$APK_NAME" --repo "$GITHUB_REPOSITORY" --clobber
