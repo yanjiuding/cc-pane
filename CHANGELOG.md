@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.13 - 2026-07-09 (beta)
+
+### Fixed
+
+- Stale global `[mcp_servers.ccpanes]` entries are now migrated on the WSL side too, not just the Windows `~/.codex`. WSL Codex reads its own Linux-side `~/.codex/config.toml` (or `$CODEX_HOME`), which the Windows migration could not reach; the launcher now resolves that file's Windows path via `wslpath -w` and runs the same signature-matched backup + surgical removal, so a leftover `bearer_token_env_var = "CC_PANES_API_TOKEN"` in WSL can no longer break Codex startup. User-owned (non-CC-Panes) `ccpanes` servers are left untouched.
+
 ## 0.10.12 - 2026-07-09 (beta)
 
 ### Fixed
