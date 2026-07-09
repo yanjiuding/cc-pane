@@ -81,3 +81,38 @@ export function translateError(error: unknown): string {
 
   return errorStr;
 }
+
+/**
+ * 提取后端错误码（跨 Tauri / REST 两条通道）
+ *
+ * - Tauri：AppError 序列化为 `{ code, message, params? }` 对象
+ * - REST：`service_error` 用 Display 输出纯文本 `[CODE] message`
+ *
+ * @returns 错误码（如 "TRASH_FAILED"），无法识别时返回 null
+ */
+export function getErrorCode(error: unknown): string | null {
+  if (isBackendError(error)) {
+    return error.code;
+  }
+
+  let msg: string;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    msg = String((error as { message: unknown }).message);
+  } else if (typeof error === "string") {
+    msg = error;
+  } else {
+    msg = String(error);
+  }
+
+  try {
+    const parsed: BackendError = JSON.parse(msg);
+    if (parsed.code) {
+      return parsed.code;
+    }
+  } catch {
+    // 不是 JSON
+  }
+
+  const prefixed = /^\[([A-Z0-9_]+)\]/.exec(msg);
+  return prefixed ? prefixed[1] : null;
+}

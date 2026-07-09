@@ -1,5 +1,6 @@
 use crate::constants::fs_limits::{MAX_DIR_ENTRIES, MAX_READ_SIZE, MAX_WRITE_SIZE};
 use crate::models::filesystem::{DirListing, FileContent, FsEntry};
+use crate::utils::error::AppError;
 use crate::utils::AppResult;
 use encoding_rs::Encoding;
 use std::fs;
@@ -448,14 +449,34 @@ impl FileSystemService {
         Ok(())
     }
 
-    /// 删除文件/目录（移到回收站）
-    pub fn delete_entry(&self, path: &str) -> AppResult<()> {
-        debug!("svc::delete_entry");
+    /// 删除文件/目录（默认移到回收站；`permanent` 为 true 时永久删除）
+    ///
+    /// 回收站删除失败（文件被占用 / 目标卷无回收站，如 WSL UNC）时返回
+    /// `TRASH_FAILED` 结构化错误，前端据此提供"永久删除"兜底。
+    pub fn delete_entry(&self, path: &str, permanent: bool) -> AppResult<()> {
+        debug!("svc::delete_entry permanent={}", permanent);
         let entry_path = Self::validate_path(path)?;
         if Self::is_readonly_path(&entry_path) {
             return Err("Cannot delete read-only path".into());
         }
-        trash::delete(&entry_path).map_err(|e| format!("Failed to move to trash: {}", e))?;
+        if permanent {
+            if entry_path.is_dir() {
+                fs::remove_dir_all(&entry_path)?;
+            } else {
+                fs::remove_file(&entry_path)?;
+            }
+            return Ok(());
+        }
+        trash::delete(&entry_path).map_err(|e| {
+            AppError::coded_with_params(
+                "TRASH_FAILED",
+                format!("Failed to move to trash: {}", e),
+                std::collections::HashMap::from([
+                    ("detail".to_string(), e.to_string()),
+                    ("path".to_string(), path.to_string()),
+                ]),
+            )
+        })?;
         Ok(())
     }
 
@@ -900,7 +921,7 @@ mod tests {
         assert!(err.message().contains("read-only"));
     }
 
-    // ===== delete_entry（只测只读拒绝分支，避免真实回收站副作用）=====
+    // ===== delete_entry（回收站分支只测只读拒绝，避免真实回收站副作用）=====
 
     #[test]
     fn delete_entry_rejects_readonly_path() {
@@ -910,8 +931,42 @@ mod tests {
         let file = git.join("HEAD");
         fs::write(&file, "ref").unwrap();
 
-        let err = svc().delete_entry(&path_str(&file)).unwrap_err();
+        let err = svc().delete_entry(&path_str(&file), false).unwrap_err();
         assert!(err.message().contains("read-only"));
+    }
+
+    #[test]
+    fn delete_entry_permanent_removes_file() {
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("gone.txt");
+        fs::write(&file, "bye").unwrap();
+
+        svc().delete_entry(&path_str(&file), true).unwrap();
+        assert!(!file.exists());
+    }
+
+    #[test]
+    fn delete_entry_permanent_removes_dir_recursively() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("nested");
+        fs::create_dir_all(dir.join("a/b")).unwrap();
+        fs::write(dir.join("a/b/deep.txt"), "x").unwrap();
+
+        svc().delete_entry(&path_str(&dir), true).unwrap();
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn delete_entry_permanent_rejects_readonly_path() {
+        let tmp = TempDir::new().unwrap();
+        let nm = tmp.path().join("node_modules");
+        fs::create_dir(&nm).unwrap();
+        let file = nm.join("pkg.json");
+        fs::write(&file, "{}").unwrap();
+
+        let err = svc().delete_entry(&path_str(&file), true).unwrap_err();
+        assert!(err.message().contains("read-only"));
+        assert!(file.exists());
     }
 
     // ===== get_entry_info =====

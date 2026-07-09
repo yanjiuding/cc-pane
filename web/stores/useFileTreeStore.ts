@@ -35,7 +35,7 @@ interface FileTreeState {
   // CRUD 操作后自动刷新父目录
   createFile: (parentDir: string, name: string, rootPath: string) => Promise<void>;
   createDirectory: (parentDir: string, name: string, rootPath: string) => Promise<void>;
-  deleteEntry: (path: string, rootPath: string) => Promise<void>;
+  deleteEntry: (path: string, rootPath: string, permanent?: boolean) => Promise<void>;
   renameEntry: (oldPath: string, newName: string, rootPath: string) => Promise<void>;
   copyEntry: (src: string, destDir: string, rootPath: string) => Promise<void>;
   moveEntry: (src: string, destDir: string, rootPath: string) => Promise<void>;
@@ -290,8 +290,8 @@ export const useFileTreeStore = create<FileTreeState>()(
       await get().refresh(rootPath, parentDirPath);
     },
 
-    deleteEntry: async (path, rootPath) => {
-      await filesystemService.deleteEntry(path);
+    deleteEntry: async (path, rootPath, permanent = false) => {
+      await filesystemService.deleteEntry(path, permanent);
       const parent = parentDir(path);
       await get().refresh(rootPath, parent);
     },

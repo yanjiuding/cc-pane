@@ -1,5 +1,5 @@
 export { formatRelativeTime, formatFullTime, formatSize } from "./format";
-export { getFileName, getDirName, getProjectName, toWslPath } from "./path";
+export { getFileName, getDirName, getProjectName, toWslPath, isWslUncPath } from "./path";
 export {
   buildSshConnectionDisplayPath,
   buildSshDisplayPath,
@@ -18,7 +18,7 @@ export {
 export { buildLaunchRecordTerminalOptions } from "./launchHistory";
 export { parseEnvLines, formatEnvLines } from "./env";
 export { handleError, handleErrorSilent } from "./errorHandler";
-export { translateError } from "./errorTranslation";
+export { translateError, getErrorCode } from "./errorTranslation";
 export { isTauriRuntime, isWebRuntime } from "@/services/runtime";
 
 /**

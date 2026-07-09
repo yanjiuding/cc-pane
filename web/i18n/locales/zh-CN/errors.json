@@ -6,6 +6,7 @@
   "PATH_NOT_FOUND": "路径不存在",
   "PATH_ALREADY_EXISTS": "路径已存在: {{path}}",
   "PATH_NOT_DIRECTORY": "路径不是目录",
+  "TRASH_FAILED": "无法移入回收站（文件可能被占用，或该位置没有回收站）：{{detail}}",
 
   "WORKSPACE_NOT_FOUND": "工作空间 '{{name}}' 不存在",
   "WORKSPACE_NAME_EMPTY": "工作空间名称不能为空",

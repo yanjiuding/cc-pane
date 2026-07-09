@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { handleError } from "@/utils";
+import { handleError, getErrorCode, isWslUncPath } from "@/utils";
 import {
   ContextMenu, ContextMenuContent, ContextMenuItem,
   ContextMenuTrigger, ContextMenuSeparator,
@@ -10,6 +10,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/sidebar/WorkspaceDialogs";
 import { Input } from "@/components/ui/input";
 import {
   FileEdit, Trash2, Copy, Move, FolderPlus, FilePlus,
@@ -43,6 +44,8 @@ export default function FileTreeContextMenu({
 
   // 删除确认对话框状态
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  // 回收站不可用时的永久删除二次确认
+  const [confirmPermanentOpen, setConfirmPermanentOpen] = useState(false);
   const pendingDeleteNodeRef = useRef<FileTreeNode | null>(null);
 
   const deleteEntry = useFileTreeStore((s) => s.deleteEntry);
@@ -105,13 +108,34 @@ export default function FileTreeContextMenu({
   const doDelete = useCallback(async () => {
     const n = pendingDeleteNodeRef.current;
     if (!n) return;
+    // WSL UNC 路径没有回收站，trash 必然失败且有秒级延迟，直接永久删除
+    const permanent = isWslUncPath(n.entry.path);
     try {
-      await deleteEntry(n.entry.path, rootPath);
+      await deleteEntry(n.entry.path, rootPath, permanent);
+      toast.success(t("sidebar:filetree.deleted", { name: n.entry.name }));
+    } catch (err) {
+      if (getErrorCode(err) === "TRASH_FAILED") {
+        // 回收站不可用（占用/无回收站卷）→ 保留待删节点，转入永久删除确认
+        setConfirmDeleteOpen(false);
+        setConfirmPermanentOpen(true);
+        return;
+      }
+      handleError(err, "delete entry");
+    }
+    setConfirmDeleteOpen(false);
+    pendingDeleteNodeRef.current = null;
+  }, [rootPath, deleteEntry, t]);
+
+  const doPermanentDelete = useCallback(async () => {
+    const n = pendingDeleteNodeRef.current;
+    if (!n) return;
+    try {
+      await deleteEntry(n.entry.path, rootPath, true);
       toast.success(t("sidebar:filetree.deleted", { name: n.entry.name }));
     } catch (err) {
       handleError(err, "delete entry");
     }
-    setConfirmDeleteOpen(false);
+    setConfirmPermanentOpen(false);
     pendingDeleteNodeRef.current = null;
   }, [rootPath, deleteEntry, t]);
 
@@ -297,6 +321,9 @@ export default function FileTreeContextMenu({
             </DialogTitle>
             <DialogDescription>
               {t("sidebar:filetree.deleteConfirm", { name: pendingDeleteNodeRef.current?.entry.name ?? "" })}
+              {isWslUncPath(pendingDeleteNodeRef.current?.entry.path) && (
+                <> {t("sidebar:filetree.deleteNoTrashHint")}</>
+              )}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -312,6 +339,21 @@ export default function FileTreeContextMenu({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* 回收站不可用 → 永久删除二次确认 */}
+      <ConfirmDialog
+        open={confirmPermanentOpen}
+        setOpen={(v) => {
+          setConfirmPermanentOpen(v);
+          if (!v) pendingDeleteNodeRef.current = null;
+        }}
+        title={t("sidebar:filetree.permanentDeleteTitle")}
+        description={t("sidebar:filetree.permanentDeleteConfirm", {
+          name: pendingDeleteNodeRef.current?.entry.name ?? "",
+        })}
+        onConfirm={doPermanentDelete}
+        variant="destructive"
+      />
     </>
   );
 }

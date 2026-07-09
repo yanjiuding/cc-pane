@@ -42,10 +42,10 @@ export const filesystemService = {
     );
   },
 
-  /** 删除文件/目录（移到回收站） */
-  deleteEntry(path: string): Promise<void> {
-    return invokeOrApi<void>("fs_delete_entry", { path }, () =>
-      apiJson<void>("/api/fs/delete", "POST", { path }),
+  /** 删除文件/目录（默认移到回收站；permanent 为 true 时永久删除） */
+  deleteEntry(path: string, permanent = false): Promise<void> {
+    return invokeOrApi<void>("fs_delete_entry", { path, permanent }, () =>
+      apiJson<void>("/api/fs/delete", "POST", { path, permanent }),
     );
   },
 

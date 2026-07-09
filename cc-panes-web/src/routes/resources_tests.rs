@@ -585,14 +585,17 @@ async fn filesystem_routes_match_core_service_operations() {
     .expect("entry info");
     assert!(info.is_file);
 
+    // permanent 删除：避免测试往真实回收站丢文件
     fs_delete_entry(
         State(state),
-        Json(FsCreateRequest {
+        Json(FsDeleteRequest {
             path: file.to_string_lossy().to_string(),
+            permanent: true,
         }),
     )
     .await
     .expect("delete file");
+    assert!(!file.exists());
 }
 
 #[tokio::test]

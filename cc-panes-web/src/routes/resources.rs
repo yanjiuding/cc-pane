@@ -136,6 +136,14 @@ pub struct FsCreateRequest {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct FsDeleteRequest {
+    pub path: String,
+    #[serde(default)]
+    pub permanent: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FsRenameRequest {
     pub old_path: String,
     pub new_name: String,
@@ -663,11 +671,11 @@ pub async fn fs_create_directory(
 
 pub async fn fs_delete_entry(
     State(state): State<AppState>,
-    Json(req): Json<FsCreateRequest>,
+    Json(req): Json<FsDeleteRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     state
         .filesystem_service
-        .delete_entry(&req.path)
+        .delete_entry(&req.path, req.permanent)
         .map_err(service_error)?;
     Ok(StatusCode::NO_CONTENT)
 }

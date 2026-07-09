@@ -48,9 +48,16 @@ pub fn fs_create_directory(
 }
 
 #[tauri::command]
-pub fn fs_delete_entry(path: String, service: State<'_, Arc<FileSystemService>>) -> AppResult<()> {
-    debug!("cmd::fs_delete_entry path={}", path);
-    service.delete_entry(&path)
+pub fn fs_delete_entry(
+    path: String,
+    permanent: Option<bool>,
+    service: State<'_, Arc<FileSystemService>>,
+) -> AppResult<()> {
+    debug!(
+        "cmd::fs_delete_entry path={} permanent={:?}",
+        path, permanent
+    );
+    service.delete_entry(&path, permanent.unwrap_or(false))
 }
 
 #[tauri::command]

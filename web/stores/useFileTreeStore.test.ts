@@ -397,10 +397,26 @@ describe("useFileTreeStore", () => {
 
       expect(mockInvoke).toHaveBeenCalledWith("fs_delete_entry", {
         path: "/root/a.txt",
+        permanent: false,
       });
       expect(mockInvoke).toHaveBeenCalledWith("fs_list_directory", {
         path: "/root",
         showHidden: false,
+      });
+    });
+
+    it("deleteEntry 传 permanent=true 应透传到命令", async () => {
+      seedLoadedTree();
+      mockTauriInvoke({
+        fs_delete_entry: undefined,
+        fs_list_directory: listing("/root", []),
+      });
+
+      await useFileTreeStore.getState().deleteEntry("/root/a.txt", "/root", true);
+
+      expect(mockInvoke).toHaveBeenCalledWith("fs_delete_entry", {
+        path: "/root/a.txt",
+        permanent: true,
       });
     });
 

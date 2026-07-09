@@ -83,12 +83,26 @@ describe("filesystemService", () => {
   });
 
   describe("deleteEntry", () => {
-    it("应该调用 fs_delete_entry", async () => {
+    it("应该调用 fs_delete_entry（默认非永久删除）", async () => {
       mockTauriInvoke({ fs_delete_entry: undefined });
 
       await filesystemService.deleteEntry("/tmp/old.txt");
 
-      expect(invoke).toHaveBeenCalledWith("fs_delete_entry", { path: "/tmp/old.txt" });
+      expect(invoke).toHaveBeenCalledWith("fs_delete_entry", {
+        path: "/tmp/old.txt",
+        permanent: false,
+      });
+    });
+
+    it("应该透传 permanent=true", async () => {
+      mockTauriInvoke({ fs_delete_entry: undefined });
+
+      await filesystemService.deleteEntry("/tmp/old.txt", true);
+
+      expect(invoke).toHaveBeenCalledWith("fs_delete_entry", {
+        path: "/tmp/old.txt",
+        permanent: true,
+      });
     });
   });
 

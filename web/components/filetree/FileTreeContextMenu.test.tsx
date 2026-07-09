@@ -215,7 +215,7 @@ describe("FileTreeContextMenu", () => {
 
     await user.click(screen.getByRole("button", { name: i18n.t("common:delete") }));
     await waitFor(() => {
-      expect(actions.deleteEntry).toHaveBeenCalledWith(`${ROOT}\\src\\app.ts`, ROOT);
+      expect(actions.deleteEntry).toHaveBeenCalledWith(`${ROOT}\\src\\app.ts`, ROOT, false);
     });
   });
 

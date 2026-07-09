@@ -6,6 +6,7 @@
   "PATH_NOT_FOUND": "Path not found",
   "PATH_ALREADY_EXISTS": "Path already exists: {{path}}",
   "PATH_NOT_DIRECTORY": "Path is not a directory",
+  "TRASH_FAILED": "Cannot move to Recycle Bin (the file may be in use, or this location has no Recycle Bin): {{detail}}",
 
   "WORKSPACE_NOT_FOUND": "Workspace '{{name}}' not found",
   "WORKSPACE_NAME_EMPTY": "Workspace name cannot be empty",
