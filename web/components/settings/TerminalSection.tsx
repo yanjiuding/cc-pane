@@ -1,7 +1,9 @@
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import type { TerminalSettings } from "@/types";
+import { terminalService } from "@/services/terminalService";
+import type { ShellInfo, TerminalSettings } from "@/types";
 
 interface TerminalSectionProps {
   value: TerminalSettings;
@@ -10,10 +12,29 @@ interface TerminalSectionProps {
 
 export default function TerminalSection({ value, onChange }: TerminalSectionProps) {
   const { t } = useTranslation("settings");
+  const [shells, setShells] = useState<ShellInfo[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    terminalService
+      .getAvailableShells()
+      .then((list) => {
+        if (!cancelled) setShells(list);
+      })
+      .catch(() => {
+        // 拿不到列表时保持空数组，UI 降级为文本输入
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   function update<K extends keyof TerminalSettings>(key: K, v: TerminalSettings[K]) {
     onChange({ ...value, [key]: v });
   }
+
+  // 当前值不在探测列表里（历史遗留的自定义路径等）也要保留为可选项，避免打开设置就把它冲掉
+  const shellIsCustom = !!value.shell && !shells.some((s) => s.id === value.shell);
 
   return (
     <div className="flex flex-col gap-3">
@@ -111,11 +132,32 @@ export default function TerminalSection({ value, onChange }: TerminalSectionProp
 
         <div className="flex flex-col gap-1 flex-1">
           <Label>Shell</Label>
-          <Input
-            value={value.shell ?? ""}
-            onChange={(e) => update("shell", e.target.value || null)}
-            placeholder={t("shellAutoDetect")}
-          />
+          {shells.length > 0 ? (
+            <select
+              value={value.shell ?? ""}
+              onChange={(e) => update("shell", e.target.value || null)}
+              className="h-9 px-2 rounded-md text-[13px] outline-none"
+              style={{
+                border: "1px solid var(--app-border)",
+                background: "var(--app-content)",
+                color: "var(--app-text-primary)",
+              }}
+            >
+              <option value="">{t("shellAutoDetect")}</option>
+              {shells.map((shell) => (
+                <option key={shell.id} value={shell.id} title={shell.path}>
+                  {shell.name}
+                </option>
+              ))}
+              {shellIsCustom && <option value={value.shell!}>{value.shell}</option>}
+            </select>
+          ) : (
+            <Input
+              value={value.shell ?? ""}
+              onChange={(e) => update("shell", e.target.value || null)}
+              placeholder={t("shellAutoDetect")}
+            />
+          )}
         </div>
       </div>
 

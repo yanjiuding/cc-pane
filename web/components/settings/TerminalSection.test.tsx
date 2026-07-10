@@ -1,9 +1,22 @@
 import "@/i18n";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
-import type { TerminalSettings } from "@/types";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ShellInfo, TerminalSettings } from "@/types";
 import TerminalSection from "./TerminalSection";
+import { terminalService } from "@/services/terminalService";
+
+vi.mock("@/services/terminalService", () => ({
+  terminalService: {
+    getAvailableShells: vi.fn().mockResolvedValue([]),
+  },
+}));
+
+const mockGetAvailableShells = vi.mocked(terminalService.getAvailableShells);
+
+function mockShells(shells: ShellInfo[]) {
+  mockGetAvailableShells.mockResolvedValue(shells);
+}
 
 function createValue(overrides: Partial<TerminalSettings> = {}): TerminalSettings {
   return {
@@ -24,6 +37,10 @@ function createValue(overrides: Partial<TerminalSettings> = {}): TerminalSetting
 }
 
 describe("TerminalSection", () => {
+  beforeEach(() => {
+    mockGetAvailableShells.mockResolvedValue([]);
+  });
+
   it("emits fontSize changes as numbers", () => {
     const onChange = vi.fn();
     render(<TerminalSection value={createValue()} onChange={onChange} />);
@@ -88,6 +105,40 @@ describe("TerminalSection", () => {
     fireEvent.change(screen.getByDisplayValue("pwsh"), { target: { value: "" } });
 
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ shell: null }));
+  });
+
+  it("renders detected shells as a dropdown and emits the selected id", async () => {
+    mockShells([
+      { id: "pwsh", name: "PowerShell 7", path: "C:\\pwsh.exe" },
+      { id: "cmd", name: "Command Prompt", path: "C:\\Windows\\cmd.exe" },
+    ]);
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<TerminalSection value={createValue()} onChange={onChange} />);
+
+    // 等下拉框出现（shell 列表异步加载）
+    const option = await screen.findByRole("option", { name: "PowerShell 7" });
+    expect(option).toBeInTheDocument();
+
+    const shellSelect = (await screen.findByRole("option", { name: "Command Prompt" }))
+      .closest("select")!;
+    await user.selectOptions(shellSelect, "cmd");
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ shell: "cmd" }));
+
+    // 选回自动探测 → null
+    await user.selectOptions(shellSelect, "");
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ shell: null }));
+  });
+
+  it("keeps a custom shell value selectable when it is not in the detected list", async () => {
+    mockShells([{ id: "pwsh", name: "PowerShell 7", path: "C:\\pwsh.exe" }]);
+    const onChange = vi.fn();
+    render(
+      <TerminalSection value={createValue({ shell: "D:\\tools\\nu.exe" })} onChange={onChange} />,
+    );
+
+    const custom = await screen.findByRole("option", { name: "D:\\tools\\nu.exe" });
+    expect((custom as HTMLOptionElement).selected).toBe(true);
   });
 
   it("treats a null resumeIdBackfillEnabled as unchecked and toggles it on", async () => {

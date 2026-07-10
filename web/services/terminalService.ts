@@ -12,6 +12,7 @@ import type {
   CreateSessionRequest,
   ResizeRequest,
   EnvironmentInfo,
+  ShellInfo,
   TerminalStatusInfo,
   TerminalSessionOutput,
 } from "@/types";
@@ -625,6 +626,11 @@ export const terminalService = {
   /** 获取 Windows Build Number（用于 xterm.js windowsPty 配置） */
   async getWindowsBuildNumber(): Promise<number> {
     return invokeOrApi<number>("get_windows_build_number", undefined, async () => 0);
+  },
+
+  /** 获取本机可用 Shell 列表（Web 运行时无对应接口，返回空列表由 UI 降级为文本输入） */
+  async getAvailableShells(): Promise<ShellInfo[]> {
+    return invokeOrApi<ShellInfo[]>("get_available_shells", undefined, async () => []);
   },
 
   /** 检测开发环境（Node.js + CLI 工具） */
