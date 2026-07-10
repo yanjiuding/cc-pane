@@ -875,6 +875,12 @@ interface PanesState {
   /** Collect terminal tabs that can be restored after restart. */
   getRestorableTabs: () => Array<{ tab: Tab; paneId: string; layoutId: string }>;
   setBackgroundRestoreSession: (tabId: string, savedSessionId: string) => void;
+  /**
+   * 收集所有布局（含星标布局与非当前布局）中被 tab 引用的 sessionId 集合，
+   * 供孤儿会话对账使用。同时收 sessionId 与 savedSessionId（rehydrate 后
+   * live id 会被搬进 savedSessionId），tab 级与 terminalRootPane leaf 级都算。
+   */
+  collectReferencedSessionIds: () => Set<string>;
 }
 
 const initialPanel = createPanel();
@@ -2578,6 +2584,28 @@ export const usePanesStore = create<PanesState>()(
         }
       });
       return result;
+    },
+
+    collectReferencedSessionIds: () => {
+      const referenced = new Set<string>();
+      const state = get();
+      // 不用 eachLayoutTree：它跳过星标布局，而星标布局里的 tab 同样引用会话。
+      for (const layout of state.layouts) {
+        const tree = layout.id === state.currentLayoutId ? state.rootPane : layout.rootPane;
+        if (!tree) continue;
+        for (const panel of collectPanels(tree)) {
+          for (const tab of panel.tabs) {
+            if (tab.contentType !== "terminal") continue;
+            if (tab.sessionId) referenced.add(tab.sessionId);
+            if (tab.savedSessionId) referenced.add(tab.savedSessionId);
+            for (const leaf of collectTerminalLeaves(tab.terminalRootPane)) {
+              if (leaf.sessionId) referenced.add(leaf.sessionId);
+              if (leaf.savedSessionId) referenced.add(leaf.savedSessionId);
+            }
+          }
+        }
+      }
+      return referenced;
     },
 
     setBackgroundRestoreSession: (tabId, savedSessionId) => {

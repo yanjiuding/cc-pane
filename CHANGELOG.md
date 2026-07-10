@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Orphaned daemon terminal sessions no longer accumulate forever and burn CPU (idle TUI redraw kept flowing through the full PTY→sanitize→emit→xterm pipeline; on one machine 56 of 69 sessions had no panel referencing them). The desktop app now reconciles every 10 minutes (first sweep 5 minutes after launch): daemon sessions not referenced by any tab across **all** layouts (including starred and non-current ones), Self-Chat, active runners, or live task bindings are killed — busy/initializing/waitingInput sessions are protected, sessions with activity in the last 10 minutes get a grace period, and at most 10 are reclaimed per sweep with an aggregated notification.
+
+### Changed
+
+- **Semantics change**: `daemonOrphanTtlMinutes = 0` no longer means "never expire". The daemon-side orphan reaper backstop now defaults to 24 hours (covers the window when the app isn't running), and existing configs with the old default `0` are migrated to 24h on load. To disable reaping entirely, use the new "Never reclaim orphaned sessions" toggle (`daemonOrphanReaperDisabled`) in Settings → Terminal.
+
 ## 0.10.14 - 2026-07-10
 
 ### Fixed
