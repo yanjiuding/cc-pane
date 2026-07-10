@@ -236,6 +236,21 @@ fix: repair Windows PTY resize handling
 docs: update README screenshots
 ```
 
+## 共创者
+
+感谢一起共建 CC-Panes 的伙伴：
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/zhengjunkj">
+        <img src="https://github.com/zhengjunkj.png" width="80" alt="zhengjunkj" /><br />
+        <sub><b>zhengjunkj</b></sub>
+      </a>
+    </td>
+  </tr>
+</table>
+
 ## License
 
 本项目使用 [GPL-3.0](LICENSE) 协议。

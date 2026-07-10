@@ -228,6 +228,21 @@ fix: repair Windows PTY resize handling
 docs: update README screenshots
 ```
 
+## Co-creators
+
+Thanks to the people building CC-Panes together:
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/zhengjunkj">
+        <img src="https://github.com/zhengjunkj.png" width="80" alt="zhengjunkj" /><br />
+        <sub><b>zhengjunkj</b></sub>
+      </a>
+    </td>
+  </tr>
+</table>
+
 ## License
 
 CC-Panes is licensed under [GPL-3.0](LICENSE).
