@@ -31,7 +31,8 @@ function createValue(overrides: Partial<TerminalSettings> = {}): TerminalSetting
     disableConptySanitize: null,
     resumeIdBackfillEnabled: null,
     daemonEnabled: false,
-    daemonOrphanTtlMinutes: 0,
+    daemonOrphanTtlMinutes: 1440,
+    daemonOrphanReaperDisabled: false,
     ...overrides,
   };
 }

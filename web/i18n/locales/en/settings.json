@@ -295,5 +295,9 @@
   "terminalDaemon": "Terminal session sharing (daemon)",
   "terminalDaemonHint": "Host PTYs in a standalone daemon so desktop, Web and mobile attach to the same live sessions. Takes effect after app restart.",
   "daemonOrphanTtl": "Unwatched session expiry (minutes)",
-  "daemonOrphanTtlHint": "0 keeps automatic cleanup disabled. When enabled, only idle sessions with no viewer and no recent output are reclaimed oldest-first. Applies within ~1 minute, no restart needed."
+  "daemonOrphanTtlHint": "Idle sessions with no viewer and no recent output are reclaimed oldest-first after this duration (default 24 hours). Applies within ~1 minute, no restart needed.",
+  "daemonOrphanReaperDisabled": "Never reclaim orphaned sessions",
+  "daemonOrphanReaperDisabledHint": "When checked the daemon never auto-reclaims unwatched sessions (replaces the old \"set expiry to 0\" semantics).",
+  "orphanSessionReclaimedTitle": "Orphaned sessions reclaimed",
+  "orphanSessionReclaimedBody": "Cleaned up {{count}} background terminal sessions with no panel reference."
 }

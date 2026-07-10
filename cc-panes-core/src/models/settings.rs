@@ -132,14 +132,21 @@ pub struct TerminalSettings {
     #[serde(default = "default_daemon_enabled")]
     pub daemon_enabled: bool,
     /// daemon 孤儿会话过期时间（分钟）：会话无人查看（无 WS 订阅且无 HTTP 访问）
-    /// 超过该时长后由 daemon 按先进先出回收。0 = 永不过期。改动无需重启 daemon，
-    /// 下一轮 sweep（约 60s）生效。
+    /// 超过该时长后由 daemon 按先进先出回收。改动无需重启 daemon，
+    /// 下一轮 sweep（约 60s）生效。要禁用回收请用 `daemon_orphan_reaper_disabled`，
+    /// 历史值 0（旧默认"永不过期"）会在 merge_missing_defaults 中升为默认 TTL。
     #[serde(default = "default_daemon_orphan_ttl_minutes")]
     pub daemon_orphan_ttl_minutes: u32,
+    /// 禁用 daemon 孤儿会话回收（true = 永不回收）。取代旧的"TTL=0 表示永不过期"语义。
+    #[serde(default)]
+    pub daemon_orphan_reaper_disabled: bool,
 }
 
 /// 孤儿会话 TTL 上限：7 天
 pub const MAX_DAEMON_ORPHAN_TTL_MINUTES: u32 = 7 * 24 * 60;
+
+/// 孤儿会话 TTL 默认值：24 小时
+pub const DEFAULT_DAEMON_ORPHAN_TTL_MINUTES: u32 = 24 * 60;
 
 impl TerminalSettings {
     pub fn merge_missing_defaults(&mut self) {
@@ -154,6 +161,11 @@ impl TerminalSettings {
         }
         if !matches!(self.renderer_mode.as_str(), "auto" | "webgl" | "dom") {
             self.renderer_mode = default_terminal_renderer_mode();
+        }
+        // 旧默认 0 =“永不过期”已废弃：无法区分显式 0 与旧默认落盘的 0，
+        // 一律升为默认 TTL；确要禁用的用户改用 daemon_orphan_reaper_disabled。
+        if self.daemon_orphan_ttl_minutes == 0 {
+            self.daemon_orphan_ttl_minutes = DEFAULT_DAEMON_ORPHAN_TTL_MINUTES;
         }
         if self.daemon_orphan_ttl_minutes > MAX_DAEMON_ORPHAN_TTL_MINUTES {
             self.daemon_orphan_ttl_minutes = MAX_DAEMON_ORPHAN_TTL_MINUTES;
@@ -174,7 +186,7 @@ fn default_daemon_enabled() -> bool {
 }
 
 fn default_daemon_orphan_ttl_minutes() -> u32 {
-    0
+    DEFAULT_DAEMON_ORPHAN_TTL_MINUTES
 }
 
 /// 快捷键设置
@@ -701,6 +713,7 @@ impl Default for TerminalSettings {
             resume_id_backfill_enabled: None,
             daemon_enabled: true,
             daemon_orphan_ttl_minutes: default_daemon_orphan_ttl_minutes(),
+            daemon_orphan_reaper_disabled: false,
         }
     }
 }
@@ -874,8 +887,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terminal_settings_without_orphan_ttl_defaults_to_disabled() {
-        // 老 config.toml 无该键时不报错，回落到保守默认：禁用自动回收。
+    fn terminal_settings_without_orphan_ttl_defaults_to_24h() {
+        // 老 config.toml 无该键时不报错，回落到默认 24h；禁用开关默认关闭。
         let toml_str = r#"
             fontSize = 15
             fontFamily = "monospace"
@@ -884,7 +897,11 @@ mod tests {
             scrollback = 20000
         "#;
         let settings: TerminalSettings = toml::from_str(toml_str).expect("parse legacy config");
-        assert_eq!(settings.daemon_orphan_ttl_minutes, 0);
+        assert_eq!(
+            settings.daemon_orphan_ttl_minutes,
+            DEFAULT_DAEMON_ORPHAN_TTL_MINUTES
+        );
+        assert!(!settings.daemon_orphan_reaper_disabled);
     }
 
     #[test]
@@ -898,14 +915,37 @@ mod tests {
             settings.daemon_orphan_ttl_minutes,
             MAX_DAEMON_ORPHAN_TTL_MINUTES
         );
+    }
 
-        // 0（永不过期）是合法值，不被 clamp
+    #[test]
+    fn merge_missing_defaults_migrates_legacy_zero_ttl_to_default() {
+        // 旧默认 0 =“永不过期”已废弃：无法区分显式 0 与旧默认落盘的 0，
+        // 一律升为默认 TTL；永不回收由 daemon_orphan_reaper_disabled 表达。
         let mut zero = TerminalSettings {
             daemon_orphan_ttl_minutes: 0,
             ..TerminalSettings::default()
         };
         zero.merge_missing_defaults();
-        assert_eq!(zero.daemon_orphan_ttl_minutes, 0);
+        assert_eq!(
+            zero.daemon_orphan_ttl_minutes,
+            DEFAULT_DAEMON_ORPHAN_TTL_MINUTES
+        );
+    }
+
+    #[test]
+    fn merge_missing_defaults_preserves_reaper_disabled_flag() {
+        let mut settings = TerminalSettings {
+            daemon_orphan_reaper_disabled: true,
+            daemon_orphan_ttl_minutes: 0,
+            ..TerminalSettings::default()
+        };
+        settings.merge_missing_defaults();
+        // 禁用开关保留；TTL 仍被迁移但不影响禁用语义（reaper 先查开关）
+        assert!(settings.daemon_orphan_reaper_disabled);
+        assert_eq!(
+            settings.daemon_orphan_ttl_minutes,
+            DEFAULT_DAEMON_ORPHAN_TTL_MINUTES
+        );
     }
 
     #[test]

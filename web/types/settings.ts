@@ -52,8 +52,10 @@ export interface TerminalSettings {
   resumeIdBackfillEnabled: boolean | null;
   /** 终端会话共享：PTY 托管到独立 daemon，桌面与 Web/移动端附着同一批会话。重启应用生效 */
   daemonEnabled: boolean;
-  /** daemon 孤儿会话过期时间（分钟）：无人查看超过该时长的会话按先进先出回收。0 = 永不过期。改动约 60s 内生效，无需重启 */
+  /** daemon 孤儿会话过期时间（分钟）：无人查看超过该时长的会话按先进先出回收。改动约 60s 内生效，无需重启。历史值 0 会被后端迁移为默认 24h */
   daemonOrphanTtlMinutes: number;
+  /** 禁用 daemon 孤儿会话回收（true = 永不回收）。取代旧的"TTL=0 表示永不过期"语义 */
+  daemonOrphanReaperDisabled: boolean;
 }
 
 /** Shell 信息 */

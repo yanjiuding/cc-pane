@@ -110,7 +110,8 @@ export function createTestSettings(overrides?: Partial<AppSettings>): AppSetting
       disableConptySanitize: null,
       resumeIdBackfillEnabled: null,
       daemonEnabled: false,
-      daemonOrphanTtlMinutes: 0,
+      daemonOrphanTtlMinutes: 1440,
+      daemonOrphanReaperDisabled: false,
     },
     shortcuts: { bindings: {} },
     general: {

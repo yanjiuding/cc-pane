@@ -137,7 +137,8 @@ export const useSettingsStore = create<SettingsState>((set) => ({
       disableConptySanitize: null,
       resumeIdBackfillEnabled: null,
       daemonEnabled: true,
-      daemonOrphanTtlMinutes: 0,
+      daemonOrphanTtlMinutes: 1440,
+      daemonOrphanReaperDisabled: false,
     },
     shortcuts: {
       bindings: {

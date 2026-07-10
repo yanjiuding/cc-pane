@@ -295,5 +295,9 @@
   "terminalDaemon": "终端会话共享（daemon）",
   "terminalDaemonHint": "PTY 托管到独立守护进程：桌面与 Web/手机端看到并操作同一批会话（无缝接力）。重启应用生效。",
   "daemonOrphanTtl": "无人查看会话过期（分钟）",
-  "daemonOrphanTtlHint": "0 表示禁用自动回收。启用后，仅回收无人查看、无近期输出且处于空闲状态的会话，按先进先出处理。改动约 1 分钟内生效，无需重启。"
+  "daemonOrphanTtlHint": "无人查看、无近期输出且处于空闲状态的会话超过该时长后按先进先出回收（默认 24 小时）。改动约 1 分钟内生效，无需重启。",
+  "daemonOrphanReaperDisabled": "永不回收孤儿会话",
+  "daemonOrphanReaperDisabledHint": "勾选后 daemon 不再自动回收无人查看的会话（取代旧的\"过期时间填 0\"语义）。",
+  "orphanSessionReclaimedTitle": "已回收孤儿会话",
+  "orphanSessionReclaimedBody": "清理了 {{count}} 个无面板引用的后台终端会话。"
 }

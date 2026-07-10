@@ -41,6 +41,16 @@ pub fn select_expired(
     expired.into_iter().map(|(id, _)| id.to_string()).collect()
 }
 
+/// 从设置解析本轮 sweep 的 TTL；返回 None 表示回收被禁用（显式开关或 TTL 为 0），跳过本轮。
+fn sweep_ttl(terminal: &cc_panes_core::models::settings::TerminalSettings) -> Option<Duration> {
+    if terminal.daemon_orphan_reaper_disabled || terminal.daemon_orphan_ttl_minutes == 0 {
+        return None;
+    }
+    Some(Duration::from_secs(
+        u64::from(terminal.daemon_orphan_ttl_minutes) * 60,
+    ))
+}
+
 fn is_reap_protected_status(status: SessionStatus) -> bool {
     status.is_busy()
         || matches!(
@@ -72,11 +82,11 @@ pub fn spawn_session_reaper(config: DaemonConfig, settings: Arc<SettingsService>
                 continue;
             }
         }
-        let ttl_minutes = settings.get_settings().terminal.daemon_orphan_ttl_minutes;
-        if ttl_minutes == 0 {
+        let terminal_settings = settings.get_settings().terminal;
+        let Some(ttl) = sweep_ttl(&terminal_settings) else {
             continue;
-        }
-        let ttl = Duration::from_secs(u64::from(ttl_minutes) * 60);
+        };
+        let ttl_minutes = terminal_settings.daemon_orphan_ttl_minutes;
 
         let sessions = match config.terminal_backend().get_all_status() {
             Ok(sessions) => sessions,
@@ -256,6 +266,25 @@ mod tests {
         ];
 
         assert!(select_expired(&entries, ttl, now, now_epoch_millis).is_empty());
+    }
+
+    #[test]
+    fn sweep_ttl_respects_disabled_flag_and_zero() {
+        use cc_panes_core::models::settings::TerminalSettings;
+
+        let mut terminal = TerminalSettings {
+            daemon_orphan_ttl_minutes: 120,
+            daemon_orphan_reaper_disabled: false,
+            ..TerminalSettings::default()
+        };
+        assert_eq!(sweep_ttl(&terminal), Some(Duration::from_secs(120 * 60)));
+
+        terminal.daemon_orphan_reaper_disabled = true;
+        assert_eq!(sweep_ttl(&terminal), None);
+
+        terminal.daemon_orphan_reaper_disabled = false;
+        terminal.daemon_orphan_ttl_minutes = 0;
+        assert_eq!(sweep_ttl(&terminal), None);
     }
 
     #[test]
