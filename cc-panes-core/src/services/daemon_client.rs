@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::models::CreateSessionRequest;
 use crate::models::TerminalReplaySnapshot;
+use crate::services::terminal_service::KillReason;
 use crate::services::terminal_service::SessionOutput;
 use crate::services::terminal_service::SessionStatus;
 use crate::services::SessionStatusInfo;
@@ -38,6 +39,9 @@ pub struct TerminalDaemonStatus {
     pub addr: String,
     pub started_at: u64,
     pub session_count: usize,
+    /// 桌面控制 WS 客户端数。`None` = 旧 daemon 无此字段（消费方应 fail-closed）。
+    #[serde(default)]
+    pub desktop_client_count: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -140,6 +144,16 @@ impl TerminalDaemonClient {
         )
     }
 
+    /// 客户端存在性控制连接 URL（kind: desktop 计入 desktopClientCount / web 不计入）
+    pub fn websocket_control_url(&self, kind: &str) -> String {
+        format!(
+            "ws://{}/ws/control?token={}&kind={}",
+            self.addr,
+            urlencoding::encode(&self.token),
+            urlencoding::encode(kind)
+        )
+    }
+
     pub fn health(&self) -> AppResult<()> {
         self.get_json::<serde_json::Value>("/api/health", false)
             .map(|_| ())
@@ -210,13 +224,17 @@ impl TerminalDaemonClient {
     }
 
     pub fn kill_session(&self, session_id: &str) -> AppResult<()> {
-        let response = self.request_with_timeout(
-            "DELETE",
-            &session_path(session_id, ""),
-            true,
-            None,
-            self.kill_timeout,
-        )?;
+        self.kill_session_with_reason(session_id, KillReason::Unknown)
+    }
+
+    /// 带来源的 kill。reason 走 query 参数：旧 daemon 忽略未知 query，天然向后兼容。
+    pub fn kill_session_with_reason(&self, session_id: &str, reason: KillReason) -> AppResult<()> {
+        let path = format!(
+            "{}?reason={}",
+            session_path(session_id, ""),
+            reason.as_str()
+        );
+        let response = self.request_with_timeout("DELETE", &path, true, None, self.kill_timeout)?;
         let (status, body) = split_http_response(&response)?;
         if !(200..300).contains(&status) {
             return Err(daemon_http_error(status, body));
@@ -692,7 +710,14 @@ mod tests {
             ),
             (
                 Box::new(|client| client.kill_session("session-1")),
-                "DELETE /api/sessions/session-1 HTTP/1.1",
+                "DELETE /api/sessions/session-1?reason=unknown HTTP/1.1",
+                "",
+            ),
+            (
+                Box::new(|client| {
+                    client.kill_session_with_reason("session-1", KillReason::OrphanReclaim)
+                }),
+                "DELETE /api/sessions/session-1?reason=orphan-reclaim HTTP/1.1",
                 "",
             ),
         ];

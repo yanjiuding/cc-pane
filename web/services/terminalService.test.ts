@@ -15,6 +15,76 @@ describe("terminalService", () => {
     _resetListenersForTest();
   });
 
+  describe("session-killed reason 分流", () => {
+    type KilledHandler = (event: {
+      payload: { sessionId: string; reason?: string };
+    }) => Promise<void> | void;
+
+    async function registerKilledListenerAndSession(sessionId: string) {
+      mockTauriInvoke({});
+      const exitCallback = vi.fn();
+      await terminalService.registerExit(sessionId, exitCallback);
+      const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+      const listenMock = vi.mocked(getCurrentWebview().listen);
+      const killedEntry = listenMock.mock.calls.find(([event]) => event === "session-killed");
+      expect(killedEntry).toBeDefined();
+      return { handler: killedEntry![1] as unknown as KilledHandler, exitCallback };
+    }
+
+    it("closes the tab for mcp / legacy no-reason kills", async () => {
+      const { handler } = await registerKilledListenerAndSession("s-mcp");
+      const closeTabBySessionId = vi.fn();
+      const { usePanesStore } = await import("@/stores/usePanesStore");
+      const getStateSpy = vi
+        .spyOn(usePanesStore, "getState")
+        .mockReturnValue({ closeTabBySessionId } as never);
+
+      await handler({ payload: { sessionId: "s-mcp", reason: "mcp" } });
+      await handler({ payload: { sessionId: "s-mcp" } });
+
+      expect(closeTabBySessionId).toHaveBeenCalledTimes(2);
+      getStateSpy.mockRestore();
+    });
+
+    it("keeps the tab and drives the exit callback for reclaim kills", async () => {
+      const { handler, exitCallback } = await registerKilledListenerAndSession("s-reclaim");
+      const closeTabBySessionId = vi.fn();
+      const { usePanesStore } = await import("@/stores/usePanesStore");
+      const getStateSpy = vi
+        .spyOn(usePanesStore, "getState")
+        .mockReturnValue({ closeTabBySessionId } as never);
+
+      await handler({ payload: { sessionId: "s-reclaim", reason: "orphan-reclaim" } });
+      await handler({ payload: { sessionId: "s-reclaim", reason: "daemon-reaper" } });
+
+      expect(closeTabBySessionId).not.toHaveBeenCalled();
+      expect(exitCallback).toHaveBeenCalledTimes(2);
+      expect(exitCallback).toHaveBeenCalledWith(-1);
+      getStateSpy.mockRestore();
+    });
+
+    it("still suppresses kills the frontend initiated itself", async () => {
+      const { handler } = await registerKilledListenerAndSession("s-self");
+      mockTauriInvoke({ kill_terminal_idempotent: undefined });
+      await terminalService.killSession("s-self", "orphan-reclaim");
+
+      const closeTabBySessionId = vi.fn();
+      const { usePanesStore } = await import("@/stores/usePanesStore");
+      const getStateSpy = vi
+        .spyOn(usePanesStore, "getState")
+        .mockReturnValue({ closeTabBySessionId } as never);
+
+      await handler({ payload: { sessionId: "s-self", reason: "mcp" } });
+
+      expect(closeTabBySessionId).not.toHaveBeenCalled();
+      expect(invoke).toHaveBeenCalledWith("kill_terminal_idempotent", {
+        sessionId: "s-self",
+        reason: "orphan-reclaim",
+      });
+      getStateSpy.mockRestore();
+    });
+  });
+
   describe("createSession", () => {
     it("calls create_terminal_session with a request object", async () => {
       mockTauriInvoke({ create_terminal_session: "session-1" });

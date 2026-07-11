@@ -36,6 +36,13 @@ enum DaemonStreamMessage {
         #[serde(rename = "exitCode")]
         exit_code: i32,
     },
+    Killed {
+        reason: Option<String>,
+    },
+    /// 未知消息类型兜底：新 daemon 增加消息类型时旧 app 不能因 serde 失败
+    /// 整条流退化为轮询。
+    #[serde(other)]
+    Unknown,
 }
 
 impl TerminalDaemonEventBridge {
@@ -175,6 +182,21 @@ impl TerminalDaemonEventBridge {
                 self.emit_terminal_exit_once(session_id, exit_code)?;
                 Ok(true)
             }
+            DaemonStreamMessage::Killed { reason } => {
+                // 转发 kill 事件给前端（daemon 模式下此前会被丢弃），
+                // 并照 Exit 路径 synthesize 退出状态：保留标签时终端能显示进程退出。
+                self.app_handle.emit(
+                    EV::SESSION_KILLED,
+                    serde_json::json!({
+                        "sessionId": session_id,
+                        "reason": reason.as_deref().unwrap_or("unknown"),
+                    }),
+                )?;
+                self.emit_terminal_status_once(synthesized_exited_status(session_id))?;
+                self.emit_terminal_exit_once(session_id, -1)?;
+                Ok(true)
+            }
+            DaemonStreamMessage::Unknown => Ok(false),
         }
     }
 
@@ -450,6 +472,27 @@ mod tests {
             .expect("exit message")
         {
             DaemonStreamMessage::Exit { exit_code } => assert_eq!(exit_code, 7),
+            other => panic!("unexpected message: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn daemon_stream_message_parses_killed_and_tolerates_unknown_type() {
+        match serde_json::from_str::<DaemonStreamMessage>(
+            r#"{"type":"killed","reason":"orphan-reclaim"}"#,
+        )
+        .expect("killed message")
+        {
+            DaemonStreamMessage::Killed { reason } => {
+                assert_eq!(reason.as_deref(), Some("orphan-reclaim"))
+            }
+            other => panic!("unexpected message: {other:?}"),
+        }
+
+        match serde_json::from_str::<DaemonStreamMessage>(r#"{"type":"future-thing","x":1}"#)
+            .expect("unknown message must not fail")
+        {
+            DaemonStreamMessage::Unknown => {}
             other => panic!("unexpected message: {other:?}"),
         }
     }

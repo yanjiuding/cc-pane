@@ -2445,6 +2445,14 @@ export const usePanesStore = create<PanesState>()(
           for (const panel of collectPanels(tree)) {
             const tab = panel.tabs.find((item) => Boolean(findSessionInTab(item, sessionId)));
             if (!tab) continue;
+            // 这是唯一由后端事件驱动的关标签路径，必须留痕便于排障
+            console.info("[panes] closeTabBySessionId", {
+              sessionId,
+              layoutId: layout.id,
+              paneId: panel.id,
+              tabId: tab.id,
+              tabTitle: tab.title,
+            });
             const leaf = findSessionInTab(tab, sessionId);
             if (leaf && closeTerminalLeafInTab(tab, leaf.id)) {
               handled = true;

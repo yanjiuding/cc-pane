@@ -9,6 +9,8 @@ import { notificationService } from "@/services/notificationService";
 import { isTauriRuntime } from "@/services/runtime";
 import type { TerminalStatusInfo } from "@/types";
 
+const settingsState = vi.hoisted(() => ({ available: true, reapingDisabled: false }));
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
@@ -25,10 +27,25 @@ vi.mock("@/stores/useSelfChatStore", () => ({
   },
 }));
 
+vi.mock("@/stores/useSettingsStore", () => ({
+  useSettingsStore: {
+    getState: () => ({
+      settings: settingsState.available
+        ? {
+            terminal: {
+              daemonOrphanReaperDisabled: settingsState.reapingDisabled,
+            },
+          }
+        : null,
+    }),
+  },
+}));
+
 vi.mock("@/services/terminalService", () => ({
   terminalService: {
     getAllStatus: vi.fn(),
     killSession: vi.fn(),
+    getDaemonClientInfo: vi.fn(),
   },
 }));
 
@@ -69,12 +86,17 @@ function status(sessionId: string, ageMs: number): TerminalStatusInfo {
 describe("useOrphanSessionReconciler", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    settingsState.available = true;
+    settingsState.reapingDisabled = false;
     vi.mocked(isTauriRuntime).mockReturnValue(true);
     vi.mocked(usePanesStore.getState).mockReturnValue({
       collectReferencedSessionIds: () => new Set<string>(),
     } as unknown as ReturnType<typeof usePanesStore.getState>);
     vi.mocked(terminalService.getAllStatus).mockReset().mockResolvedValue([]);
     vi.mocked(terminalService.killSession).mockReset().mockResolvedValue();
+    vi.mocked(terminalService.getDaemonClientInfo)
+      .mockReset()
+      .mockResolvedValue({ mode: "daemon", desktopClientCount: 1 });
     vi.mocked(runnerService.listActiveInstances).mockReset().mockResolvedValue([]);
     vi.mocked(taskBindingService.query)
       .mockReset()
@@ -93,6 +115,26 @@ describe("useOrphanSessionReconciler", () => {
     renderHook(() => useOrphanSessionReconciler());
 
     await vi.advanceTimersByTimeAsync(FIRST_SWEEP_DELAY_MS + SWEEP_INTERVAL_MS);
+    expect(terminalService.getAllStatus).not.toHaveBeenCalled();
+  });
+
+  it("does not sweep when orphan reaping is disabled", async () => {
+    settingsState.reapingDisabled = true;
+    renderHook(() => useOrphanSessionReconciler());
+
+    await vi.advanceTimersByTimeAsync(FIRST_SWEEP_DELAY_MS + SWEEP_INTERVAL_MS);
+
+    expect(runnerService.listActiveInstances).not.toHaveBeenCalled();
+    expect(terminalService.getAllStatus).not.toHaveBeenCalled();
+  });
+
+  it("fails closed while settings are unavailable", async () => {
+    settingsState.available = false;
+    renderHook(() => useOrphanSessionReconciler());
+
+    await vi.advanceTimersByTimeAsync(FIRST_SWEEP_DELAY_MS + SWEEP_INTERVAL_MS);
+
+    expect(runnerService.listActiveInstances).not.toHaveBeenCalled();
     expect(terminalService.getAllStatus).not.toHaveBeenCalled();
   });
 
@@ -118,8 +160,8 @@ describe("useOrphanSessionReconciler", () => {
 
     await vi.advanceTimersByTimeAsync(FIRST_SWEEP_DELAY_MS);
 
-    expect(terminalService.killSession).toHaveBeenCalledWith("orphan-1");
-    expect(terminalService.killSession).toHaveBeenCalledWith("orphan-2");
+    expect(terminalService.killSession).toHaveBeenCalledWith("orphan-1", "orphan-reclaim");
+    expect(terminalService.killSession).toHaveBeenCalledWith("orphan-2", "orphan-reclaim");
     expect(notificationService.trigger).toHaveBeenCalledTimes(1);
   });
 
@@ -170,6 +212,102 @@ describe("useOrphanSessionReconciler", () => {
     renderHook(() => useOrphanSessionReconciler());
 
     await vi.advanceTimersByTimeAsync(FIRST_SWEEP_DELAY_MS);
+    expect(terminalService.killSession).not.toHaveBeenCalled();
+  });
+
+  it("skips the sweep when multiple desktop clients share the daemon", async () => {
+    vi.mocked(terminalService.getDaemonClientInfo).mockResolvedValue({
+      mode: "daemon",
+      desktopClientCount: 2,
+    });
+    vi.mocked(terminalService.getAllStatus).mockResolvedValue([
+      status("other-window-session", 60 * 60 * 1000),
+    ]);
+    renderHook(() => useOrphanSessionReconciler());
+
+    await vi.advanceTimersByTimeAsync(FIRST_SWEEP_DELAY_MS);
+
+    expect(terminalService.getAllStatus).not.toHaveBeenCalled();
+    expect(terminalService.killSession).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the daemon does not report a client count (old daemon)", async () => {
+    vi.mocked(terminalService.getDaemonClientInfo).mockResolvedValue({ mode: "daemon" });
+    vi.mocked(terminalService.getAllStatus).mockResolvedValue([
+      status("orphan", 60 * 60 * 1000),
+    ]);
+    renderHook(() => useOrphanSessionReconciler());
+
+    await vi.advanceTimersByTimeAsync(FIRST_SWEEP_DELAY_MS);
+    expect(terminalService.killSession).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the client info query throws", async () => {
+    vi.mocked(terminalService.getDaemonClientInfo).mockRejectedValue(new Error("ipc down"));
+    vi.mocked(terminalService.getAllStatus).mockResolvedValue([
+      status("orphan", 60 * 60 * 1000),
+    ]);
+    renderHook(() => useOrphanSessionReconciler());
+
+    await vi.advanceTimersByTimeAsync(FIRST_SWEEP_DELAY_MS);
+    expect(terminalService.killSession).not.toHaveBeenCalled();
+  });
+
+  it("sweeps normally for the in-process backend (sessions are instance-local)", async () => {
+    vi.mocked(terminalService.getDaemonClientInfo).mockResolvedValue({ mode: "in-process" });
+    vi.mocked(terminalService.getAllStatus).mockResolvedValue([
+      status("orphan", 60 * 60 * 1000),
+    ]);
+    renderHook(() => useOrphanSessionReconciler());
+
+    await vi.advanceTimersByTimeAsync(FIRST_SWEEP_DELAY_MS);
+    expect(terminalService.killSession).toHaveBeenCalledWith("orphan", "orphan-reclaim");
+  });
+
+  it("aborts the kill loop when a second desktop client appears mid-sweep", async () => {
+    vi.mocked(terminalService.getDaemonClientInfo)
+      .mockResolvedValueOnce({ mode: "daemon", desktopClientCount: 1 })
+      .mockResolvedValue({ mode: "daemon", desktopClientCount: 2 });
+    vi.mocked(terminalService.getAllStatus).mockResolvedValue([
+      status("orphan", 60 * 60 * 1000),
+    ]);
+    renderHook(() => useOrphanSessionReconciler());
+
+    await vi.advanceTimersByTimeAsync(FIRST_SWEEP_DELAY_MS);
+    expect(terminalService.getAllStatus).toHaveBeenCalled();
+    expect(terminalService.killSession).not.toHaveBeenCalled();
+  });
+
+  it("paginates task bindings before deciding a session is orphaned", async () => {
+    const firstPage = Array.from({ length: 200 }, (_, index) => ({
+      id: `pending-${index}`,
+    }));
+    vi.mocked(taskBindingService.query).mockImplementation(async (query = {}) => {
+      const { status, offset } = query;
+      if (status === "pending" && offset === 0) {
+        return { items: firstPage as never[], total: 201, hasMore: true };
+      }
+      if (status === "pending" && offset === 200) {
+        return {
+          items: [{ id: "pending-worker", sessionId: "paged-worker" } as never],
+          total: 201,
+          hasMore: false,
+        };
+      }
+      return { items: [], total: 0, hasMore: false };
+    });
+    vi.mocked(terminalService.getAllStatus).mockResolvedValue([
+      status("paged-worker", 60 * 60 * 1000),
+    ]);
+    renderHook(() => useOrphanSessionReconciler());
+
+    await vi.advanceTimersByTimeAsync(FIRST_SWEEP_DELAY_MS);
+
+    expect(taskBindingService.query).toHaveBeenCalledWith({
+      status: "pending",
+      limit: 200,
+      offset: 200,
+    });
     expect(terminalService.killSession).not.toHaveBeenCalled();
   });
 });

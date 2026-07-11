@@ -12,6 +12,8 @@ import type {
   CreateSessionRequest,
   ResizeRequest,
   EnvironmentInfo,
+  KillReason,
+  SessionKilledPayload,
   ShellInfo,
   TerminalStatusInfo,
   TerminalSessionOutput,
@@ -27,6 +29,13 @@ export interface TerminalReplaySnapshot {
 }
 
 export type TerminalWriteSource = "user-keyboard" | "mcp" | "system";
+
+/** 终端后端客户端信息（get_terminal_daemon_client_info 返回值） */
+export interface TerminalBackendClientInfo {
+  mode: "in-process" | "daemon";
+  /** daemon 模式下的桌面客户端数；缺失 = 旧 daemon（调用方应 fail-closed） */
+  desktopClientCount?: number;
+}
 
 export interface TerminalWriteOptions {
   source?: TerminalWriteSource;
@@ -298,14 +307,26 @@ export async function ensureListeners(): Promise<void> {
     }
   );
 
-  // MCP kill_session 场景：后端主动通知前端关闭标签
-  unlistenKilled = await webviewWindow.listen<{ sessionId: string }>(
+  // 后端主动 kill 的通知。按 reason 分流：
+  // user-close/mcp/缺失（旧后端）→ 关标签；
+  // orphan-reclaim/daemon-reaper → 保留标签显示进程退出——回收类 kill 可能
+  // 来自其他实例/daemon 对账，静默关标签会表现为"面板凭空消失"。
+  unlistenKilled = await webviewWindow.listen<SessionKilledPayload>(
     "session-killed",
     async (event) => {
-      const { sessionId } = event.payload;
+      const { sessionId, reason } = event.payload;
       // 前端主动 kill 的已经自己关了标签，跳过
       if (killedSessions.has(sessionId)) return;
-      // MCP kill：延迟 import 避免循环依赖
+      if (reason === "orphan-reclaim" || reason === "daemon-reaper") {
+        console.warn("[terminal] session-killed by reclaim; keeping tab", { sessionId, reason });
+        exitCallbacks.get(sessionId)?.(-1);
+        return;
+      }
+      console.info("[terminal] session-killed → closeTabBySessionId", {
+        sessionId,
+        reason: reason ?? "(legacy no-reason)",
+      });
+      // 延迟 import 避免循环依赖
       const { usePanesStore } = await import("@/stores/usePanesStore");
       usePanesStore.getState().closeTabBySessionId(sessionId);
     }
@@ -410,6 +431,10 @@ function parseWebSocketOutput(message: unknown): string {
     if (parsed.type === "output" && typeof parsed.data === "string") {
       return parsed.data;
     }
+    // 其他结构化消息（exit/killed/未来类型）不是终端输出，不能注入 xterm
+    if (typeof parsed.type === "string") {
+      return "";
+    }
   } catch {
     return message;
   }
@@ -419,6 +444,19 @@ function parseWebSocketOutput(message: unknown): string {
 // ── 服务对象 ──────────────────────────────────────────────
 
 export const terminalService = {
+  /**
+   * 终端后端客户端信息。孤儿对账据此判断是否可安全 sweep：
+   * daemon 且 desktopClientCount>1 = 多桌面实例共享 daemon，必须跳过。
+   */
+  async getDaemonClientInfo(): Promise<TerminalBackendClientInfo> {
+    return invokeOrApi<TerminalBackendClientInfo>(
+      "get_terminal_daemon_client_info",
+      {},
+      // web 镜像不跑对账；返回无计数的 daemon 模式让调用方 fail-closed
+      async () => ({ mode: "daemon" }),
+    );
+  },
+
   /** 创建终端会话 */
   async createSession(request: CreateSessionRequest | null | undefined): Promise<string> {
     assertCreateSessionRequest(request);
@@ -539,10 +577,11 @@ export const terminalService = {
     exitCallbacks.delete(sessionId);
   },
 
-  /** 完整终止 session：清除回调 + 缓冲 + 发送 kill IPC */
-  async killSession(sessionId: string): Promise<void> {
+  /** 完整终止 session：清除回调 + 缓冲 + 发送 kill IPC。reason 标注 kill 来源（缺省 user-close）。 */
+  async killSession(sessionId: string, reason?: KillReason): Promise<void> {
     debugTerminalService("session.kill", {
       sessionId,
+      reason: reason ?? "user-close",
       hadOutputCallback: outputCallbacks.has(sessionId),
       hadExitCallback: exitCallbacks.has(sessionId),
       pendingChunks: pendingBuffers.get(sessionId)?.length ?? 0,
@@ -555,8 +594,9 @@ export const terminalService = {
     // 幂等关闭：reload cleanup 常杀已退/不存在的 session，用 idempotent 命令把
     // NOT_FOUND / already-exited 视为成功，避免 [UNHANDLED REJECTION] Session not found。
     closeWebSocket(sessionId);
-    return invokeOrApi<void>("kill_terminal_idempotent", { sessionId }, async () => {
-      await apiDelete(`/api/sessions/${encodeURIComponent(sessionId)}`).catch(() => {});
+    return invokeOrApi<void>("kill_terminal_idempotent", { sessionId, reason }, async () => {
+      const query = reason ? `?reason=${encodeURIComponent(reason)}` : "";
+      await apiDelete(`/api/sessions/${encodeURIComponent(sessionId)}${query}`).catch(() => {});
     });
   },
 

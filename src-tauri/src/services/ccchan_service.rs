@@ -10,6 +10,7 @@ use cc_cli_adapters::{
     no_window_command, ClaudeAdapter, CliAdapterContext, CliProvider, CliToolAdapter, CodexAdapter,
 };
 use cc_panes_core::events::SessionNotifier;
+use cc_panes_core::services::terminal_service::KillReason;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -470,7 +471,7 @@ impl CCChanService {
         let session = self.clear_chat_session(session_id)?;
         match session {
             Some(ChatSessionState::Terminal { .. }) | None => {
-                match terminal_service.kill(session_id) {
+                match terminal_service.kill_with_reason(session_id, KillReason::UserClose) {
                     Ok(()) => {
                         info!(session_id, "ccchan chat stopped");
                         Ok(())
@@ -1110,21 +1111,23 @@ impl CCChanService {
         existing: ChatSessionState,
     ) {
         match existing {
-            ChatSessionState::Terminal { session_id } => match terminal_service.kill(&session_id) {
-                Ok(()) => {
-                    info!(
-                        session_id = %session_id,
-                        "ccchan replaced previous terminal chat session"
-                    );
+            ChatSessionState::Terminal { session_id } => {
+                match terminal_service.kill_with_reason(&session_id, KillReason::UserClose) {
+                    Ok(()) => {
+                        info!(
+                            session_id = %session_id,
+                            "ccchan replaced previous terminal chat session"
+                        );
+                    }
+                    Err(error) => {
+                        warn!(
+                            session_id = %session_id,
+                            error = %error,
+                            "ccchan failed to stop previous terminal chat session before replacement"
+                        );
+                    }
                 }
-                Err(error) => {
-                    warn!(
-                        session_id = %session_id,
-                        error = %error,
-                        "ccchan failed to stop previous terminal chat session before replacement"
-                    );
-                }
-            },
+            }
             ChatSessionState::ClaudeStructured { session_id, .. } => {
                 self.emit_chat_status(
                     &session_id,

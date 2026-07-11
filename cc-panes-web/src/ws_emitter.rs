@@ -91,6 +91,25 @@ impl EventEmitter for WsEmitter {
                     }
                 }
             }
+            "session-killed" => {
+                let reason = payload
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
+                let msg = serde_json::json!({
+                    "type": "killed",
+                    "reason": reason,
+                })
+                .to_string();
+
+                let subs = self.subscribers.read();
+                if let Some(senders) = subs.get(session_id) {
+                    for tx in senders {
+                        let _ = tx.send(msg.clone());
+                    }
+                }
+            }
             _ => {}
         }
         Ok(())

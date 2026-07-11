@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path as FsPath, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -14,13 +15,14 @@ use cc_panes_core::models::{
     CliTool, CreateSessionRequest as CoreCreateSessionRequest, LaunchProviderSelection,
     SshConnectionInfo, TerminalReplaySnapshot, WslLaunchInfo,
 };
-use cc_panes_core::services::terminal_service::{SessionOutput, SessionStatus};
+use cc_panes_core::services::terminal_service::{KillReason, SessionOutput, SessionStatus};
 use cc_panes_core::services::{SessionStatusInfo, TerminalBackend};
 use cc_panes_core::utils::{atomic_file, normalize_session_request_for_current_host};
 use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
+use tracing::info;
 
 use crate::ws_emitter::WsEmitter;
 
@@ -78,6 +80,7 @@ impl DaemonConfig {
                 ws_emitter,
                 default_cwd,
                 last_activity: parking_lot::RwLock::new(HashMap::new()),
+                desktop_control_clients: AtomicUsize::new(0),
             }),
         }
     }
@@ -104,6 +107,22 @@ impl DaemonConfig {
             addr: self.inner.addr.to_string(),
             started_at: self.inner.started_at,
             session_count,
+            desktop_client_count: self.desktop_client_count(),
+        }
+    }
+
+    /// 当前保持控制 WS 连接的桌面客户端数。前端孤儿对账据此 fail-closed：
+    /// >1 说明多个桌面实例共享本 daemon，任何单实例的"引用全集"都是残缺视图。
+    pub(crate) fn desktop_client_count(&self) -> usize {
+        self.inner.desktop_control_clients.load(Ordering::SeqCst)
+    }
+
+    fn register_desktop_client(&self) -> DesktopClientGuard {
+        self.inner
+            .desktop_control_clients
+            .fetch_add(1, Ordering::SeqCst);
+        DesktopClientGuard {
+            config: self.clone(),
         }
     }
 
@@ -165,6 +184,23 @@ struct DaemonState {
     /// 会话最后活跃时间（HTTP 访问 / WS 连接 / WS 入站输入均刷新），
     /// 供 session_reaper 做孤儿过期判定。
     last_activity: parking_lot::RwLock<HashMap<String, Instant>>,
+    /// 活跃桌面控制 WS 连接数（`/ws/control?kind=desktop`）。
+    /// 连接存活 = 该桌面实例仍可能发起 kill；web 客户端不计入。
+    desktop_control_clients: AtomicUsize,
+}
+
+/// RAII：控制 WS handler 退出（连接断开）即减一，实例崩溃也不会留下 stale 计数。
+struct DesktopClientGuard {
+    config: DaemonConfig,
+}
+
+impl Drop for DesktopClientGuard {
+    fn drop(&mut self) {
+        self.config
+            .inner
+            .desktop_control_clients
+            .fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -176,6 +212,9 @@ pub struct DaemonStatus {
     pub addr: String,
     pub started_at: u64,
     pub session_count: usize,
+    /// 旧 daemon 响应无此字段时反序列化为 0（serde default）
+    #[serde(default)]
+    pub desktop_client_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -287,6 +326,14 @@ pub struct WsQuery {
     pub token: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControlWsQuery {
+    pub token: Option<String>,
+    /// 客户端类型：desktop（默认，计入 desktopClientCount）/ web（不计入）
+    pub kind: Option<String>,
+}
+
 pub fn router(config: DaemonConfig) -> Router {
     Router::new()
         .route("/api/health", get(health))
@@ -306,6 +353,7 @@ pub fn router(config: DaemonConfig) -> Router {
         .route("/api/sessions/{id}/submit", post(submit_session))
         .route("/api/sessions/{id}/resize", post(resize_session))
         .route("/api/sessions/{id}", delete(kill_session))
+        .route("/ws/control", get(ws_control))
         .route("/ws/{id}", get(ws_session))
         .with_state(config)
 }
@@ -555,15 +603,22 @@ async fn get_session_snapshot(
     Ok(Json(snapshot))
 }
 
+#[derive(Deserialize)]
+struct KillQuery {
+    reason: Option<String>,
+}
+
 async fn kill_session(
     State(config): State<DaemonConfig>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(query): Query<KillQuery>,
 ) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
     authorize(&headers, config.token())?;
+    let reason = KillReason::parse(query.reason.as_deref());
     config
         .terminal_backend()
-        .kill(&id)
+        .kill_with_reason(&id, reason)
         .map_err(not_found_from_error)?;
     config.remove_session_activity(&id);
     Ok(StatusCode::NO_CONTENT)
@@ -587,6 +642,58 @@ async fn ws_session(
     }
 
     Ok(ws.on_upgrade(move |socket| handle_ws(socket, id, config)))
+}
+
+/// 客户端存在性控制连接：桌面实例启动后保持一条，daemon 据此统计
+/// `desktopClientCount`。不承载业务消息，仅回 ping/pong 维持连接。
+async fn ws_control(
+    State(config): State<DaemonConfig>,
+    Query(query): Query<ControlWsQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<impl IntoResponse, (StatusCode, Json<serde_json::Value>)> {
+    match query.token.as_deref() {
+        Some(token) if token == config.token() => {}
+        _ => {
+            return Err(json_error(
+                StatusCode::UNAUTHORIZED,
+                "UNAUTHORIZED",
+                "Invalid or missing token",
+            ));
+        }
+    }
+
+    let is_desktop = query.kind.as_deref().unwrap_or("desktop") == "desktop";
+    Ok(ws.on_upgrade(move |socket| handle_control_ws(socket, config, is_desktop)))
+}
+
+async fn handle_control_ws(mut socket: WebSocket, config: DaemonConfig, is_desktop: bool) {
+    let _guard = is_desktop.then(|| config.register_desktop_client());
+    if is_desktop {
+        info!(
+            desktop_client_count = config.desktop_client_count(),
+            "desktop control client connected"
+        );
+    }
+
+    while let Some(Ok(msg)) = socket.next().await {
+        match msg {
+            Message::Ping(payload) => {
+                if socket.send(Message::Pong(payload)).await.is_err() {
+                    break;
+                }
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+
+    if is_desktop {
+        // guard 在函数返回时 drop，这里先打日志（-1 生效前的计数减一即最终值）
+        info!(
+            desktop_client_count = config.desktop_client_count().saturating_sub(1),
+            "desktop control client disconnected"
+        );
+    }
 }
 
 async fn handle_ws(socket: WebSocket, session_id: String, config: DaemonConfig) {
@@ -719,6 +826,7 @@ mod tests {
         submits: Mutex<Vec<(String, String)>>,
         resizes: Mutex<Vec<(String, u16, u16)>>,
         kills: Mutex<Vec<String>>,
+        kill_reasons: Mutex<Vec<(String, KillReason)>>,
         hook_statuses: Mutex<Vec<(String, SessionStatus)>>,
     }
 
@@ -755,6 +863,14 @@ mod tests {
         fn kill(&self, session_id: &str) -> AppResult<()> {
             self.kills.lock().unwrap().push(session_id.to_string());
             Ok(())
+        }
+
+        fn kill_with_reason(&self, session_id: &str, reason: KillReason) -> AppResult<()> {
+            self.kill_reasons
+                .lock()
+                .unwrap()
+                .push((session_id.to_string(), reason));
+            self.kill(session_id)
         }
 
         fn get_all_status(&self) -> AppResult<Vec<SessionStatusInfo>> {
@@ -889,6 +1005,69 @@ mod tests {
         assert_eq!(status.status, "ok");
         assert_eq!(status.addr, "127.0.0.1:18082");
         assert_eq!(status.session_count, 0);
+    }
+
+    #[tokio::test]
+    async fn kill_route_forwards_reason_query_and_defaults_to_unknown() {
+        let backend = Arc::new(MockTerminalBackend::default());
+        let config = test_config("secret", "127.0.0.1:18090", backend.clone());
+        let app = router(config);
+
+        let with_reason = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/sessions/session-1?reason=orphan-reclaim")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(with_reason.status(), StatusCode::NO_CONTENT);
+
+        let without_reason = app
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri("/api/sessions/session-2")
+                    .header(header::AUTHORIZATION, "Bearer secret")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(without_reason.status(), StatusCode::NO_CONTENT);
+
+        let reasons = backend.kill_reasons.lock().unwrap().clone();
+        assert_eq!(
+            reasons,
+            vec![
+                ("session-1".to_string(), KillReason::OrphanReclaim),
+                ("session-2".to_string(), KillReason::Unknown),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn status_reports_desktop_control_client_count() {
+        let config = test_config(
+            "secret",
+            "127.0.0.1:18091",
+            Arc::new(MockTerminalBackend::default()),
+        );
+
+        assert_eq!(config.status().desktop_client_count, 0);
+
+        let guard_a = config.register_desktop_client();
+        let guard_b = config.register_desktop_client();
+        assert_eq!(config.status().desktop_client_count, 2);
+
+        drop(guard_a);
+        assert_eq!(config.status().desktop_client_count, 1);
+        drop(guard_b);
+        assert_eq!(config.status().desktop_client_count, 0);
     }
 
     #[tokio::test]

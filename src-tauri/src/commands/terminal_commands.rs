@@ -1,7 +1,7 @@
 use crate::models::TerminalReplaySnapshot;
 use crate::models::{CreateSessionRequest, ResizeRequest};
 use crate::services::terminal_service;
-use crate::services::terminal_service::SessionOutput;
+use crate::services::terminal_service::{KillReason, SessionOutput};
 use crate::services::{
     SessionStatusInfo, ShellInfo, TerminalBackendKind, TerminalBackendState,
     TerminalDaemonEventBridge, TerminalService,
@@ -158,17 +158,30 @@ pub fn resize_terminal(
         .resize(&request.session_id, request.cols, request.rows)
 }
 
+/// 前端未标注来源时默认 user-close：kill_terminal 的既有调用方
+/// （关标签/关面板/快捷键）全部是用户操作。
+fn resolve_kill_reason(reason: Option<String>) -> KillReason {
+    match reason {
+        Some(value) => KillReason::parse(Some(value.as_str())),
+        None => KillReason::UserClose,
+    }
+}
+
 /// 关闭终端会话（async + spawn_blocking 防止阻塞主线程）
 #[tauri::command]
 pub async fn kill_terminal(
     service: State<'_, Arc<TerminalBackendState>>,
     session_id: String,
+    reason: Option<String>,
 ) -> AppResult<()> {
     debug!(session_id = %session_id, "cmd::kill_terminal");
     let backend = service.backend();
-    let result = tauri::async_runtime::spawn_blocking(move || backend.kill(&session_id))
-        .await
-        .map_err(|e| AppError::from(e.to_string()))?;
+    let kill_reason = resolve_kill_reason(reason);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        backend.kill_with_reason(&session_id, kill_reason)
+    })
+    .await
+    .map_err(|e| AppError::from(e.to_string()))?;
     result
 }
 
@@ -177,18 +190,51 @@ pub async fn kill_terminal(
 pub async fn kill_terminal_idempotent(
     service: State<'_, Arc<TerminalBackendState>>,
     session_id: String,
+    reason: Option<String>,
 ) -> AppResult<()> {
     debug!(session_id = %session_id, "cmd::kill_terminal_idempotent");
     let backend = service.backend();
     let sid = session_id.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || backend.kill(&sid))
-        .await
-        .map_err(|e| AppError::from(e.to_string()))?;
+    let kill_reason = resolve_kill_reason(reason);
+    let result =
+        tauri::async_runtime::spawn_blocking(move || backend.kill_with_reason(&sid, kill_reason))
+            .await
+            .map_err(|e| AppError::from(e.to_string()))?;
     match result {
         Ok(()) => Ok(()),
         Err(error) if is_idempotent_kill_error(&error) => Ok(()),
         Err(error) => Err(AppError::from(error.to_string())),
     }
+}
+
+/// 终端后端客户端信息：孤儿会话对账据此判断是否可以安全 sweep。
+/// in-process 时会话为本实例独占（desktopClientCount 无意义）；
+/// daemon 模式下 count 缺失（旧 daemon 无控制 WS）时调用方应 fail-closed。
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalBackendClientInfo {
+    pub mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desktop_client_count: Option<usize>,
+}
+
+#[tauri::command]
+pub async fn get_terminal_daemon_client_info(
+    service: State<'_, Arc<TerminalBackendState>>,
+) -> AppResult<TerminalBackendClientInfo> {
+    let Some(client) = service.daemon_client() else {
+        return Ok(TerminalBackendClientInfo {
+            mode: "in-process",
+            desktop_client_count: None,
+        });
+    };
+    let status = tauri::async_runtime::spawn_blocking(move || client.status())
+        .await
+        .map_err(|e| AppError::from(e.to_string()))??;
+    Ok(TerminalBackendClientInfo {
+        mode: "daemon",
+        desktop_client_count: status.desktop_client_count,
+    })
 }
 
 /// 提交文本到会话：先写文本，短暂等待后单独发送 Enter。

@@ -91,6 +91,22 @@ impl EventEmitter for WsEmitter {
                     .to_string(),
                 );
             }
+            "session-killed" => {
+                // kill 事件必须到达前端：user/mcp 关标签，orphan-reclaim/daemon-reaper
+                // 保留标签显示退出。丢弃会导致 daemon 模式下 kill 对前端不可见。
+                let reason = payload
+                    .get("reason")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown");
+                self.publish(
+                    session_id,
+                    serde_json::json!({
+                        "type": "killed",
+                        "reason": reason,
+                    })
+                    .to_string(),
+                );
+            }
             _ => {}
         }
 
@@ -138,6 +154,47 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&exit).expect("exit json"),
             serde_json::json!({"type":"exit","exitCode":7})
+        );
+    }
+
+    #[test]
+    fn publishes_session_killed_with_reason_to_subscribers() {
+        let emitter = WsEmitter::new();
+        let mut rx = emitter.subscribe("session-1");
+
+        emitter
+            .emit(
+                EV::SESSION_KILLED,
+                serde_json::json!({
+                    "sessionId": "session-1",
+                    "reason": "orphan-reclaim",
+                }),
+            )
+            .expect("killed emit");
+
+        let killed = rx.try_recv().expect("killed message");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&killed).expect("killed json"),
+            serde_json::json!({"type":"killed","reason":"orphan-reclaim"})
+        );
+    }
+
+    #[test]
+    fn session_killed_without_reason_defaults_to_unknown() {
+        let emitter = WsEmitter::new();
+        let mut rx = emitter.subscribe("session-1");
+
+        emitter
+            .emit(
+                EV::SESSION_KILLED,
+                serde_json::json!({ "sessionId": "session-1" }),
+            )
+            .expect("killed emit");
+
+        let killed = rx.try_recv().expect("killed message");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&killed).expect("killed json"),
+            serde_json::json!({"type":"killed","reason":"unknown"})
         );
     }
 }

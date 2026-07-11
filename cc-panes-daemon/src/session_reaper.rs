@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use cc_panes_core::services::terminal_service::SessionStatus;
+use cc_panes_core::services::terminal_service::{KillReason, SessionStatus};
 use cc_panes_core::services::SettingsService;
 use tracing::{info, warn};
 
@@ -151,7 +151,10 @@ pub fn spawn_session_reaper(config: DaemonConfig, settings: Arc<SettingsService>
                 ttl_minutes,
                 "reaping orphaned session (no viewer past TTL)"
             );
-            if let Err(error) = config.terminal_backend().kill(&id) {
+            if let Err(error) = config
+                .terminal_backend()
+                .kill_with_reason(&id, KillReason::DaemonReaper)
+            {
                 warn!(session_id = %id, error = %error, "failed to reap session");
             }
             config.remove_session_activity(&id);

@@ -15,6 +15,8 @@ pub struct TerminalBackendState {
 struct TerminalBackendStateInner {
     backend: Arc<dyn TerminalBackend>,
     kind: TerminalBackendKind,
+    /// daemon 模式下保留 client 供控制链路 / 客户端计数查询使用
+    daemon_client: Option<TerminalDaemonClient>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,6 +31,7 @@ impl TerminalBackendState {
             inner: Arc::new(RwLock::new(TerminalBackendStateInner {
                 backend,
                 kind: TerminalBackendKind::InProcess,
+                daemon_client: None,
             })),
         }
     }
@@ -40,8 +43,9 @@ impl TerminalBackendState {
         if let Some(client) = daemon_client_from_env(app_paths) {
             return Self {
                 inner: Arc::new(RwLock::new(TerminalBackendStateInner {
-                    backend: Arc::new(DaemonTerminalBackend::new(client)),
+                    backend: Arc::new(DaemonTerminalBackend::new(client.clone())),
                     kind: TerminalBackendKind::Daemon,
+                    daemon_client: Some(client),
                 })),
             };
         }
@@ -69,8 +73,18 @@ impl TerminalBackendState {
             .inner
             .write()
             .unwrap_or_else(|error| error.into_inner());
-        inner.backend = Arc::new(DaemonTerminalBackend::new(client));
+        inner.backend = Arc::new(DaemonTerminalBackend::new(client.clone()));
         inner.kind = TerminalBackendKind::Daemon;
+        inner.daemon_client = Some(client);
+    }
+
+    /// daemon 模式下的 client（in-process 时为 None）
+    pub fn daemon_client(&self) -> Option<TerminalDaemonClient> {
+        self.inner
+            .read()
+            .unwrap_or_else(|error| error.into_inner())
+            .daemon_client
+            .clone()
     }
 }
 

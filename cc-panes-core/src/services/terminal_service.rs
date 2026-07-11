@@ -358,6 +358,43 @@ impl SessionStatus {
     }
 }
 
+/// kill 的发起来源，随 `session-killed` 事件广播给所有前端。
+/// 前端据此分流：user-close/mcp 关标签；orphan-reclaim/daemon-reaper 保留标签
+/// 显示进程退出（回收类 kill 可能来自其他实例，静默关标签会造成"面板凭空消失"）。
+/// `docs/17-provider-hot-switch.md` 预留的 ProviderSwitch 落地时在此加变体。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KillReason {
+    UserClose,
+    Mcp,
+    OrphanReclaim,
+    DaemonReaper,
+    #[serde(other)]
+    Unknown,
+}
+
+impl KillReason {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value {
+            Some("user-close") => KillReason::UserClose,
+            Some("mcp") => KillReason::Mcp,
+            Some("orphan-reclaim") => KillReason::OrphanReclaim,
+            Some("daemon-reaper") => KillReason::DaemonReaper,
+            _ => KillReason::Unknown,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            KillReason::UserClose => "user-close",
+            KillReason::Mcp => "mcp",
+            KillReason::OrphanReclaim => "orphan-reclaim",
+            KillReason::DaemonReaper => "daemon-reaper",
+            KillReason::Unknown => "unknown",
+        }
+    }
+}
+
 /// 终端会话状态信息
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -2693,9 +2730,14 @@ impl TerminalService {
         Ok(())
     }
 
-    /// 关闭终端会话
+    /// 关闭终端会话（来源未标注，reason 记为 Unknown）
     pub fn kill(&self, session_id: &str) -> AppResult<()> {
-        debug!(session_id = %session_id, "Terminal kill requested");
+        self.kill_with_reason(session_id, KillReason::Unknown)
+    }
+
+    /// 关闭终端会话并标注 kill 来源，随 `session-killed` 事件广播
+    pub fn kill_with_reason(&self, session_id: &str, reason: KillReason) -> AppResult<()> {
+        info!(session_id = %session_id, reason = %reason.as_str(), "Terminal kill requested");
         // 在 sessions lock 外 drop session，避免进程终止阻塞全局会话锁
         let session = {
             let mut sessions = self
@@ -2738,11 +2780,11 @@ impl TerminalService {
                 *s = SessionStatus::Exited;
             }
             let _ = session.process.kill();
-            // 通知前端关闭标签（MCP kill 场景）
+            // 广播 kill 事件（带来源），前端据 reason 决定关标签还是保留显示退出
             if let Some(emitter) = self.emitter.read().as_ref() {
                 let _ = emitter.emit(
                     EV::SESSION_KILLED,
-                    serde_json::json!({ "sessionId": session_id }),
+                    serde_json::json!({ "sessionId": session_id, "reason": reason }),
                 );
             }
             // session 在此 drop，不再持有 sessions lock
@@ -3405,6 +3447,40 @@ mod tests {
             Arc::new(SshCredentialService::new_memory()),
         ));
         (service, temp_dir)
+    }
+
+    #[test]
+    fn kill_reason_serde_roundtrip_and_unknown_fallback() {
+        assert_eq!(
+            serde_json::to_string(&KillReason::OrphanReclaim).unwrap(),
+            r#""orphan-reclaim""#
+        );
+        assert_eq!(
+            serde_json::from_str::<KillReason>(r#""daemon-reaper""#).unwrap(),
+            KillReason::DaemonReaper
+        );
+        // 未来新增的 reason 字符串必须落 Unknown 而不是反序列化失败
+        assert_eq!(
+            serde_json::from_str::<KillReason>(r#""provider-switch""#).unwrap(),
+            KillReason::Unknown
+        );
+
+        assert_eq!(KillReason::parse(Some("mcp")), KillReason::Mcp);
+        assert_eq!(KillReason::parse(Some("user-close")), KillReason::UserClose);
+        assert_eq!(KillReason::parse(Some("bogus")), KillReason::Unknown);
+        assert_eq!(KillReason::parse(None), KillReason::Unknown);
+        assert_eq!(KillReason::OrphanReclaim.as_str(), "orphan-reclaim");
+    }
+
+    #[test]
+    fn kill_with_reason_keeps_not_found_semantics_for_missing_session() {
+        let (service, _temp_dir) = terminal_service_for_test();
+
+        let error = service
+            .kill_with_reason("missing-session", KillReason::OrphanReclaim)
+            .expect_err("missing session must error");
+
+        assert!(matches!(error, AppError::NotFound(_)));
     }
 
     fn write_orchestrator_manifest(data_dir: &std::path::Path, port: u16, token: &str) {

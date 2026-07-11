@@ -49,7 +49,7 @@ use cc_panes_core::models::{
     RunnerInstanceStatus, RunnerProfile, RunnerStartResult, RunnerStartStatus,
 };
 use cc_panes_core::services::mcp_config_service::McpServerConfig;
-use cc_panes_core::services::terminal_service::{SessionStatus, SessionStatusInfo};
+use cc_panes_core::services::terminal_service::{KillReason, SessionStatus, SessionStatusInfo};
 use cc_panes_core::services::TerminalBackend;
 use cc_panes_core::utils::orchestrator_manifest;
 use rmcp::{
@@ -4348,7 +4348,11 @@ impl McpToolHandler {
     async fn kill_session(&self, Parameters(params): Parameters<McpKillSessionParams>) -> String {
         info!(session_id = %params.session_id, "mcp::kill_session");
         let sid = params.session_id.clone();
-        match backend_call(&self.state, move |backend| backend.kill(&sid)).await {
+        match backend_call(&self.state, move |backend| {
+            backend.kill_with_reason(&sid, KillReason::Mcp)
+        })
+        .await
+        {
             Ok(()) => serde_json::json!({
                 "success": true,
                 "sessionId": params.session_id,
@@ -5219,7 +5223,9 @@ impl RunnerTerminal for TerminalBackendState {
     }
 
     fn kill_session(&self, session_id: &str) -> std::result::Result<(), String> {
-        self.backend().kill(session_id).map_err(|e| e.to_string())
+        self.backend()
+            .kill_with_reason(session_id, KillReason::Mcp)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -6666,7 +6672,11 @@ async fn handle_kill_session(
     }
 
     let sid = req.session_id.clone();
-    match backend_call(&state, move |backend| backend.kill(&sid)).await {
+    match backend_call(&state, move |backend| {
+        backend.kill_with_reason(&sid, KillReason::Mcp)
+    })
+    .await
+    {
         Ok(()) => (
             StatusCode::OK,
             Json(serde_json::json!({ "success": true, "sessionId": req.session_id })),

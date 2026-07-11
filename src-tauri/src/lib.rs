@@ -137,6 +137,7 @@ use commands::{
     get_spec_content,
     get_ssh_machine,
     get_task_binding,
+    get_terminal_daemon_client_info,
     get_terminal_output,
     get_terminal_recent_output,
     get_terminal_replay_snapshot,
@@ -1273,6 +1274,19 @@ pub fn run() {
 
     boot_mark!("building tauri app...");
     with_macos_app_menu(tauri::Builder::default())
+        // 单实例锁必须最先注册：残留旧实例与新实例共享 daemon/data.db 时会互相
+        // 误杀会话（孤儿对账）、互相覆盖持久化状态。锁按 app identifier 派生，
+        // dev（com.ccpanes.dev）与 release（com.ccpanes.app）仍可并存。
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            log::info!(
+                "[single-instance] second launch blocked, focusing existing window; argv={argv:?} cwd={cwd}"
+            );
+            if let Some(window) = app.webview_windows().values().next() {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(
             tauri_plugin_log::Builder::new()
                 .targets([
@@ -1417,6 +1431,14 @@ pub fn run() {
                         }
                     }
                 }
+            }
+            // daemon 模式（含 env 直连与刚启用两种路径）挂桌面控制链路，
+            // 供 daemon 统计桌面客户端数、前端孤儿对账做多实例 fail-closed
+            if let Some(client) = app
+                .state::<Arc<TerminalBackendState>>()
+                .daemon_client()
+            {
+                crate::services::spawn_terminal_daemon_control_link(client);
             }
 
             // ---- Web 端访问服务 lifecycle ----
@@ -1913,6 +1935,7 @@ pub fn run() {
             get_windows_build_number,
             check_environment,
             list_cli_tools,
+            get_terminal_daemon_client_info,
             get_terminal_output,
             get_terminal_recent_output,
             get_terminal_replay_snapshot,

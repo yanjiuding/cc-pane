@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::models::{CreateSessionRequest, TerminalReplaySnapshot};
 use crate::services::daemon_client::TerminalDaemonClient;
+use crate::services::terminal_service::KillReason;
 use crate::services::terminal_service::SessionOutput;
 use crate::services::terminal_service::SessionStatus;
 use crate::services::terminal_service::TerminalService;
@@ -20,6 +21,11 @@ pub trait TerminalBackend: Send + Sync {
     fn submit_text_to_session(&self, session_id: &str, text: &str) -> AppResult<()>;
     fn resize(&self, session_id: &str, cols: u16, rows: u16) -> AppResult<()>;
     fn kill(&self, session_id: &str) -> AppResult<()>;
+    /// 带来源的 kill。默认委托 `kill`（reason 丢失），真实后端覆盖之以便
+    /// `session-killed` 事件携带来源、前端分流关标签/保留标签。
+    fn kill_with_reason(&self, session_id: &str, _reason: KillReason) -> AppResult<()> {
+        self.kill(session_id)
+    }
     fn get_all_status(&self) -> AppResult<Vec<SessionStatusInfo>>;
     fn get_session_status(&self, session_id: &str) -> AppResult<Option<SessionStatusInfo>>;
     fn get_session_output(&self, session_id: &str, lines: usize) -> AppResult<SessionOutput>;
@@ -108,6 +114,10 @@ impl TerminalBackend for TerminalService {
         TerminalService::kill(self, session_id)
     }
 
+    fn kill_with_reason(&self, session_id: &str, reason: KillReason) -> AppResult<()> {
+        TerminalService::kill_with_reason(self, session_id, reason)
+    }
+
     fn get_all_status(&self) -> AppResult<Vec<SessionStatusInfo>> {
         TerminalService::get_all_status(self).map_err(AppError::from)
     }
@@ -162,6 +172,14 @@ impl TerminalBackend for InProcessTerminalBackend {
 
     fn kill(&self, session_id: &str) -> AppResult<()> {
         <TerminalService as TerminalBackend>::kill(self.service.as_ref(), session_id)
+    }
+
+    fn kill_with_reason(&self, session_id: &str, reason: KillReason) -> AppResult<()> {
+        <TerminalService as TerminalBackend>::kill_with_reason(
+            self.service.as_ref(),
+            session_id,
+            reason,
+        )
     }
 
     fn get_all_status(&self) -> AppResult<Vec<SessionStatusInfo>> {
@@ -225,6 +243,10 @@ impl TerminalBackend for DaemonTerminalBackend {
 
     fn kill(&self, session_id: &str) -> AppResult<()> {
         self.client.kill_session(session_id)
+    }
+
+    fn kill_with_reason(&self, session_id: &str, reason: KillReason) -> AppResult<()> {
+        self.client.kill_session_with_reason(session_id, reason)
     }
 
     fn get_all_status(&self) -> AppResult<Vec<SessionStatusInfo>> {

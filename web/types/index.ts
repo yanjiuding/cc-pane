@@ -28,6 +28,8 @@ export type {
   TerminalOutput,
   TerminalSessionOutput,
   ResizeRequest,
+  KillReason,
+  SessionKilledPayload,
 } from "./terminal";
 export type {
   ProjectCliHookStatus,

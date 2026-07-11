@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Panels no longer vanish right after "Open Claude Code" when a stale app instance is still running.** Root cause: multiple desktop instances (e.g. an old version left running after an upgrade) share one daemon, and each instance's orphan-session reconciler only sees its *own* tabs — sessions opened in another window looked orphaned and got killed. Three-layer fix (see `docs/20-orphan-session-reconcile.md`):
+  - Single-instance lock (`tauri-plugin-single-instance`): launching a second copy focuses the existing window instead. Dev and release builds still coexist (lock is per app identifier).
+  - Kill provenance: every kill now carries a `KillReason` (`user-close` / `mcp` / `orphan-reclaim` / `daemon-reaper`) broadcast in `session-killed`. Reclaim-type kills keep the tab and show "Process exited" instead of silently closing it; user/MCP kills close the tab as before. This also fixes a latent bug where `session-killed` never reached the frontend in daemon mode (the daemon WS emitter dropped it), so MCP `kill_session` could not close tabs.
+  - Multi-client fail-closed: each desktop instance holds a control WebSocket to the daemon (`/ws/control?kind=desktop`); the reconciler skips its sweep whenever `desktopClientCount != 1` (or the count is unavailable), so a partial view can never kill another window's sessions.
+- `closeTabBySessionId` (the only backend-event-driven tab-close path) now logs which tab it closes, and unknown daemon WS message types no longer degrade the session stream to polling.
+
 ## 0.10.15 - 2026-07-10
 
 ### Fixed

@@ -181,6 +181,23 @@ export interface TerminalSessionOutput {
   lines: string[];
 }
 
+/**
+ * kill 来源（与 Rust `KillReason` 的 kebab-case 序列化对齐）。
+ * user-close/mcp → 前端关标签；orphan-reclaim/daemon-reaper → 保留标签显示退出。
+ */
+export type KillReason =
+  | "user-close"
+  | "mcp"
+  | "orphan-reclaim"
+  | "daemon-reaper"
+  | "unknown";
+
+/** session-killed 事件载荷；reason 缺失表示旧后端（按关标签处理） */
+export interface SessionKilledPayload {
+  sessionId: string;
+  reason?: KillReason | (string & {});
+}
+
 /** 终端调整大小请求 */
 export interface ResizeRequest {
   sessionId: string;
