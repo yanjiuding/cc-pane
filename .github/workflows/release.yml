@@ -43,6 +43,15 @@ jobs:
             exit 1
           fi
 
+      - name: Validate mobile pubspec version
+        run: |
+          MOBILE_VERSION=$(awk '/^version:/ { print $2; exit }' cc-panes-mobile/pubspec.yaml)
+          MOBILE_VERSION=${MOBILE_VERSION%%+*}
+          if [ "$MOBILE_VERSION" != "${{ steps.tag.outputs.version }}" ]; then
+            echo "::error::cc-panes-mobile/pubspec.yaml version ($MOBILE_VERSION) does not match tag (${{ steps.tag.outputs.version }})"
+            exit 1
+          fi
+
   build:
     name: Build (${{ matrix.label }})
     runs-on: ${{ matrix.platform }}
