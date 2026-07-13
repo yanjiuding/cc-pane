@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.17 - 2026-07-13
+
+### Fixed
+
+- **Intermittent frontend freezes, sustained ~100% CPU per window, and a self-amplifying log flood (0x8007139F WebView2 errors at ~13/s, 10MB log rotation every ~15min) are fixed at the root.** Every instance pre-created a hidden, transparent `ccchan` pet window at startup; once Windows invalidated that long-hidden WebView2, every `app.emit` broadcast to it failed and logged an error — and the log plugin's Webview target re-emitted each error back to the dead WebView, amplifying the flood. Fix:
+  - The ccchan window is no longer pre-created in `tauri.conf.json`; it is created on demand when the pet is enabled (existing get-or-create path) and **destroyed** — not hidden — when the pet is turned off, so no long-lived hidden WebView remains.
+  - `tauri_runtime_wry` log records are rate-limited (max 5 per 60s window), which also severs the log→Webview-target feedback loop. Note: closing the main window to tray still hides a WebView (known residual scenario); the rate limiter caps the damage there.
+- Shared MCP servers now have a real circuit breaker: after exceeding max restarts the health checker stops re-probing the dead process every 30s (previously it logged WARN+ERROR forever), the failed server is no longer injected into new sessions as a "running" endpoint, and the Failed state now shows a Restart button in Settings (restarting resets the counter and closes the breaker).
+- Per-session temporary MCP configs (`mcp-<id>.json`, `wsl-claude-mcp-<id>.json` in the data dir) are deleted when the session ends (both kill and natural exit); WSL configs also get a crash-leftover sweep (>1h old **and** not belonging to any live session — long-running sessions are safe). Previously the WSL variant was never cleaned up (85 stale files had accumulated over 3 months).
+
 ## 0.10.16 - 2026-07-11
 
 ### Fixed
