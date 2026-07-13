@@ -11,22 +11,6 @@
         "center": true,
         "maximized": true,
         "decorations": false
-      },
-      {
-        "label": "ccchan",
-        "title": "cc酱",
-        "url": "index.html?mode=ccchan",
-        "visible": false,
-        "width": 120,
-        "height": 120,
-        "x": -9999,
-        "y": -9999,
-        "resizable": false,
-        "decorations": false,
-        "transparent": true,
-        "shadow": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true
       }
     ]
   }

@@ -1057,6 +1057,29 @@ fn load_full_path() {
     std::thread::spawn(move || refresh_path_cache(&cache_file));
 }
 
+/// wry/WebView2 日志限流：60s 窗口内最多放行 5 条 `tauri_runtime_wry` 记录。
+/// 纯计数、不在过滤器内再打日志（避免 logger 重入）。窗口切换存在竞态但
+/// 只影响个位数条目，可接受。
+fn wry_log_allowed() -> bool {
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+    static WINDOW_START_MS: AtomicU64 = AtomicU64::new(0);
+    static WINDOW_COUNT: AtomicU32 = AtomicU32::new(0);
+    const WINDOW_MS: u64 = 60_000;
+    const MAX_PER_WINDOW: u32 = 5;
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let start = WINDOW_START_MS.load(Ordering::Relaxed);
+    if now_ms.saturating_sub(start) >= WINDOW_MS {
+        WINDOW_START_MS.store(now_ms, Ordering::Relaxed);
+        WINDOW_COUNT.store(1, Ordering::Relaxed);
+        return true;
+    }
+    WINDOW_COUNT.fetch_add(1, Ordering::Relaxed) < MAX_PER_WINDOW
+}
+
 // ============ 应用入口 ============
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1297,6 +1320,14 @@ pub fn run() {
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
                 ])
                 .level(log_level)
+                // wry/WebView2 错误限流：WebView 失效时（如隐藏窗口被系统挂起）
+                // 每条 emit 都会让 wry 记一条 ERROR，且日志本身还有 Webview target
+                // 会再 emit 回失效 WebView，形成自放大洪水（实测 13 条/秒、
+                // 10MB 日志每十几分钟滚动一次并烧满 CPU）。这里对该 target 限速，
+                // 洪水最多退化为每分钟几条。
+                .filter(|metadata| {
+                    !metadata.target().starts_with("tauri_runtime_wry") || wry_log_allowed()
+                })
                 .max_file_size(10_000_000) // 10MB 单文件上限
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
                 .build(),

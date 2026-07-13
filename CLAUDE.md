@@ -288,6 +288,7 @@ flutter pub get && flutter analyze && flutter test
 - **React 19 严格模式 dev 下 useEffect 双挂载**：终端组件可能触发两次 spawn/清理，dev 日志里"创建即销毁"的 PTY 是正常现象，新终端类组件需容忍双挂载。
 - **会话状态只信 OSC/hook，不信输出文本**：状态跃迁来自 hook HTTP 通道与 OSC in-band 通道（`osc_state_detect.rs`，跨通道去重见 `session_state_machine.rs`）。不要往 `infer_status` 加文本模式匹配——TUI spinner 每帧重绘、随版本变化，文本猜测必然抖动。
 - **OSC 7 上报的 cwd 是正斜杠 URL 形式**（`file://host/C:/...`）：Windows 下消费方传给 fs 命令前必须剥前缀并规范化分隔符。
+- **不要在 tauri.conf.json 预创建隐藏 WebView 窗口**：长期隐藏的 WebView2 会被系统置为失效状态（0x8007139F），之后每条 `app.emit` 广播都失败并刷一条 wry ERROR；日志的 Webview target 还会把错误 emit 回失效 WebView，形成自放大洪水（实测 13 条/秒、烧满 CPU、前端假死）。ccchan 窗口已改为启用时按需创建（`ccchan_service.rs::ccchan_window` get-or-create），新增辅助窗口也必须按需创建；`lib.rs` 中对 `tauri_runtime_wry` 有日志限流兜底（`wry_log_allowed`）。
 
 ## 文档引用
 

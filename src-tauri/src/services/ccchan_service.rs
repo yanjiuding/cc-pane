@@ -251,10 +251,16 @@ impl CCChanService {
         Ok(())
     }
 
+    /// 关闭桌宠时直接销毁窗口而非隐藏：长期隐藏的 WebView2 会被系统置为
+    /// 失效状态（0x8007139F），之后所有 emit 广播对它投递失败形成日志洪水。
+    /// 窗口不存在时为幂等 no-op（不能走 ccchan_window() 的 get-or-create，
+    /// 否则"隐藏"反而会先创建一个隐藏 WebView）。下次启用经 show_window 重建。
     pub fn hide_window(&self, app: &AppHandle) -> AppResult<()> {
-        let window = ccchan_window(app)?;
+        let Some(window) = app.get_webview_window(CCCHAN_WINDOW_LABEL) else {
+            return Ok(());
+        };
         window
-            .hide()
+            .close()
             .map_err(|error| AppError::from(error.to_string()))?;
         Ok(())
     }
