@@ -295,9 +295,8 @@ fn windows_mount_tool_guidance_for(
     }
 
     let is_windows_backed = is_wsl_windows_mount_path(project_path)
-        || env_project_path.is_some_and(|path| {
-            is_wsl_windows_mount_path(path) || is_windows_drive_path(path)
-        });
+        || env_project_path
+            .is_some_and(|path| is_wsl_windows_mount_path(path) || is_windows_drive_path(path));
     is_windows_backed.then_some(WINDOWS_MOUNT_TOOL_GUIDANCE)
 }
 
@@ -764,11 +763,7 @@ mod tests {
     #[test]
     fn injects_guidance_when_ccpanes_project_path_is_windows_style() {
         assert_eq!(
-            windows_mount_tool_guidance_for(
-                "wsl",
-                "/home/user/project",
-                Some(r"D:\work\project")
-            ),
+            windows_mount_tool_guidance_for("wsl", "/home/user/project", Some(r"D:\work\project")),
             Some(WINDOWS_MOUNT_TOOL_GUIDANCE)
         );
     }
